@@ -1788,6 +1788,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
       <div class="ph-label">Batting Order &mdash; NYY vs BOS</div>
       <div style="display:flex;align-items:center;gap:8px;position:relative;">
         <span id="lineupCoverageBadge" style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;display:none;"></span>
+        <button class="gl-btn" onclick="openGlossaryTab('hes')"   title="Hitter Environment Score glossary" style="padding:2px 8px;font-size:11px;border-color:rgba(74,222,128,.35);color:#86efac;">HES</button>
+        <button class="gl-btn" onclick="openGlossaryTab('pms')"   title="Pitcher Matchup Score glossary"    style="padding:2px 8px;font-size:11px;border-color:rgba(251,146,60,.35);color:#fdba74;">PMS</button>
+        <button class="gl-btn" onclick="openGlossaryTab('stack')" title="Stack Grade glossary"              style="padding:2px 8px;font-size:11px;border-color:rgba(251,191,36,.35);color:#fde68a;">Stack</button>
         <button class="gl-btn" onclick="toggleSampleKey(event)" title="Sample size key" style="padding:2px 7px;font-size:11px;">&#x24D8; Sample Key</button>
         <div id="sampleKeyPopover" style="display:none;position:absolute;top:calc(100% + 6px);right:0;z-index:200;
           width:260px;background:var(--s2);border:1px solid var(--border2);border-radius:8px;
@@ -3798,6 +3801,12 @@ function openGlossary(side) {
   closeAllGlossaries();
   document.getElementById(side==='hitter' ? 'hitterGlossary' : 'pitcherGlossary').classList.add('open');
   document.getElementById('glOverlay').classList.add('show');
+}
+function openGlossaryTab(tab) {
+  openGlossary('hitter');
+  const drawer = document.getElementById('hitterGlossary');
+  drawer.querySelectorAll('.gl-htab-btn').forEach(b => b.classList.toggle('active', b.dataset.gl === tab));
+  drawer.querySelectorAll('.gl-tab-pane').forEach(p => p.classList.toggle('active', p.dataset.tab === tab));
 }
 function closeAllGlossaries() {
   document.getElementById('hitterGlossary').classList.remove('open');
@@ -9429,7 +9438,7 @@ const TOUR_STEPS = [
   // 2 — Park bar (card BELOW bar so it doesn't cover it, arrow up toward bar)
   {
     title: 'Step 2 — Park & Weather Bar',
-    body: 'Click the arrow on the right to expand this panel and explore today\'s ballpark conditions — wind direction, temperature, humidity, and park HR factor breakdowns. Close it when you\'re done to continue.',
+    body: 'Click the bar to expand this panel and explore today\'s ballpark conditions — wind direction, temperature, humidity, and park HR factor breakdowns. Click it again to close when you\'re done to continue.',
     selector: '#parkBarWrap', arrow: 'up',
     actionLabel: 'Expand the bar, then close it to continue →', action: 'close-parkbar',
   },
@@ -9437,7 +9446,7 @@ const TOUR_STEPS = [
   {
     title: 'Step 3 — The Pitcher Panel',
     body: 'The right column is your Pitcher Panel. It shows the projected starter\'s stats, stuff grades, pitch arsenal, and platoon splits. Use the Home / Away buttons at the top to switch between today\'s two starters.',
-    selector: '#spContent', arrow: 'right',
+    selector: '.pitcher-col', arrow: 'right',
   },
   // 4 — Select pitcher (highlight #spPickerWrap, liveResize so highlight grows as picker opens)
   {
@@ -9449,20 +9458,20 @@ const TOUR_STEPS = [
   // 5 — SP grade (card BELOW .sp-hero so it doesn't block, arrow up toward hero)
   {
     title: 'Step 5 — SP Grade & Signals',
-    body: 'The letter grade (A+ to F) rates this starter\'s overall quality based on Stuff+, command, SIERA, xFIP, and batted ball profile. Green signal chips = exploitable weaknesses: high walk rate, poor splits, low Stuff+.',
+    body: 'The letter grade (A+ to F) rates this starter\'s overall quality based on Stuff+, command, SIERA, xFIP, and batted ball profile. Green signal chips = pitcher strengths, red chips = weaknesses you can exploit. Use these as your stacking triggers.',
     selector: '.sp-hero', arrow: 'up',
   },
   // 6 — Bullpen tab (wording: listed by role, not graded by position)
   {
     title: 'Step 6 — Bullpen Usage',
-    body: 'Switch to the Bullpen tab to see every reliever listed by role (CL / SU / MR) with pitch counts from the last 14 days. Know which closers are available and which are on short rest before picking late-inning stacks.',
+    body: 'Switch to the Bullpen tab to see every reliever listed by role (CL / SU / MR) with pitch counts from the last 14 days. Know which closers are available and which are on short rest.',
     selector: 'button.p-tab-btn[data-tab="bp"]', arrow: 'down',
     actionLabel: 'Click the Bullpen tab to continue →', action: 'click-bp',
   },
   // 7 — Full hitter panel (highlight .lineup-panel, card to the RIGHT via arrow:'left')
   {
     title: 'Step 7 — Hitter Panel',
-    body: 'Now that a pitcher is selected, each badge on the lineup shows a live PMS score — the individual matchup grade for that hitter vs today\'s starter. Click any row to drill into splits, swing mechanics, and recent form.',
+    body: 'Now that a pitcher is selected, each badge shows a live PMS score — that hitter\'s grade vs the selected pitcher in the Pitcher Panel. Higher = stronger structural advantage. Click any row to deep dive into splits, swing mechanics, and recent form.',
     selector: '.lineup-panel', arrow: 'left',
   },
   // 8 — HES + Stack Grade together (span matchup-bar through stack-bar, last step)
