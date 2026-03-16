@@ -6300,12 +6300,17 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
   const spNameEl = document.querySelector('.sp-name');
   if (spNameEl && spName) spNameEl.textContent = spName;
 
-  // Update hand badge — use picker hand if available, else fall back to game SP data
+  // Update hand badge — use picker hand → game SP hand → rosters lookup
   const handEl = document.querySelector('.sp-hand-badge');
   if (handEl) {
     const isHome  = activeGame && (activePitcherTeamId === activeGame.home_team_id);
     const gameHand = activeGame ? (isHome ? activeGame.home_sp_hand : activeGame.away_sp_hand) : null;
-    const hand    = activePitcherPickedHand || gameHand;
+    let hand = activePitcherPickedHand || gameHand;
+    // If still unknown and we have an ID, look up from rosters table
+    if (!hand && spId) {
+      const { data: rosterRow } = await sb.from('rosters').select('throws').eq('player_id', spId).maybeSingle();
+      if (rosterRow?.throws) hand = rosterRow.throws;
+    }
     handEl.textContent  = hand === 'L' ? 'L' : hand === 'R' ? 'R' : '—';
     handEl.style.color  = hand === 'L' ? 'var(--blue)' : hand === 'R' ? 'var(--orange)' : 'var(--text2)';
     handEl.style.background = hand === 'L' ? 'rgba(96,165,250,.12)' : hand === 'R' ? 'rgba(251,146,60,.12)' : 'rgba(255,255,255,.06)';
