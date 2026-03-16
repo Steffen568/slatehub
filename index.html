@@ -9412,85 +9412,77 @@ function switchGlossaryTab(btn, tab) {
 // ═══════════════════════════════════════════════════════════════════════════
 //  GUIDED TOUR ENGINE  (9 steps — pitcher panel first, then hitter panel)
 // ═══════════════════════════════════════════════════════════════════════════
-//
-//  Step order:
-//   1  Welcome (centered)
-//   2  Pick a Game          → auto-advance when game is clicked
-//   3  Park & Weather bar   → user must CLOSE it to advance
-//   4  Pitcher Panel        → Got it
-//   5  Select a Pitcher     → auto-advance when spPickerSelect fires
-//   6  SP Stats & Grade     → Got it
-//   7  Bullpen Tab          → auto-advance when bp tab is clicked
-//   8  Hitter Rows          → Got it  (PMS badges now live)
-//   9  HES + Stack Grade (last, centered)
-//
 const TOUR_STEPS = [
-  // 0
+  // 0 — Welcome (centered, no highlight)
   {
     title: 'Welcome to SlateHub',
     body: 'A quick 2-minute tour covering every panel, score, and badge. You control the pace — click Got it to move forward, or interact with the highlighted element when prompted.',
     selector: null,
   },
-  // 1
+  // 1 — Pick a Game (card below selector bar, arrow up)
   {
     title: 'Step 1 — Pick a Game',
     body: 'Click any game button to load the matchup. This populates both the Pitcher Panel on the right and the Hitter Panel below with live data for that game.',
     selector: '#gameButtons', arrow: 'up',
     actionLabel: 'Click any game button to continue →', action: 'click-game',
   },
-  // 2
+  // 2 — Park bar (card BELOW bar so it doesn't cover it, arrow up toward bar)
   {
     title: 'Step 2 — Park & Weather Bar',
-    body: 'Click the arrow on the right to expand this panel and explore today\'s ballpark conditions — wind direction, temperature, park HR factors, and more. Close it when you\'re done to continue.',
-    selector: '#parkBarWrap', arrow: 'down',
+    body: 'Click the arrow on the right to expand this panel and explore today\'s ballpark conditions — wind direction, temperature, humidity, and park HR factor breakdowns. Close it when you\'re done to continue.',
+    selector: '#parkBarWrap', arrow: 'up',
     actionLabel: 'Expand the bar, then close it to continue →', action: 'close-parkbar',
   },
-  // 3
+  // 3 — Pitcher panel overview (highlight full #spContent, card to the LEFT)
   {
     title: 'Step 3 — The Pitcher Panel',
-    body: 'The right column is the Pitcher Panel. Use the Home / Away buttons in the top bar to swap between today\'s two starters. The pitcher picker below shows every arm on the roster with ERA, K%, and DK salary.',
-    selector: '#spPickerWrap', arrow: 'left',
+    body: 'The right column is your Pitcher Panel. It shows the projected starter\'s stats, stuff grades, pitch arsenal, and platoon splits. Use the Home / Away buttons at the top to switch between today\'s two starters.',
+    selector: '#spContent', arrow: 'right',
   },
-  // 4
+  // 4 — Select pitcher (highlight #spPickerWrap, liveResize so highlight grows as picker opens)
   {
     title: 'Step 4 — Select a Pitcher',
-    body: 'Click any pitcher chip to load their full scouting report — stuff grades, pitch arsenal, platoon splits, and command metrics. Once selected, all 9 hitter matchup badges update to reflect that specific pitcher.',
-    selector: '#spPickerWrap', arrow: 'left',
+    body: 'Click any pitcher chip from the list to load their full scouting report. Chips are sorted by DK salary — starters at the top. Once selected, all 9 hitter matchup badges update to reflect that pitcher.',
+    selector: '#spPickerWrap', arrow: 'right', liveResize: true,
     actionLabel: 'Click any pitcher chip to continue →', action: 'click-pitcher',
   },
-  // 5
+  // 5 — SP grade (card BELOW .sp-hero so it doesn't block, arrow up toward hero)
   {
     title: 'Step 5 — SP Grade & Signals',
-    body: 'The letter grade (A+ to F) rates this starter\'s overall quality. Green signal chips above the panel indicate exploitable weaknesses — high walk rate, poor left-on-left splits, low Stuff+. These are your stacking triggers.',
-    selector: '.sp-hero', arrow: 'left',
+    body: 'The letter grade (A+ to F) rates this starter\'s overall quality based on Stuff+, command, SIERA, xFIP, and batted ball profile. Green signal chips = exploitable weaknesses: high walk rate, poor splits, low Stuff+.',
+    selector: '.sp-hero', arrow: 'up',
   },
-  // 6
+  // 6 — Bullpen tab (wording: listed by role, not graded by position)
   {
     title: 'Step 6 — Bullpen Usage',
-    body: 'Switch to the Bullpen tab to see every reliever graded CL / SU / MR with pitch counts from the last 14 days. Know which closers are available and which are on back-to-back days before picking late-inning stacks.',
+    body: 'Switch to the Bullpen tab to see every reliever listed by role (CL / SU / MR) with pitch counts from the last 14 days. Know which closers are available and which are on short rest before picking late-inning stacks.',
     selector: 'button.p-tab-btn[data-tab="bp"]', arrow: 'down',
     actionLabel: 'Click the Bullpen tab to continue →', action: 'click-bp',
   },
-  // 7
+  // 7 — Full hitter panel (highlight .lineup-panel, card to the RIGHT via arrow:'left')
   {
     title: 'Step 7 — Hitter Panel',
-    body: 'Now that a pitcher is selected, each badge on the left shows a live PMS score — the individual pitcher matchup grade for that hitter. Higher = stronger structural advantage. Click any row to drill into splits, swing mechanics, and recent form.',
-    selector: '#row1', arrow: 'right',
+    body: 'Now that a pitcher is selected, each badge on the lineup shows a live PMS score — the individual matchup grade for that hitter vs today\'s starter. Click any row to drill into splits, swing mechanics, and recent form.',
+    selector: '.lineup-panel', arrow: 'left',
   },
-  // 8  (last)
+  // 8 — HES + Stack Grade together (span matchup-bar through stack-bar, last step)
   {
     title: 'Step 8 — HES & Stack Grade',
-    body: 'HES (top right of lineup panel) grades today\'s park and weather for offense on a 1–10 scale. The Stack Grade letter combines all 9 PMS scores + HES to tell you how aggressively to stack this lineup. Open the Hitter\'s Glossary → HES / PMS / Stack tabs for the full breakdown.',
-    selector: '.stack-bar', arrow: 'up',
+    body: 'HES (top right of the matchup bar) grades today\'s park and weather for offense on a 1–10 scale. The Stack Grade directly below combines all 9 PMS scores + HES into one letter — how aggressively to stack this lineup. Open the Hitter\'s Glossary → HES / PMS / Stack tabs for the full breakdown.',
+    selector: '.matchup-bar', spanTo: '.stack-bar', arrow: 'down',
     last: true,
   },
 ];
 
-let _tourStep   = 0;
-let _tourActive = false;
+let _tourStep          = 0;
+let _tourActive        = false;
+let _tourResizeTimer   = null;
+
+function _clearTourResize() {
+  if (_tourResizeTimer) { clearInterval(_tourResizeTimer); _tourResizeTimer = null; }
+}
 
 function tourStart() {
-  // Reset localStorage so tour can restart
   localStorage.removeItem('slateHubTourDone');
   _tourStep   = 0;
   _tourActive = true;
@@ -9542,40 +9534,62 @@ function tourShow(idx) {
 
   target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-  setTimeout(() => {
+  function _positionTourStep() {
     const r   = target.getBoundingClientRect();
     const PAD = 8, cardW = 330, cardH = 240, arrowSz = 12, margin = 14;
     const dir = step.arrow || 'down';
 
-    hl.style.top    = (r.top  - PAD) + 'px';
-    hl.style.left   = (r.left - PAD) + 'px';
-    hl.style.width  = (r.width  + PAD * 2) + 'px';
-    hl.style.height = (r.height + PAD * 2) + 'px';
+    // Extend height if spanTo is set (e.g. span matchup-bar through stack-bar)
+    let hlBottom = r.bottom;
+    let hlTop    = r.top;
+    let hlLeft   = r.left;
+    let hlRight  = r.right;
+    if (step.spanTo) {
+      const r2 = document.querySelector(step.spanTo)?.getBoundingClientRect();
+      if (r2) {
+        hlBottom = Math.max(hlBottom, r2.bottom);
+        hlTop    = Math.min(hlTop,    r2.top);
+        hlLeft   = Math.min(hlLeft,   r2.left);
+        hlRight  = Math.max(hlRight,  r2.right);
+      }
+    }
+
+    hl.style.top    = (hlTop    - PAD) + 'px';
+    hl.style.left   = (hlLeft   - PAD) + 'px';
+    hl.style.width  = (hlRight  - hlLeft + PAD * 2) + 'px';
+    hl.style.height = (hlBottom - hlTop  + PAD * 2) + 'px';
+
+    // Use the extended rect for card/arrow positioning
+    const er = { top: hlTop, bottom: hlBottom, left: hlLeft, right: hlRight,
+                 width: hlRight - hlLeft, height: hlBottom - hlTop };
 
     arrow.className = 'tour-arrow ' + dir;
 
     let cTop, cLeft, aTop, aLeft;
     if (dir === 'down') {
-      cTop  = r.top - PAD - cardH - arrowSz - margin;
-      cLeft = r.left + r.width / 2 - cardW / 2;
-      aTop  = r.top - PAD - arrowSz - margin + 2;
-      aLeft = r.left + r.width / 2 - 10;
+      // Card ABOVE element, arrow points down toward element
+      cTop  = er.top - PAD - cardH - arrowSz - margin;
+      cLeft = er.left + er.width / 2 - cardW / 2;
+      aTop  = er.top - PAD - arrowSz - margin + 2;
+      aLeft = er.left + er.width / 2 - 10;
     } else if (dir === 'up') {
-      cTop  = r.bottom + PAD + arrowSz + margin;
-      cLeft = r.left + r.width / 2 - cardW / 2;
-      aTop  = r.bottom + PAD + margin - 2;
-      aLeft = r.left + r.width / 2 - 10;
+      // Card BELOW element, arrow points up toward element
+      cTop  = er.bottom + PAD + arrowSz + margin;
+      cLeft = er.left + er.width / 2 - cardW / 2;
+      aTop  = er.bottom + PAD + margin - 2;
+      aLeft = er.left + er.width / 2 - 10;
     } else if (dir === 'right') {
-      cTop  = r.top + r.height / 2 - cardH / 2;
-      cLeft = r.left - PAD - cardW - arrowSz - margin;
-      aTop  = r.top + r.height / 2 - 10;
-      aLeft = r.left - PAD - arrowSz - margin + 2;
+      // Card to the LEFT of element, arrow points right toward element
+      cTop  = er.top + er.height / 2 - cardH / 2;
+      cLeft = er.left - PAD - cardW - arrowSz - margin;
+      aTop  = er.top + er.height / 2 - 10;
+      aLeft = er.left - PAD - arrowSz - margin + 2;
     } else {
-      // left — card to the right of element
-      cTop  = r.top + r.height / 2 - cardH / 2;
-      cLeft = r.right + PAD + arrowSz + margin;
-      aTop  = r.top + r.height / 2 - 10;
-      aLeft = r.right + PAD + margin - 2;
+      // 'left' — card to the RIGHT of element, arrow points left toward element
+      cTop  = er.top + er.height / 2 - cardH / 2;
+      cLeft = er.right + PAD + arrowSz + margin;
+      aTop  = er.top + er.height / 2 - 10;
+      aLeft = er.right + PAD + margin - 2;
     }
 
     cTop  = Math.max(10, Math.min(cTop,  window.innerHeight - cardH - 10));
@@ -9587,13 +9601,25 @@ function tourShow(idx) {
     card.style.bottom = 'auto';
     arrow.style.top   = aTop  + 'px';
     arrow.style.left  = aLeft + 'px';
-  }, 150);
+  }
+
+  setTimeout(_positionTourStep, 150);
+
+  // liveResize: keep re-measuring the element so highlight grows as picker opens
+  _clearTourResize();
+  if (step.liveResize) {
+    _tourResizeTimer = setInterval(() => {
+      if (!_tourActive) { _clearTourResize(); return; }
+      _positionTourStep();
+    }, 350);
+  }
 }
 
-function tourNext() { tourShow(_tourStep + 1); }
+function tourNext() { _clearTourResize(); tourShow(_tourStep + 1); }
 function tourSkip() { tourEnd(); }
 
 function tourEnd() {
+  _clearTourResize();
   _tourActive = false;
   document.getElementById('tourHighlight').style.display = 'none';
   document.getElementById('tourCard').style.display      = 'none';
