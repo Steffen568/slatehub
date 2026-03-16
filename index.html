@@ -5999,6 +5999,20 @@ async function loadLineup(gamePk, homeTeamId, awayTeamId) {
     return;
   }
 
+  // Fill in missing player names (e.g. WBC lineups) from the players table
+  const missingNameIds = data.filter(p => !p.player_name).map(p => p.player_id).filter(Boolean);
+  if (missingNameIds.length > 0) {
+    const { data: playerRows } = await sb
+      .from('players')
+      .select('mlbam_id, first_name, last_name')
+      .in('mlbam_id', missingNameIds);
+    const nameMap = {};
+    (playerRows || []).forEach(p => {
+      nameMap[p.mlbam_id] = [p.first_name, p.last_name].filter(Boolean).join(' ');
+    });
+    data.forEach(p => { if (!p.player_name) p.player_name = nameMap[p.player_id] || '--'; });
+  }
+
   // Cache full lineup data for team switching
   cachedLineupData   = data;
   activeLineupTeamId = homeTeamId;
