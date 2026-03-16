@@ -1712,15 +1712,15 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
         <div class="wind-speed" id="windSpeed">14 <span>mph</span></div>
         <div class="wind-dir" id="windDir">SW &middot; Out to Right-Center</div>
       </div>
-      <div class="wind-tag">HR Boost &#x2191;</div>
+      <div class="wind-tag" id="windTag">—</div>
     </div>
     <div class="cond-row">
       <div class="cond"><div class="cond-lbl">Precip</div><div class="cond-val" id="wxPrecip">2%</div><div class="cond-sub" id="wxPrecipSub">No rain</div></div>
       <div class="cond"><div class="cond-lbl">Humidity</div><div class="cond-val" id="wxHumidity">58%</div><div class="cond-sub" id="wxHumiditySub">Moderate</div></div>
       <div class="cond"><div class="cond-lbl">Visibility</div><div class="cond-val" id="wxVisibility">10 mi</div><div class="cond-sub" id="wxVisibilitySub">Clear</div></div>
-      <div class="cond"><div class="cond-lbl">Dew Pt</div><div class="cond-val" id="wxDewPt">55&deg;</div><div class="cond-sub">Humid</div></div>
+      <div class="cond"><div class="cond-lbl">Dew Pt</div><div class="cond-val" id="wxDewPt">55&deg;</div><div class="cond-sub" id="wxDewPtSub">—</div></div>
     </div>
-    <div class="wx-note"><strong>Wind plays to RF.</strong> SW 14mph out to right-center boosts HR odds for LHB. Warm + low humidity = ball carries tonight. Soto &amp; Chisholm benefit most.</div>
+    <div class="wx-note" id="wxNote" style="display:none;"></div>
     <div id="radarWrap"></div>
   </div>
 
@@ -1892,13 +1892,6 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   <div class="sec-body" id="envStackBody" style="padding:10px 16px 14px;">
     <div style="color:var(--muted);font-size:11px;text-align:center;padding:8px 0;">Select a game to see breakdown</div>
   </div>
-</div>
-
-<!-- ══ LINEUP STATUS ══ -->
-<div class="lineup-status">
-  <div class="ls-badge ls-projected" id="lineupStatusBadge">Projected</div>
-  <div class="ls-text" id="lineupStatusText">Lineup not yet confirmed</div>
-  <span class="ls-time" id="lineupStatusTime"></span>
 </div>
 
 <!-- ══════════════════════════════════
@@ -5573,6 +5566,9 @@ async function loadWeather(gamePk, venueName, away, home, time) {
     if (wxH) wxH.textContent = 'N/A';
     if (wxV) wxV.textContent = 'N/A';
     if (wxD) wxD.innerHTML   = 'N/A';
+    const _wtag = document.getElementById('windTag'); if (_wtag) { _wtag.textContent = 'N/A'; _wtag.style.color = 'var(--muted)'; _wtag.style.background = 'transparent'; _wtag.style.border = 'none'; }
+    const _wdps = document.getElementById('wxDewPtSub'); if (_wdps) _wdps.textContent = '—';
+    const _wnote = document.getElementById('wxNote'); if (_wnote) _wnote.style.display = 'none';
     _activeWeather = null;
     return;
   }
@@ -5632,6 +5628,39 @@ async function loadWeather(gamePk, venueName, away, home, time) {
   const dew    = data.dew_point != null ? Math.round(data.dew_point) : null;
   const wxDew  = document.getElementById('wxDewPt');
   if (wxDew)  wxDew.innerHTML = dew != null ? dew + '&deg;' : '--&deg;';
+
+  // Wind tag — speed-based label
+  const windTagEl = document.getElementById('windTag');
+  if (windTagEl) {
+    const spd = Math.round(data.wind_speed || 0);
+    if (spd <= 3)       { windTagEl.textContent = 'Calm';          windTagEl.style.color = 'var(--muted)'; windTagEl.style.background = 'transparent'; windTagEl.style.border = 'none'; }
+    else if (spd <= 8)  { windTagEl.textContent = spd + 'mph Light';    windTagEl.style.color = ''; windTagEl.style.background = ''; windTagEl.style.border = ''; }
+    else if (spd <= 14) { windTagEl.textContent = spd + 'mph Moderate'; windTagEl.style.color = ''; windTagEl.style.background = ''; windTagEl.style.border = ''; }
+    else                { windTagEl.textContent = spd + 'mph Strong';   windTagEl.style.color = '#ef4444'; windTagEl.style.background = 'rgba(239,68,68,.1)'; windTagEl.style.border = '1px solid rgba(239,68,68,.25)'; }
+  }
+
+  // Dew point sub-label
+  const dewSubEl = document.getElementById('wxDewPtSub');
+  if (dewSubEl) {
+    const dp = data.dew_point != null ? parseFloat(data.dew_point) : null;
+    dewSubEl.textContent = dp == null ? '—' : dp < 50 ? 'Dry' : dp < 60 ? 'Comfortable' : dp < 65 ? 'Humid' : 'Very Humid';
+  }
+
+  // Weather narrative note
+  const wxNoteEl = document.getElementById('wxNote');
+  if (wxNoteEl) {
+    const spd  = Math.round(data.wind_speed || 0);
+    const tmp  = Math.round(data.temp_f || 70);
+    const prcp = Math.round(data.precip_pct || 0);
+    const dir  = data.wind_dir || '';
+    const parts = [];
+    if (spd >= 10) parts.push(`<strong>${dir} ${spd}mph</strong> — ${spd >= 16 ? 'strong wind factor' : 'moderate wind factor'}.`);
+    if (tmp >= 82) parts.push(`Warm air (${tmp}°F) — ball carries well.`);
+    else if (tmp <= 50) parts.push(`Cold conditions (${tmp}°F) — ball dies at the plate.`);
+    if (prcp >= 40) parts.push(`${prcp}% precip chance — monitor for delays.`);
+    if (parts.length) { wxNoteEl.innerHTML = parts.join(' '); wxNoteEl.style.display = 'block'; }
+    else wxNoteEl.style.display = 'none';
+  }
 
   renderPitcherSignals();
   renderHES();
@@ -7129,9 +7158,15 @@ async function loadBullpen(teamId, gameDate) {
   }
 
   // Role inference: CL / SU / MR
-  // Uses avg innings per outing + grade score (no save/hold columns required)
+  // Prefers SV/HLD stats when available; falls back to innings+grade inference
   function calcRelieverRole(rel, st, gradeScore) {
-    // Compute avg innings per outing from appearances (last 7 days)
+    // Primary signal: saves and holds (most accurate when season data exists)
+    if (st && st.sv != null && st.hld != null) {
+      if (parseFloat(st.sv) >= 1)  return 'CL';
+      if (parseFloat(st.hld) >= 1) return 'SU';
+      return 'MR';
+    }
+    // Fallback: innings per outing + grade score
     const validApps = rel.appearances.filter(a => a.innings != null && parseFloat(a.innings) > 0);
     let avgInn = null;
     if (validApps.length >= 2) {
@@ -7140,9 +7175,7 @@ async function loadBullpen(teamId, gameDate) {
       avgInn = parseFloat(st.ip) / parseFloat(st.g);
     }
     if (avgInn == null) return 'MR';
-    // Closers pitch ~1 inning and are high-grade arms
     if (avgInn <= 1.08 && gradeScore >= 60) return 'CL';
-    // Setup: short outings or solid grade
     if (avgInn <= 1.20 && gradeScore >= 44) return 'SU';
     return 'MR';
   }
@@ -7827,8 +7860,12 @@ console.log('STATS DEBUG row', i+1, 'pid:', player.player_id, 'stats:', stats);
         nameEl.insertAdjacentElement('afterend', badge);
       }
 
-      // Salary pill second (inserted afterend of nameEl, so it appears between name and sample badge)
+      // Update position badge from DK salary — DK shows multi-position eligibility (e.g. "1B/3B")
+      const posElSal = rowEl.querySelector('.br-pos');
       const salaryData = salaryMap[String(player.player_id)];
+      if (posElSal && salaryData?.position) posElSal.textContent = salaryData.position;
+
+      // Salary pill second (inserted afterend of nameEl, so it appears between name and sample badge)
       if (salaryData?.salary) {
         const sal = document.createElement('span');
         sal.className = 'br-salary';
