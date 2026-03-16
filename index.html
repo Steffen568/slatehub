@@ -871,6 +871,51 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   .park-bar-wrap { border-bottom:2px solid #3a4a60; }
 
 
+/* ══ GLOSSARY TABS ══════════════════════════════════════════════════════════ */
+.hitter-gl-drawer .gl-body { padding: 0; }
+.gl-tab-nav {
+  display: flex; padding: 0 14px; gap: 0;
+  border-bottom: 1px solid var(--border); background: var(--s2);
+  position: sticky; top: 0; z-index: 2;
+}
+.gl-htab-btn {
+  font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+  font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+  padding: 11px 12px 9px; border: none; background: none;
+  cursor: pointer; color: var(--muted);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color .15s, border-color .15s; white-space: nowrap;
+  writing-mode: initial; position: static; transform: none;
+}
+.gl-htab-btn[data-gl="stats"].active { border-bottom-color: #60a5fa; color: #93c5fd; }
+.gl-htab-btn[data-gl="hes"].active   { border-bottom-color: #4ade80; color: #86efac; }
+.gl-htab-btn[data-gl="pms"].active   { border-bottom-color: #fb923c; color: #fdba74; }
+.gl-htab-btn[data-gl="stack"].active { border-bottom-color: #fbbf24; color: #fde68a; }
+.gl-tab-pane { display: none; padding: 18px 20px; }
+.gl-tab-pane.active { display: block; }
+.gl-score-header {
+  font-family: 'Barlow Condensed', sans-serif; font-weight: 800;
+  font-size: 28px; margin-bottom: 4px;
+}
+.gl-score-sub { font-size: 11px; color: var(--muted); margin-bottom: 16px; line-height: 1.4; }
+.gl-pillar { margin-bottom: 14px; }
+.gl-pillar-title {
+  font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+  font-size: 13px; text-transform: uppercase; letter-spacing: 0.8px;
+  margin-bottom: 5px; padding-bottom: 4px; border-bottom: 1px solid var(--border);
+}
+.gl-range-row { display: flex; gap: 8px; margin-top: 12px; }
+.gl-range-chip {
+  flex: 1; border-radius: 6px; padding: 8px 10px; text-align: center;
+  font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+  font-size: 14px; border: 1px solid transparent;
+}
+.gl-range-chip .gl-range-lbl { font-size: 9px; font-weight: 400; opacity: .7; margin-top: 2px; }
+.gl-range-chip.green  { background: rgba(74,222,128,0.12); color: #4ade80; border-color: rgba(74,222,128,0.2); }
+.gl-range-chip.amber  { background: rgba(251,191,36,0.10); color: #fbbf24; border-color: rgba(251,191,36,0.2); }
+.gl-range-chip.red    { background: rgba(248,113,113,0.10); color: #f87171; border-color: rgba(248,113,113,0.2); }
+/* ══ END GLOSSARY TABS ══════════════════════════════════════════════════════ */
+
 /* ══ GUIDED TOUR ════════════════════════════════════════════════════════════ */
 #tourHighlight {
   position: fixed; pointer-events: none; border-radius: 6px;
@@ -1436,62 +1481,135 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     <div class="gl-title">Hitter&#x27;s Glossary</div>
     <button class="gl-close" onclick="closeAllGlossaries()">&#x2715;</button>
   </div>
-  <div class="gl-body">    <div class="gl-grp"><div class="gl-grp-t">Color Code</div>
-      <div class="gl-item"><div class="gl-term"><span class="sw" style="background:#4ade80"></span>Green — Favorable for hitter</div><div class="gl-def">Elite production, strong contact quality, or favorable matchup.</div></div>
-      <div class="gl-item"><div class="gl-term"><span class="sw" style="background:#fbbf24"></span>Amber — Average / Playable</div><div class="gl-def">Near league average. Context determines value.</div></div>
-      <div class="gl-item"><div class="gl-term"><span class="sw" style="background:#f87171"></span>Red — Unfavorable</div><div class="gl-def">Below average or high-risk metrics. Downgrade vs field.</div></div>
+  <div class="gl-tab-nav">
+    <button class="gl-htab-btn active" data-gl="stats" onclick="switchGlossaryTab(this,'stats')">Stats</button>
+    <button class="gl-htab-btn" data-gl="hes"   onclick="switchGlossaryTab(this,'hes')">HES</button>
+    <button class="gl-htab-btn" data-gl="pms"   onclick="switchGlossaryTab(this,'pms')">PMS</button>
+    <button class="gl-htab-btn" data-gl="stack" onclick="switchGlossaryTab(this,'stack')">Stack</button>
+  </div>
+  <div class="gl-body">
+
+    <!-- ── STATS TAB ── -->
+    <div class="gl-tab-pane active" data-tab="stats">
+      <div class="gl-grp"><div class="gl-grp-t">Color Code</div>
+        <div class="gl-item"><div class="gl-term"><span class="sw" style="background:#4ade80"></span>Green — Favorable for hitter</div><div class="gl-def">Elite production, strong contact quality, or favorable matchup.</div></div>
+        <div class="gl-item"><div class="gl-term"><span class="sw" style="background:#fbbf24"></span>Amber — Average / Playable</div><div class="gl-def">Near league average. Context determines value.</div></div>
+        <div class="gl-item"><div class="gl-term"><span class="sw" style="background:#f87171"></span>Red — Unfavorable</div><div class="gl-def">Below average or high-risk metrics. Downgrade vs field.</div></div>
+      </div>
+      <div class="gl-grp"><div class="gl-grp-t">Production (Results)</div>
+        <div class="gl-item"><div class="gl-term">wOBA</div><div class="gl-def">Weighted On-Base Average. Weights each outcome by run value. League avg ~.320. Better than OPS for true offensive value.</div></div>
+        <div class="gl-item"><div class="gl-term">wRC+</div><div class="gl-def">Weighted Runs Created Plus. Park and league adjusted. 100 = exactly league avg. 150 = 50% better than avg.</div></div>
+        <div class="gl-item"><div class="gl-term">ISO</div><div class="gl-def">Isolated Power (SLG minus AVG). Pure extra-base hit rate. Elite: .250+. Average: .150.</div></div>
+      </div>
+      <div class="gl-grp"><div class="gl-grp-t">Contact Quality (True Talent)</div>
+        <div class="gl-item"><div class="gl-term">xwOBA</div><div class="gl-def">Expected wOBA from EV, launch angle, sprint speed. Removes luck. Key indicator of real vs fluky production.</div></div>
+        <div class="gl-item"><div class="gl-term">Barrel%</div><div class="gl-def">Optimal EV + launch angle. Strongest HR predictor. Elite: 15%+. Average: 7%.</div></div>
+        <div class="gl-item"><div class="gl-term">HardHit%</div><div class="gl-def">Exit velocity 95+ mph. Elite: 50%+. Average: 38%.</div></div>
+        <div class="gl-item"><div class="gl-term">Avg EV</div><div class="gl-def">Average exit velocity on contact. Elite: 93+ mph. League avg: ~88 mph.</div></div>
+      </div>
+      <div class="gl-grp"><div class="gl-grp-t">Plate Discipline</div>
+        <div class="gl-item"><div class="gl-term">K%</div><div class="gl-def">Strikeout rate per PA. League avg ~22%. Below 18% = elite contact. Above 30% = significant K risk.</div></div>
+        <div class="gl-item"><div class="gl-term">BB%</div><div class="gl-def">Walk rate per PA. League avg ~8.5%. Above 15% = elite eye.</div></div>
+        <div class="gl-item"><div class="gl-term">SwStr%</div><div class="gl-def">Swing-and-miss rate. Below 8% = elite contact. Above 14% = K-prone.</div></div>
+        <div class="gl-item"><div class="gl-term">O-Swing%</div><div class="gl-def">Chase rate outside zone. Below 25% = disciplined. Above 35% = exploitable.</div></div>
+      </div>
+      <div class="gl-grp"><div class="gl-grp-t">Swing Mechanics</div>
+        <div class="gl-item"><div class="gl-term">Attack Angle</div><div class="gl-def">Degrees of upswing at contact. 5–20° is the ideal lift window. Higher = more vulnerability to flat deliveries.</div></div>
+        <div class="gl-item"><div class="gl-term">Bat Speed</div><div class="gl-def">Average mph at sweet spot. 75+ mph = fast swing. Top tier: 78+ mph.</div></div>
+        <div class="gl-item"><div class="gl-term">Squared-Up%</div><div class="gl-def">Efficiency converting bat speed to exit velocity. Higher = better contact efficiency.</div></div>
+        <div class="gl-item"><div class="gl-term">Blast%</div><div class="gl-def">Fast swing + squared up combined. Best bat tracking power indicator.</div></div>
+      </div>
+      <div class="gl-grp"><div class="gl-grp-t">Matchup Badges</div>
+        <div class="gl-item"><div class="gl-term">PMS 8–10</div><div class="gl-def">Strong structural advantage over today's pitcher. Prioritize in DFS lineups.</div></div>
+        <div class="gl-item"><div class="gl-term">PMS 5–7</div><div class="gl-def">Neutral matchup. Season stats and salary efficiency matter more here.</div></div>
+        <div class="gl-item"><div class="gl-term">PMS 1–4</div><div class="gl-def">Structural disadvantage. Consider fading or downgrading. See PMS tab for details.</div></div>
+      </div>
     </div>
-    <div class="gl-grp"><div class="gl-grp-t">Production (Results)</div>
-      <div class="gl-item"><div class="gl-term">wOBA</div><div class="gl-def">Weighted On-Base Average. Weights each outcome by run value. League avg ~.320. Better than OPS for true offensive value.</div></div>
-      <div class="gl-item"><div class="gl-term">wRC+</div><div class="gl-def">Weighted Runs Created Plus. Park and league adjusted. 100 = exactly league avg. 150 = 50% better than avg.</div></div>
-      <div class="gl-item"><div class="gl-term">ISO</div><div class="gl-def">Isolated Power (SLG minus AVG). Pure extra-base hit rate. Elite: .250+. Average: .150.</div></div>
+
+    <!-- ── HES TAB ── -->
+    <div class="gl-tab-pane" data-tab="hes">
+      <div class="gl-score-header" style="color:#4ade80;">HES</div>
+      <div class="gl-score-sub">Hitter Environment Score — grades how favorable today's park and conditions are for offense. Applies to the entire lineup, not individual hitters.</div>
+      <div class="gl-pillar">
+        <div class="gl-pillar-title" style="color:#86efac;">Pillar 1 — Park Factors (40%)</div>
+        <div class="gl-item"><div class="gl-term">HR Factor</div><div class="gl-def">FanGraphs park-adjusted HR rate. Coors (1.35), Yankee Stadium (1.18), Petco Park (0.84). The biggest swing in HES.</div></div>
+        <div class="gl-item"><div class="gl-term">wOBAcon Factor</div><div class="gl-def">How much the park amplifies contact results — driven by wall distances, foul territory, and playing surface.</div></div>
+        <div class="gl-item"><div class="gl-term">BB/K Factor</div><div class="gl-def">Parks with poor sight lines or small foul zones subtly affect plate discipline outcomes.</div></div>
+      </div>
+      <div class="gl-pillar">
+        <div class="gl-pillar-title" style="color:#86efac;">Pillar 2 — Dimensions (25%)</div>
+        <div class="gl-item"><div class="gl-term">Wall Distances</div><div class="gl-def">LF, CF, RF distances. Sub-330 LF or RF = elevated HR ceiling. 400+ CF = significant HR suppression.</div></div>
+        <div class="gl-item"><div class="gl-term">Wall Heights</div><div class="gl-def">The Green Monster (37 ft) kills HRs but inflates doubles. Low fences = more HR upside.</div></div>
+        <div class="gl-item"><div class="gl-term">Altitude</div><div class="gl-def">Coors Field (5,200 ft) is the biggest outlier — thin air adds ~30 ft of carry to fly balls. Other parks negligible.</div></div>
+      </div>
+      <div class="gl-pillar">
+        <div class="gl-pillar-title" style="color:#86efac;">Pillar 3 — Weather (35%)</div>
+        <div class="gl-item"><div class="gl-term">Temperature</div><div class="gl-def">Ball carries further in heat. 85°F+ meaningfully boosts offense. Below 50°F suppresses it. Domes lock this at 72°F effective neutral.</div></div>
+        <div class="gl-item"><div class="gl-term">Wind Direction</div><div class="gl-def">Out to CF = maximum HR boost. Out to LF/RF = partial boost. In = HR suppressor. Crosswind = neutral. Domes score 0 on this pillar.</div></div>
+        <div class="gl-item"><div class="gl-term">Wind Speed</div><div class="gl-def">10+ mph out = significant impact. 15+ mph = one of the highest-leverage DFS factors of the day. Under 5 mph = negligible.</div></div>
+      </div>
+      <div class="gl-range-row">
+        <div class="gl-range-chip green">7–10<div class="gl-range-lbl">Stack it</div></div>
+        <div class="gl-range-chip amber">4–6<div class="gl-range-lbl">Neutral</div></div>
+        <div class="gl-range-chip red">1–3<div class="gl-range-lbl">Suppress</div></div>
+      </div>
+      <div class="gl-item" style="margin-top:14px;"><div class="gl-term">Domes</div><div class="gl-def">Retractable-roof closed or fixed dome — Pillar 3 (weather) scores 0. HES is driven entirely by park factors and dimensions.</div></div>
     </div>
-    <div class="gl-grp"><div class="gl-grp-t">Contact Quality (True Talent)</div>
-      <div class="gl-item"><div class="gl-term">xwOBA</div><div class="gl-def">Expected wOBA from EV, launch angle, sprint speed. Removes luck. Key indicator of real vs fluky production.</div></div>
-      <div class="gl-item"><div class="gl-term">Barrel%</div><div class="gl-def">Optimal EV + launch angle. Strongest HR predictor. Elite: 15%+. Average: 7%.</div></div>
-      <div class="gl-item"><div class="gl-term">HardHit%</div><div class="gl-def">Exit velocity 95+ mph. Elite: 50%+. Average: 38%.</div></div>
-      <div class="gl-item"><div class="gl-term">Avg EV</div><div class="gl-def">Average exit velocity on contact. Elite: 93+ mph. League avg: ~88 mph.</div></div>
+
+    <!-- ── PMS TAB ── -->
+    <div class="gl-tab-pane" data-tab="pms">
+      <div class="gl-score-header" style="color:#fb923c;">PMS</div>
+      <div class="gl-score-sub">Pitcher Matchup Score — a per-batter 1–10 grade of how well this hitter's profile exploits today's starting pitcher. Select a pitcher first to see live PMS badges on every row.</div>
+      <div class="gl-pillar">
+        <div class="gl-pillar-title" style="color:#fdba74;">Component 1 — Platoon Splits (25%)</div>
+        <div class="gl-item"><div class="gl-term">Platoon advantage</div><div class="gl-def">LHH vs RHP or RHH vs LHP gains structural advantage. The hitter's own platoon split wOBA is weighted against the pitcher's allowed split wOBA to quantify the edge.</div></div>
+      </div>
+      <div class="gl-pillar">
+        <div class="gl-pillar-title" style="color:#fdba74;">Component 2 — Pitcher Stuff Quality (20%)</div>
+        <div class="gl-item"><div class="gl-term">Stuff+ / Pitching+</div><div class="gl-def">A pitcher with below-average stuff (Stuff+ &lt; 90) gives away more PMS points to the opposing hitters. Elite stuff (120+) caps upside even for high-contact hitters.</div></div>
+      </div>
+      <div class="gl-pillar">
+        <div class="gl-pillar-title" style="color:#fdba74;">Component 3 — Swing Plane vs Arm Angle (25%)</div>
+        <div class="gl-item"><div class="gl-term">Attack angle vs VAA</div><div class="gl-def">High attack angle hitters (20°+) struggle against low-slot / sidearm pitchers whose flat vertical approach angle (VAA near 0°) can't be elevated. This mismatch suppresses PMS even when platoon is favorable.</div></div>
+        <div class="gl-item"><div class="gl-term">Optimal match</div><div class="gl-def">Moderate attack angle (8–15°) vs high arm slot pitchers = ideal swing-plane alignment. Hitter can elevate without overswinging.</div></div>
+      </div>
+      <div class="gl-pillar">
+        <div class="gl-pillar-title" style="color:#fdba74;">Component 4 — Hitter Contact Quality (20%)</div>
+        <div class="gl-item"><div class="gl-term">Barrel% + HardHit% + xwOBA</div><div class="gl-def">A high-contact-quality hitter punishes poor pitchers harder. This component ensures that even in a neutral matchup, elite batters score higher than weak ones facing the same arm.</div></div>
+      </div>
+      <div class="gl-pillar">
+        <div class="gl-pillar-title" style="color:#fdba74;">Component 5 — Recent Form (10%)</div>
+        <div class="gl-item"><div class="gl-term">L7 / L14 wOBA</div><div class="gl-def">A hot hitter picks up bonus points. A cold hitter (L14 wOBA &lt; .250) loses PMS points even if the structural matchup is strong. Form is a tiebreaker, not a primary driver.</div></div>
+      </div>
+      <div class="gl-range-row">
+        <div class="gl-range-chip green">8–10<div class="gl-range-lbl">Target</div></div>
+        <div class="gl-range-chip amber">5–7<div class="gl-range-lbl">Neutral</div></div>
+        <div class="gl-range-chip red">1–4<div class="gl-range-lbl">Fade</div></div>
+      </div>
+      <div class="gl-item" style="margin-top:14px;"><div class="gl-term">Click any hitter row → PMS tab</div><div class="gl-def">See a full point-by-point breakdown of how each component scored for this specific batter vs today's pitcher.</div></div>
     </div>
-    <div class="gl-grp"><div class="gl-grp-t">Plate Discipline</div>
-      <div class="gl-item"><div class="gl-term">K%</div><div class="gl-def">Strikeout rate per PA. League avg ~22%. Below 18% = elite contact. Above 30% = significant K risk.</div></div>
-      <div class="gl-item"><div class="gl-term">BB%</div><div class="gl-def">Walk rate per PA. League avg ~8.5%. Above 15% = elite eye.</div></div>
-      <div class="gl-item"><div class="gl-term">SwStr%</div><div class="gl-def">Swing-and-miss rate. Below 8% = elite contact. Above 14% = K-prone.</div></div>
-      <div class="gl-item"><div class="gl-term">O-Swing%</div><div class="gl-def">Chase rate outside zone. Below 25% = disciplined. Above 35% = exploitable.</div></div>
+
+    <!-- ── STACK GRADE TAB ── -->
+    <div class="gl-tab-pane" data-tab="stack">
+      <div class="gl-score-header" style="color:#fbbf24;">Stack Grade</div>
+      <div class="gl-score-sub">A single letter grade (A+ to F) summarizing how aggressively to stack this lineup today. Combines individual pitcher matchup quality with the ballpark environment.</div>
+      <div class="gl-pillar">
+        <div class="gl-pillar-title" style="color:#fde68a;">Formula</div>
+        <div class="gl-item"><div class="gl-term">60% — PMS Average</div><div class="gl-def">Average PMS score across all 9 hitters, with extra weight on batting spots 1–4. A lineup with elite top-of-order matchups grades higher than one where only the bottom third benefits.</div></div>
+        <div class="gl-item"><div class="gl-term">40% — HES Score</div><div class="gl-def">The ballpark environment score. A great pitcher matchup in a dome on a cold night is worth less than the same matchup at Coors on a windy summer evening.</div></div>
+        <div class="gl-item"><div class="gl-term">Elite Bonus</div><div class="gl-def">If 3+ hitters in spots 1–4 score PMS 8+, a bonus lifts the grade. Top-of-order concentration is where DFS stacks score — this rewards it explicitly.</div></div>
+      </div>
+      <div class="gl-pillar">
+        <div class="gl-pillar-title" style="color:#fde68a;">Grade Scale</div>
+        <div class="gl-item"><div class="gl-term">A+ / A</div><div class="gl-def">Elite lineup-wide matchup + favorable park. Target 3–4 hitters. This is the lineup to build around in GPPs.</div></div>
+        <div class="gl-item"><div class="gl-term">B+ / B</div><div class="gl-def">Above average across the board. A 2–3 man stack is justified. Look for top-order concentration and avoid the bottom third unless salary forces it.</div></div>
+        <div class="gl-item"><div class="gl-term">C+ / C</div><div class="gl-def">Mixed signals — possibly a weak pitcher but a suppressed park, or good park but a tough arm. Salary savings may be the primary draw. Use sparingly in GPPs.</div></div>
+        <div class="gl-item"><div class="gl-term">D / F</div><div class="gl-def">Fade this lineup entirely. Tough pitcher + hostile environment. Only use individual hitters at extreme salary discounts for cash games.</div></div>
+      </div>
+      <div class="gl-item"><div class="gl-term">Important</div><div class="gl-def">Stack Grade doesn't account for salary. A B+ grade at $9K/hitter may be better value than an A grade at $5K/hitter. Always cross-reference with DraftKings salary to find the optimal exposure level.</div></div>
     </div>
-    <div class="gl-grp"><div class="gl-grp-t">Swing Mechanics</div>
-      <div class="gl-item"><div class="gl-term">Attack Angle</div><div class="gl-def">Degrees of upswing at contact. 5–20° is the ideal lift window. Higher = more vulnerability to flat deliveries.</div></div>
-      <div class="gl-item"><div class="gl-term">Bat Speed</div><div class="gl-def">Average mph at sweet spot. 75+ mph = fast swing. Top tier: 78+ mph.</div></div>
-      <div class="gl-item"><div class="gl-term">Squared-Up%</div><div class="gl-def">Efficiency converting bat speed to exit velocity. Higher = better contact efficiency.</div></div>
-      <div class="gl-item"><div class="gl-term">Blast%</div><div class="gl-def">Fast swing + squared up combined. Best bat tracking power indicator.</div></div>
-    </div>
-    <div class="gl-grp"><div class="gl-grp-t">Matchup Badges</div>
-      <div class="gl-item"><div class="gl-term">Advantage</div><div class="gl-def">Platoon split or swing plane mismatch strongly favors the hitter.</div></div>
-      <div class="gl-item"><div class="gl-term">Mismatch</div><div class="gl-def">Structural disadvantage — typically extreme uppercut vs flat delivery.</div></div>
-      <div class="gl-item"><div class="gl-term">Neutral</div><div class="gl-def">No strong signal either way. Season stats and form carry more weight.</div></div>
-    </div>
-    <div class="gl-grp"><div class="gl-grp-t">PMS — Pitcher Matchup Score (1–10)</div>
-      <div class="gl-item"><div class="gl-term">What it is</div><div class="gl-def">A per-batter score (1–10) grading how well this hitter matches up against today's starting pitcher. Higher = better matchup for the hitter.</div></div>
-      <div class="gl-item"><div class="gl-term">What goes in</div><div class="gl-def">Platoon splits (L/R), pitcher stuff quality, swing plane vs arm angle, hitter contact quality, and recent form.</div></div>
-      <div class="gl-item"><div class="gl-term">8–10 (Elite)</div><div class="gl-def">Strong structural advantage. Prioritize in lineups.</div></div>
-      <div class="gl-item"><div class="gl-term">5–7 (Neutral)</div><div class="gl-def">Matchup doesn't move the needle much. Lean on season stats and salary.</div></div>
-      <div class="gl-item"><div class="gl-term">1–4 (Tough)</div><div class="gl-def">Structural disadvantage. Consider downgrading or fading entirely.</div></div>
-    </div>
-    <div class="gl-grp"><div class="gl-grp-t">HES — Hitter Environment Score (1–10)</div>
-      <div class="gl-item"><div class="gl-term">What it is</div><div class="gl-def">A per-game environment score grading how favorable the ballpark and conditions are for hitters today. Applies to the whole lineup.</div></div>
-      <div class="gl-item"><div class="gl-term">Pillar 1 — Park Factors</div><div class="gl-def">HR, wOBAcon, and BB/K factors from FanGraphs. How much the park inflates or suppresses offense historically.</div></div>
-      <div class="gl-item"><div class="gl-term">Pillar 2 — Dimensions</div><div class="gl-def">Wall distances, heights, and altitude. Short porches, thin air (Coors), and low fences boost scores.</div></div>
-      <div class="gl-item"><div class="gl-term">Pillar 3 — Weather</div><div class="gl-def">Temperature, wind speed, and direction. Warm + wind out = maximum offense. Domes suppress this pillar entirely.</div></div>
-      <div class="gl-item"><div class="gl-term">7–10 (Hitter-friendly)</div><div class="gl-def">Stack the lineup. Environment strongly favors scoring.</div></div>
-      <div class="gl-item"><div class="gl-term">4–6 (Neutral)</div><div class="gl-def">No strong lean either way.</div></div>
-      <div class="gl-item"><div class="gl-term">1–3 (Pitcher-friendly)</div><div class="gl-def">Suppressed environment. Temper ceiling expectations.</div></div>
-    </div>
-    <div class="gl-grp"><div class="gl-grp-t">Stack Grade (A+ to F)</div>
-      <div class="gl-item"><div class="gl-term">What it is</div><div class="gl-def">A single letter grade summarizing how stackable this team's lineup is today. Combines PMS (60%) + HES (40%), with a bonus for elite matchups in the top 4 spots.</div></div>
-      <div class="gl-item"><div class="gl-term">A+ / A</div><div class="gl-def">Strong matchup quality across the lineup + favorable environment. Target 3–4 hitters in DFS.</div></div>
-      <div class="gl-item"><div class="gl-term">B+ / B</div><div class="gl-def">Above average. A 2–3 man stack is justified. Watch for top-order concentration.</div></div>
-      <div class="gl-item"><div class="gl-term">C+ / C</div><div class="gl-def">Mixed signals. Salary savings may be the main draw.</div></div>
-      <div class="gl-item"><div class="gl-term">D / F</div><div class="gl-def">Fade this lineup. Tough pitcher + bad environment. Avoid stacking.</div></div>
-    </div></div>
+
+  </div>
 </div>
 
 <div class="pitcher-gl-drawer" id="pitcherGlossary">
@@ -3719,6 +3837,10 @@ function toggleSampleKey(e, id) {
 function toggleParkBar() {
   document.getElementById('parkBarInner').classList.toggle('collapsed');
   document.getElementById('parkBarToggle').classList.toggle('collapsed');
+  // Tour: advance when user closes (collapses) the bar
+  if (document.getElementById('parkBarInner').classList.contains('collapsed')) {
+    _tourHookParkClose();
+  }
 }
 function selectSlate(btn, slate) {
   document.querySelectorAll('#slateButtons .ssb-btn').forEach(b => b.classList.remove('active'));
@@ -6102,6 +6224,7 @@ function spPickerSelect(pid, name, hand) {
   }
   const abbr = document.getElementById('spTeamLabel')?.textContent;
   loadStartingPitcher(pid, name, abbr);
+  _tourHookPitcherSelect();
 }
 
 async function loadStartingPitcher(spId, spName, homeTeam) {
@@ -9277,63 +9400,98 @@ function renderPMSBreakdown(rowId) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  GUIDED TOUR ENGINE
+//  GLOSSARY TAB SWITCHER
 // ═══════════════════════════════════════════════════════════════════════════
+function switchGlossaryTab(btn, tab) {
+  const drawer = btn.closest('.hitter-gl-drawer');
+  drawer.querySelectorAll('.gl-htab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  drawer.querySelectorAll('.gl-tab-pane').forEach(p => p.classList.toggle('active', p.dataset.tab === tab));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  GUIDED TOUR ENGINE  (9 steps — pitcher panel first, then hitter panel)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+//  Step order:
+//   1  Welcome (centered)
+//   2  Pick a Game          → auto-advance when game is clicked
+//   3  Park & Weather bar   → user must CLOSE it to advance
+//   4  Pitcher Panel        → Got it
+//   5  Select a Pitcher     → auto-advance when spPickerSelect fires
+//   6  SP Stats & Grade     → Got it
+//   7  Bullpen Tab          → auto-advance when bp tab is clicked
+//   8  Hitter Rows          → Got it  (PMS badges now live)
+//   9  HES + Stack Grade (last, centered)
+//
 const TOUR_STEPS = [
+  // 0
   {
     title: 'Welcome to SlateHub',
-    body: 'A quick 2-minute tour to get you started. Learn how every score, badge, and panel helps you build smarter DFS lineups.',
+    body: 'A quick 2-minute tour covering every panel, score, and badge. You control the pace — click Got it to move forward, or interact with the highlighted element when prompted.',
     selector: null,
   },
+  // 1
   {
-    title: 'Pick a Game',
-    body: 'Use the Game selector to load a matchup. Each button is a team vs team. Clicking one loads both lineups, the pitcher panel, weather, and park data.',
+    title: 'Step 1 — Pick a Game',
+    body: 'Click any game button to load the matchup. This populates both the Pitcher Panel on the right and the Hitter Panel below with live data for that game.',
     selector: '#gameButtons', arrow: 'up',
-    actionLabel: 'Click any game to continue →', action: 'click-game',
+    actionLabel: 'Click any game button to continue →', action: 'click-game',
   },
+  // 2
   {
-    title: 'Park & Weather Bar',
-    body: 'This bar shows today\'s ballpark environment. Expand it with the arrow on the right to see wind direction, temperature, and detailed park factor breakdowns.',
+    title: 'Step 2 — Park & Weather Bar',
+    body: 'Click the arrow on the right to expand this panel and explore today\'s ballpark conditions — wind direction, temperature, park HR factors, and more. Close it when you\'re done to continue.',
     selector: '#parkBarWrap', arrow: 'down',
+    actionLabel: 'Expand the bar, then close it to continue →', action: 'close-parkbar',
   },
+  // 3
   {
-    title: 'HES — Hitter Environment Score',
-    body: 'A 1–10 score grading how hitter-friendly today\'s conditions are. 7+ means offense plays up — prime stacking spots. Blends park factors, dimensions, and live weather.',
-    selector: '#hesScore', arrow: 'right',
+    title: 'Step 3 — The Pitcher Panel',
+    body: 'The right column is the Pitcher Panel. Use the Home / Away buttons in the top bar to swap between today\'s two starters. The pitcher picker below shows every arm on the roster with ERA, K%, and DK salary.',
+    selector: '#spPickerWrap', arrow: 'left',
   },
+  // 4
   {
-    title: 'Stack Grade',
-    body: 'One letter (A+ to F) summarizing how stackable this lineup is today. Combines individual Pitcher Matchup Scores (60%) with the HES environment (40%). A+ = stack it confidently.',
-    selector: '.stack-bar', arrow: 'up',
+    title: 'Step 4 — Select a Pitcher',
+    body: 'Click any pitcher chip to load their full scouting report — stuff grades, pitch arsenal, platoon splits, and command metrics. Once selected, all 9 hitter matchup badges update to reflect that specific pitcher.',
+    selector: '#spPickerWrap', arrow: 'left',
+    actionLabel: 'Click any pitcher chip to continue →', action: 'click-pitcher',
   },
+  // 5
   {
-    title: 'Batter Rows',
-    body: 'Each row is a lineup spot ordered by batting position. At a glance: wRC+, wOBA, K%, ISO, and a matchup badge vs today\'s starter. Top-3 spots score most DFS points — prioritize them.',
-    selector: '#row1', arrow: 'right',
+    title: 'Step 5 — SP Grade & Signals',
+    body: 'The letter grade (A+ to F) rates this starter\'s overall quality. Green signal chips above the panel indicate exploitable weaknesses — high walk rate, poor left-on-left splits, low Stuff+. These are your stacking triggers.',
+    selector: '.sp-hero', arrow: 'left',
   },
+  // 6
   {
-    title: 'PMS — Pitcher Matchup Score',
-    body: 'The Advantage / Neutral / Mismatch badge is driven by PMS (1–10) — grading how well this hitter\'s swing profile exploits today\'s starter. Click any hitter row to see the full PMS breakdown.',
-    selector: '#row1 .matchup-badge', arrow: 'left',
-    actionLabel: 'Click a hitter row to continue →', action: 'click-hitter',
-  },
-  {
-    title: 'Bullpen Usage',
-    body: 'In the pitcher panel, the Bullpen tab shows every reliever graded CL / SU / MR with pitch counts from the last 14 days. Essential for identifying tired closers or available high-leverage arms.',
+    title: 'Step 6 — Bullpen Usage',
+    body: 'Switch to the Bullpen tab to see every reliever graded CL / SU / MR with pitch counts from the last 14 days. Know which closers are available and which are on back-to-back days before picking late-inning stacks.',
     selector: 'button.p-tab-btn[data-tab="bp"]', arrow: 'down',
     actionLabel: 'Click the Bullpen tab to continue →', action: 'click-bp',
   },
+  // 7
   {
-    title: 'You\'re all set!',
-    body: 'Use the Hitter\'s Glossary and Pitcher\'s Glossary buttons at the bottom of each panel for deep-dives on every metric, score, and badge. Click the ? button anytime to replay this tour.',
-    selector: null, last: true,
+    title: 'Step 7 — Hitter Panel',
+    body: 'Now that a pitcher is selected, each badge on the left shows a live PMS score — the individual pitcher matchup grade for that hitter. Higher = stronger structural advantage. Click any row to drill into splits, swing mechanics, and recent form.',
+    selector: '#row1', arrow: 'right',
+  },
+  // 8  (last)
+  {
+    title: 'Step 8 — HES & Stack Grade',
+    body: 'HES (top right of lineup panel) grades today\'s park and weather for offense on a 1–10 scale. The Stack Grade letter combines all 9 PMS scores + HES to tell you how aggressively to stack this lineup. Open the Hitter\'s Glossary → HES / PMS / Stack tabs for the full breakdown.',
+    selector: '.stack-bar', arrow: 'up',
+    last: true,
   },
 ];
 
-let _tourStep    = 0;
-let _tourActive  = false;
+let _tourStep   = 0;
+let _tourActive = false;
 
 function tourStart() {
+  // Reset localStorage so tour can restart
+  localStorage.removeItem('slateHubTourDone');
   _tourStep   = 0;
   _tourActive = true;
   document.getElementById('tourHighlight').style.display = 'block';
@@ -9352,11 +9510,11 @@ function tourShow(idx) {
 
   const btns = document.getElementById('tourBtns');
   if (step.action) {
-    btns.innerHTML = `<button class="tour-btn-skip" onclick="tourSkip()">Skip tour</button><span style="font-size:12px;color:rgba(96,165,250,0.6);font-style:italic;margin-left:auto;">${step.actionLabel}</span>`;
+    btns.innerHTML = `<button class="tour-btn-skip" onclick="tourSkip()">Exit tour</button><span style="font-size:12px;color:rgba(96,165,250,0.55);font-style:italic;margin-left:auto;">${step.actionLabel}</span>`;
   } else if (step.last) {
-    btns.innerHTML = `<button class="tour-btn-next" onclick="tourEnd()">Done ✓</button>`;
+    btns.innerHTML = `<button class="tour-btn-next" onclick="tourEnd()" style="background:rgba(74,222,128,0.2);color:#4ade80;border-color:rgba(74,222,128,0.4);">Done ✓</button>`;
   } else {
-    const skipLabel = idx === 0 ? 'Skip tour' : 'Exit';
+    const skipLabel = idx === 0 ? 'Skip tour' : 'Exit tour';
     btns.innerHTML = `<button class="tour-btn-skip" onclick="tourSkip()">${skipLabel}</button><button class="tour-btn-next" onclick="tourNext()">Got it →</button>`;
   }
 
@@ -9365,7 +9523,7 @@ function tourShow(idx) {
   const arrow = document.getElementById('tourArrow');
 
   if (!step.selector) {
-    hl.style.opacity   = '0';
+    hl.style.opacity    = '0';
     arrow.style.display = 'none';
     card.style.transform = 'translate(-50%,-50%)';
     card.style.top    = '50%';
@@ -9386,7 +9544,7 @@ function tourShow(idx) {
 
   setTimeout(() => {
     const r   = target.getBoundingClientRect();
-    const PAD = 8, cardW = 330, cardH = 230, arrowSz = 12, margin = 14;
+    const PAD = 8, cardW = 330, cardH = 240, arrowSz = 12, margin = 14;
     const dir = step.arrow || 'down';
 
     hl.style.top    = (r.top  - PAD) + 'px';
@@ -9413,14 +9571,13 @@ function tourShow(idx) {
       aTop  = r.top + r.height / 2 - 10;
       aLeft = r.left - PAD - arrowSz - margin + 2;
     } else {
-      // left — card to the right
+      // left — card to the right of element
       cTop  = r.top + r.height / 2 - cardH / 2;
       cLeft = r.right + PAD + arrowSz + margin;
       aTop  = r.top + r.height / 2 - 10;
       aLeft = r.right + PAD + margin - 2;
     }
 
-    // Clamp to viewport
     cTop  = Math.max(10, Math.min(cTop,  window.innerHeight - cardH - 10));
     cLeft = Math.max(10, Math.min(cLeft, window.innerWidth  - cardW - 10));
 
@@ -9433,8 +9590,8 @@ function tourShow(idx) {
   }, 150);
 }
 
-function tourNext()  { tourShow(_tourStep + 1); }
-function tourSkip()  { tourEnd(); }
+function tourNext() { tourShow(_tourStep + 1); }
+function tourSkip() { tourEnd(); }
 
 function tourEnd() {
   _tourActive = false;
@@ -9445,22 +9602,27 @@ function tourEnd() {
   localStorage.setItem('slateHubTourDone', '1');
 }
 
-// ── Tour event hooks (called from existing functions) ─────────────────────
+// ── Tour event hooks (called from existing functions) ────────────────────
 function _tourHookGameSelect() {
-  if (_tourActive && _tourStep === 1) tourNext();
+  if (_tourActive && _tourStep === 1) tourNext();  // step 1 → step 2
 }
-function _tourHookHitterExpand() {
-  if (_tourActive && _tourStep === 6) tourNext();
+function _tourHookParkClose() {
+  if (_tourActive && _tourStep === 2) tourNext();  // step 2 → step 3
+}
+function _tourHookPitcherSelect() {
+  if (_tourActive && _tourStep === 4) tourNext();  // step 4 → step 5
 }
 function _tourHookBpTab() {
-  if (_tourActive && _tourStep === 7) tourNext();
+  if (_tourActive && _tourStep === 6) tourNext();  // step 6 → step 7
+}
+function _tourHookHitterExpand() {
+  // Not used in current flow but kept for future use
 }
 // ─────────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
   loadGames();
   injectPMSTabs();
-  // Auto-start tour for first-time visitors
   if (!localStorage.getItem('slateHubTourDone')) {
     setTimeout(tourStart, 1400);
   }
