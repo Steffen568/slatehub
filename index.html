@@ -871,6 +871,63 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   .park-bar-wrap { border-bottom:2px solid #3a4a60; }
 
 
+/* ══ GUIDED TOUR ════════════════════════════════════════════════════════════ */
+#tourHighlight {
+  position: fixed; pointer-events: none; border-radius: 6px;
+  box-shadow: 0 0 0 9999px rgba(0,0,0,0.72);
+  outline: 2px solid rgba(96,165,250,0.85); outline-offset: 3px;
+  transition: top .3s, left .3s, width .3s, height .3s, opacity .3s;
+  z-index: 9001; animation: tourPulse 1.6s ease-in-out infinite;
+}
+@keyframes tourPulse {
+  0%,100% { outline-color: rgba(96,165,250,0.85); }
+  50%      { outline-color: rgba(96,165,250,0.30); }
+}
+#tourCard {
+  position: fixed; z-index: 9002; width: 330px;
+  background: rgba(10,18,32,0.94); backdrop-filter: blur(8px);
+  border: 1px solid rgba(96,165,250,0.35); border-radius: 10px;
+  padding: 20px 22px 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.7);
+  transition: top .3s, left .3s, opacity .3s;
+}
+.tour-step-counter {
+  font-size: 10px; font-weight: 700; letter-spacing: 1.2px;
+  text-transform: uppercase; color: rgba(96,165,250,0.7); margin-bottom: 8px;
+}
+.tour-title {
+  font-family: 'Barlow Condensed', sans-serif; font-size: 20px;
+  font-weight: 800; color: #e2e8f0; margin-bottom: 10px; line-height: 1.2;
+}
+.tour-body { font-size: 13px; color: #94a3b8; line-height: 1.55; margin-bottom: 18px; }
+.tour-btns { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.tour-btn-next {
+  background: rgba(96,165,250,0.2); color: #93c5fd;
+  border: 1px solid rgba(96,165,250,0.4); border-radius: 5px;
+  padding: 7px 18px; font-size: 13px; font-weight: 700; cursor: pointer;
+  transition: background .15s;
+}
+.tour-btn-next:hover { background: rgba(96,165,250,0.35); }
+.tour-btn-skip {
+  background: none; color: #475569; border: none;
+  padding: 7px 10px; font-size: 12px; cursor: pointer; transition: color .15s;
+}
+.tour-btn-skip:hover { color: #94a3b8; }
+.tour-arrow { position: fixed; z-index: 9003; width: 0; height: 0; pointer-events: none; transition: top .3s, left .3s; }
+.tour-arrow.up   { border-left: 10px solid transparent; border-right: 10px solid transparent; border-bottom: 12px solid rgba(96,165,250,0.6); }
+.tour-arrow.down { border-left: 10px solid transparent; border-right: 10px solid transparent; border-top: 12px solid rgba(96,165,250,0.6); }
+.tour-arrow.left { border-top: 10px solid transparent; border-bottom: 10px solid transparent; border-right: 12px solid rgba(96,165,250,0.6); }
+.tour-arrow.right{ border-top: 10px solid transparent; border-bottom: 10px solid transparent; border-left: 12px solid rgba(96,165,250,0.6); }
+#tourHelpBtn {
+  position: fixed; bottom: 20px; right: 20px; z-index: 8999;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: rgba(10,18,32,0.85); border: 1px solid rgba(96,165,250,0.4);
+  color: #93c5fd; font-size: 18px; font-weight: 700; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4); transition: background .15s;
+}
+#tourHelpBtn:hover { background: rgba(30,50,80,0.9); }
+/* ══ END TOUR ════════════════════════════════════════════════════════════════ */
+
 /* COMBINED OVERRIDES */
 .pitcher-panel{max-width:100%;border-right:none;min-height:0;}
 .lineup-panel{max-width:100%;border-right:none;min-height:0;}
@@ -1411,6 +1468,29 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
       <div class="gl-item"><div class="gl-term">Advantage</div><div class="gl-def">Platoon split or swing plane mismatch strongly favors the hitter.</div></div>
       <div class="gl-item"><div class="gl-term">Mismatch</div><div class="gl-def">Structural disadvantage — typically extreme uppercut vs flat delivery.</div></div>
       <div class="gl-item"><div class="gl-term">Neutral</div><div class="gl-def">No strong signal either way. Season stats and form carry more weight.</div></div>
+    </div>
+    <div class="gl-grp"><div class="gl-grp-t">PMS — Pitcher Matchup Score (1–10)</div>
+      <div class="gl-item"><div class="gl-term">What it is</div><div class="gl-def">A per-batter score (1–10) grading how well this hitter matches up against today's starting pitcher. Higher = better matchup for the hitter.</div></div>
+      <div class="gl-item"><div class="gl-term">What goes in</div><div class="gl-def">Platoon splits (L/R), pitcher stuff quality, swing plane vs arm angle, hitter contact quality, and recent form.</div></div>
+      <div class="gl-item"><div class="gl-term">8–10 (Elite)</div><div class="gl-def">Strong structural advantage. Prioritize in lineups.</div></div>
+      <div class="gl-item"><div class="gl-term">5–7 (Neutral)</div><div class="gl-def">Matchup doesn't move the needle much. Lean on season stats and salary.</div></div>
+      <div class="gl-item"><div class="gl-term">1–4 (Tough)</div><div class="gl-def">Structural disadvantage. Consider downgrading or fading entirely.</div></div>
+    </div>
+    <div class="gl-grp"><div class="gl-grp-t">HES — Hitter Environment Score (1–10)</div>
+      <div class="gl-item"><div class="gl-term">What it is</div><div class="gl-def">A per-game environment score grading how favorable the ballpark and conditions are for hitters today. Applies to the whole lineup.</div></div>
+      <div class="gl-item"><div class="gl-term">Pillar 1 — Park Factors</div><div class="gl-def">HR, wOBAcon, and BB/K factors from FanGraphs. How much the park inflates or suppresses offense historically.</div></div>
+      <div class="gl-item"><div class="gl-term">Pillar 2 — Dimensions</div><div class="gl-def">Wall distances, heights, and altitude. Short porches, thin air (Coors), and low fences boost scores.</div></div>
+      <div class="gl-item"><div class="gl-term">Pillar 3 — Weather</div><div class="gl-def">Temperature, wind speed, and direction. Warm + wind out = maximum offense. Domes suppress this pillar entirely.</div></div>
+      <div class="gl-item"><div class="gl-term">7–10 (Hitter-friendly)</div><div class="gl-def">Stack the lineup. Environment strongly favors scoring.</div></div>
+      <div class="gl-item"><div class="gl-term">4–6 (Neutral)</div><div class="gl-def">No strong lean either way.</div></div>
+      <div class="gl-item"><div class="gl-term">1–3 (Pitcher-friendly)</div><div class="gl-def">Suppressed environment. Temper ceiling expectations.</div></div>
+    </div>
+    <div class="gl-grp"><div class="gl-grp-t">Stack Grade (A+ to F)</div>
+      <div class="gl-item"><div class="gl-term">What it is</div><div class="gl-def">A single letter grade summarizing how stackable this team's lineup is today. Combines PMS (60%) + HES (40%), with a bonus for elite matchups in the top 4 spots.</div></div>
+      <div class="gl-item"><div class="gl-term">A+ / A</div><div class="gl-def">Strong matchup quality across the lineup + favorable environment. Target 3–4 hitters in DFS.</div></div>
+      <div class="gl-item"><div class="gl-term">B+ / B</div><div class="gl-def">Above average. A 2–3 man stack is justified. Watch for top-order concentration.</div></div>
+      <div class="gl-item"><div class="gl-term">C+ / C</div><div class="gl-def">Mixed signals. Salary savings may be the main draw.</div></div>
+      <div class="gl-item"><div class="gl-term">D / F</div><div class="gl-def">Fade this lineup. Tough pitcher + bad environment. Avoid stacking.</div></div>
     </div></div>
 </div>
 
@@ -1448,6 +1528,17 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
       <div class="gl-item"><div class="gl-term">GB% / FB% / LD%</div><div class="gl-def">High GB% suppresses HRs. High FB% + Hard% = HR risk. LD% drives BABIP.</div></div>
     </div></div>
 </div>
+
+<!-- GUIDED TOUR -->
+<div id="tourHighlight" style="display:none;"></div>
+<div id="tourCard" style="display:none;">
+  <div class="tour-step-counter" id="tourCounter">Step 1 of 9</div>
+  <div class="tour-title" id="tourTitle"></div>
+  <div class="tour-body" id="tourBody"></div>
+  <div class="tour-btns" id="tourBtns"></div>
+</div>
+<div id="tourArrow" class="tour-arrow" style="display:none;"></div>
+<button id="tourHelpBtn" onclick="tourStart()" title="Tour / Help">?</button>
 
 <!-- SLATE / GAME SELECTOR BAR -->
 <div class="slate-selector-bar">
@@ -3602,6 +3693,7 @@ function switchPitcherTab(tab) {
   if (sp) sp.className = 'sp-content' + (tab==='sp' ? '' : ' hidden');
   if (bp) bp.className = 'bp-panel' + (tab==='bp' ? ' active' : '');
   document.querySelectorAll('.p-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab===tab));
+  if (tab === 'bp') _tourHookBpTab();
 }
 function toggleBP(rid) { document.getElementById('bpr-'+rid).classList.toggle('open'); }
 function switchBPTab(rid, tab, btn) {
@@ -4020,6 +4112,7 @@ function toggleBatter(id) {
     row.classList.add('expanded');
     // Draw canvas if in swing pane
     setTimeout(() => initCanvases(), 30);
+    _tourHookHitterExpand();
   }
 }
 
@@ -5234,6 +5327,7 @@ async function selectGameByPk(gamePk) {
     loadStartingPitcher(game.away_sp_id, game.away_sp_name, away),
     loadBullpen(game.away_team_id, game.game_date),
   ]);
+  _tourHookGameSelect();
 }
 
 // ── WEATHER
@@ -9182,9 +9276,194 @@ function renderPMSBreakdown(rowId) {
   pane.innerHTML = html;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  GUIDED TOUR ENGINE
+// ═══════════════════════════════════════════════════════════════════════════
+const TOUR_STEPS = [
+  {
+    title: 'Welcome to SlateHub',
+    body: 'A quick 2-minute tour to get you started. Learn how every score, badge, and panel helps you build smarter DFS lineups.',
+    selector: null,
+  },
+  {
+    title: 'Pick a Game',
+    body: 'Use the Game selector to load a matchup. Each button is a team vs team. Clicking one loads both lineups, the pitcher panel, weather, and park data.',
+    selector: '#gameButtons', arrow: 'up',
+    actionLabel: 'Click any game to continue →', action: 'click-game',
+  },
+  {
+    title: 'Park & Weather Bar',
+    body: 'This bar shows today\'s ballpark environment. Expand it with the arrow on the right to see wind direction, temperature, and detailed park factor breakdowns.',
+    selector: '#parkBarWrap', arrow: 'down',
+  },
+  {
+    title: 'HES — Hitter Environment Score',
+    body: 'A 1–10 score grading how hitter-friendly today\'s conditions are. 7+ means offense plays up — prime stacking spots. Blends park factors, dimensions, and live weather.',
+    selector: '#hesScore', arrow: 'right',
+  },
+  {
+    title: 'Stack Grade',
+    body: 'One letter (A+ to F) summarizing how stackable this lineup is today. Combines individual Pitcher Matchup Scores (60%) with the HES environment (40%). A+ = stack it confidently.',
+    selector: '.stack-bar', arrow: 'up',
+  },
+  {
+    title: 'Batter Rows',
+    body: 'Each row is a lineup spot ordered by batting position. At a glance: wRC+, wOBA, K%, ISO, and a matchup badge vs today\'s starter. Top-3 spots score most DFS points — prioritize them.',
+    selector: '#row1', arrow: 'right',
+  },
+  {
+    title: 'PMS — Pitcher Matchup Score',
+    body: 'The Advantage / Neutral / Mismatch badge is driven by PMS (1–10) — grading how well this hitter\'s swing profile exploits today\'s starter. Click any hitter row to see the full PMS breakdown.',
+    selector: '#row1 .matchup-badge', arrow: 'left',
+    actionLabel: 'Click a hitter row to continue →', action: 'click-hitter',
+  },
+  {
+    title: 'Bullpen Usage',
+    body: 'In the pitcher panel, the Bullpen tab shows every reliever graded CL / SU / MR with pitch counts from the last 14 days. Essential for identifying tired closers or available high-leverage arms.',
+    selector: 'button.p-tab-btn[data-tab="bp"]', arrow: 'down',
+    actionLabel: 'Click the Bullpen tab to continue →', action: 'click-bp',
+  },
+  {
+    title: 'You\'re all set!',
+    body: 'Use the Hitter\'s Glossary and Pitcher\'s Glossary buttons at the bottom of each panel for deep-dives on every metric, score, and badge. Click the ? button anytime to replay this tour.',
+    selector: null, last: true,
+  },
+];
+
+let _tourStep    = 0;
+let _tourActive  = false;
+
+function tourStart() {
+  _tourStep   = 0;
+  _tourActive = true;
+  document.getElementById('tourHighlight').style.display = 'block';
+  document.getElementById('tourCard').style.display      = 'block';
+  tourShow(0);
+}
+
+function tourShow(idx) {
+  const step = TOUR_STEPS[idx];
+  if (!step) { tourEnd(); return; }
+  _tourStep = idx;
+
+  document.getElementById('tourCounter').textContent = `Step ${idx + 1} of ${TOUR_STEPS.length}`;
+  document.getElementById('tourTitle').textContent   = step.title;
+  document.getElementById('tourBody').textContent    = step.body;
+
+  const btns = document.getElementById('tourBtns');
+  if (step.action) {
+    btns.innerHTML = `<button class="tour-btn-skip" onclick="tourSkip()">Skip tour</button><span style="font-size:12px;color:rgba(96,165,250,0.6);font-style:italic;margin-left:auto;">${step.actionLabel}</span>`;
+  } else if (step.last) {
+    btns.innerHTML = `<button class="tour-btn-next" onclick="tourEnd()">Done ✓</button>`;
+  } else {
+    const skipLabel = idx === 0 ? 'Skip tour' : 'Exit';
+    btns.innerHTML = `<button class="tour-btn-skip" onclick="tourSkip()">${skipLabel}</button><button class="tour-btn-next" onclick="tourNext()">Got it →</button>`;
+  }
+
+  const hl    = document.getElementById('tourHighlight');
+  const card  = document.getElementById('tourCard');
+  const arrow = document.getElementById('tourArrow');
+
+  if (!step.selector) {
+    hl.style.opacity   = '0';
+    arrow.style.display = 'none';
+    card.style.transform = 'translate(-50%,-50%)';
+    card.style.top    = '50%';
+    card.style.left   = '50%';
+    card.style.right  = 'auto';
+    card.style.bottom = 'auto';
+    return;
+  }
+
+  hl.style.opacity    = '1';
+  arrow.style.display = 'block';
+  card.style.transform = 'none';
+
+  const target = document.querySelector(step.selector);
+  if (!target) { tourNext(); return; }
+
+  target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  setTimeout(() => {
+    const r   = target.getBoundingClientRect();
+    const PAD = 8, cardW = 330, cardH = 230, arrowSz = 12, margin = 14;
+    const dir = step.arrow || 'down';
+
+    hl.style.top    = (r.top  - PAD) + 'px';
+    hl.style.left   = (r.left - PAD) + 'px';
+    hl.style.width  = (r.width  + PAD * 2) + 'px';
+    hl.style.height = (r.height + PAD * 2) + 'px';
+
+    arrow.className = 'tour-arrow ' + dir;
+
+    let cTop, cLeft, aTop, aLeft;
+    if (dir === 'down') {
+      cTop  = r.top - PAD - cardH - arrowSz - margin;
+      cLeft = r.left + r.width / 2 - cardW / 2;
+      aTop  = r.top - PAD - arrowSz - margin + 2;
+      aLeft = r.left + r.width / 2 - 10;
+    } else if (dir === 'up') {
+      cTop  = r.bottom + PAD + arrowSz + margin;
+      cLeft = r.left + r.width / 2 - cardW / 2;
+      aTop  = r.bottom + PAD + margin - 2;
+      aLeft = r.left + r.width / 2 - 10;
+    } else if (dir === 'right') {
+      cTop  = r.top + r.height / 2 - cardH / 2;
+      cLeft = r.left - PAD - cardW - arrowSz - margin;
+      aTop  = r.top + r.height / 2 - 10;
+      aLeft = r.left - PAD - arrowSz - margin + 2;
+    } else {
+      // left — card to the right
+      cTop  = r.top + r.height / 2 - cardH / 2;
+      cLeft = r.right + PAD + arrowSz + margin;
+      aTop  = r.top + r.height / 2 - 10;
+      aLeft = r.right + PAD + margin - 2;
+    }
+
+    // Clamp to viewport
+    cTop  = Math.max(10, Math.min(cTop,  window.innerHeight - cardH - 10));
+    cLeft = Math.max(10, Math.min(cLeft, window.innerWidth  - cardW - 10));
+
+    card.style.top    = cTop  + 'px';
+    card.style.left   = cLeft + 'px';
+    card.style.right  = 'auto';
+    card.style.bottom = 'auto';
+    arrow.style.top   = aTop  + 'px';
+    arrow.style.left  = aLeft + 'px';
+  }, 150);
+}
+
+function tourNext()  { tourShow(_tourStep + 1); }
+function tourSkip()  { tourEnd(); }
+
+function tourEnd() {
+  _tourActive = false;
+  document.getElementById('tourHighlight').style.display = 'none';
+  document.getElementById('tourCard').style.display      = 'none';
+  const arrow = document.getElementById('tourArrow');
+  if (arrow) arrow.style.display = 'none';
+  localStorage.setItem('slateHubTourDone', '1');
+}
+
+// ── Tour event hooks (called from existing functions) ─────────────────────
+function _tourHookGameSelect() {
+  if (_tourActive && _tourStep === 1) tourNext();
+}
+function _tourHookHitterExpand() {
+  if (_tourActive && _tourStep === 6) tourNext();
+}
+function _tourHookBpTab() {
+  if (_tourActive && _tourStep === 7) tourNext();
+}
+// ─────────────────────────────────────────────────────────────────────────
+
 document.addEventListener('DOMContentLoaded', () => {
   loadGames();
   injectPMSTabs();
+  // Auto-start tour for first-time visitors
+  if (!localStorage.getItem('slateHubTourDone')) {
+    setTimeout(tourStart, 1400);
+  }
 });
 </script>
 
