@@ -7821,8 +7821,13 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
     const rowEl  = document.getElementById('row' + rowNum);
     if (!rowEl) return;
     const stats  = statsMap[player.player_id] || statsMap[String(player.player_id)];
-console.log('STATS DEBUG row', i+1, 'pid:', player.player_id, 'stats:', stats);
     if (!stats) return;
+
+    // If player name is missing (e.g. WBC lineups with null player_name), fill from stats
+    const _nameElFill = rowEl.querySelector('.br-name');
+    if (_nameElFill && (!_nameElFill.textContent || _nameElFill.textContent === '--' || _nameElFill.textContent === '—') && stats.full_name) {
+      _nameElFill.textContent = stats.full_name;
+    }
 
     // Main row stats
     updateBatterCell(rowEl, '.br-stat-val', 'wRC+',  stats.wrc_plus,     v => Math.round(v));
@@ -7834,7 +7839,6 @@ console.log('STATS DEBUG row', i+1, 'pid:', player.player_id, 'stats:', stats);
 
     // ── BATTER BADGES (salary + sample size) — inserted after .br-name in order
     const nameEl = rowEl.querySelector('.br-name');
-    console.log('SALARY DEBUG', player.player_id, String(player.player_id), salaryMap, salaryMap[String(player.player_id)]);
     if (nameEl) {
       // Remove existing badges
       nameEl.parentNode.querySelectorAll('.br-salary, .batter-sample-badge').forEach(el => el.remove());
