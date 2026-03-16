@@ -3504,8 +3504,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
         <div class="sp-name">Kris Bubic</div>
       </div>
       <div class="grade-wrap">
-        <div class="grade-box g-C">C+</div>
-        <div class="grade-sub">vs NYY</div>
+        <div class="grade-box g-C" id="spGradeBox">—</div>
+        <div class="grade-sub" id="spGradeSub">select pitcher</div>
       </div>
     </div>
 
@@ -6094,6 +6094,10 @@ function clearSPPanel() {
     '<div style="color:var(--muted);font-size:11px;padding:8px;">No pitcher selected</div>';
 
   document.getElementById('sp-salary-badge')?.remove();
+  const gradeBox = document.getElementById('spGradeBox');
+  if (gradeBox) { gradeBox.textContent = '—'; gradeBox.className = 'grade-box g-C'; }
+  const gradeSub = document.getElementById('spGradeSub');
+  if (gradeSub) gradeSub.textContent = 'select pitcher';
 }
 
 let activePitcherPickedId   = null;
@@ -6465,6 +6469,7 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
 
   // Store stats for signal rendering — re-renders when splits/arsenal arrive
   _activePd = pd;
+  updateSpGradeBox(pd);
   renderPitcherSignals();
 }
 
@@ -9001,6 +9006,65 @@ function renderEnvironmentBreakdown() {
   </div>`;
 
   body.innerHTML = html;
+}
+
+// ── SP Overall Grade (A+–F) based on composite of key rate stats
+function computeSpGrade(pd) {
+  if (!pd) return null;
+  let score = 0, weight = 0;
+
+  const addStat = (val, hi, mid, lo, w, higherIsBetter) => {
+    if (val == null) return;
+    const v = parseFloat(val);
+    let pts;
+    if (higherIsBetter) pts = v >= hi ? 10 : v >= mid ? 7 : v >= lo ? 4 : 1;
+    else                pts = v <= hi ? 10 : v <= mid ? 7 : v <= lo ? 4 : 1;
+    score += pts * w; weight += w;
+  };
+
+  const toD = v => (v == null ? null : v > 1 ? v / 100 : v);
+
+  // xFIP (lower = better)  thresholds: elite<2.80, good<3.50, avg<4.50
+  addStat(pd.xfip,      2.80, 3.50, 4.50, 3, false);
+  // SIERA (lower = better)
+  addStat(pd.siera,     3.00, 3.80, 4.80, 2, false);
+  // K% as decimal (higher = better) thresholds: elite>.280, good>.220, avg>.170
+  addStat(toD(pd.k_pct),  0.280, 0.220, 0.170, 2, true);
+  // BB% (lower = better) thresholds: elite<.060, good<.090, avg<.120
+  addStat(toD(pd.bb_pct), 0.060, 0.090, 0.120, 2, false);
+  // SwStr% (higher = better) thresholds: elite>.135, good>.110, avg>.085
+  addStat(toD(pd.swstr_pct), 0.135, 0.110, 0.085, 1, true);
+  // Stuff+ (higher = better) thresholds: elite>110, good>100, avg>90
+  addStat(pd.stuff_plus, 110, 100, 90, 1, true);
+
+  if (weight === 0) return null;
+  const avg = score / weight;
+
+  if      (avg >= 9.2) return { letter: 'A+', cls: 'g-A' };
+  else if (avg >= 8.0) return { letter: 'A',  cls: 'g-A' };
+  else if (avg >= 6.8) return { letter: 'B+', cls: 'g-B' };
+  else if (avg >= 5.6) return { letter: 'B',  cls: 'g-B' };
+  else if (avg >= 4.4) return { letter: 'C+', cls: 'g-C' };
+  else if (avg >= 3.2) return { letter: 'C',  cls: 'g-C' };
+  else if (avg >= 2.0) return { letter: 'D',  cls: 'g-D' };
+  else                 return { letter: 'F',  cls: 'g-D' };
+}
+
+function updateSpGradeBox(pd) {
+  const box = document.getElementById('spGradeBox');
+  const sub = document.getElementById('spGradeSub');
+  if (!box) return;
+  const result = computeSpGrade(pd);
+  if (!result) { box.textContent = '—'; box.className = 'grade-box g-C'; return; }
+  box.textContent = result.letter;
+  box.className = 'grade-box ' + result.cls;
+  // Update sub-label with opponent abbreviation if available
+  if (sub && activeGame) {
+    const isHome = activePitcherTeamId === activeGame.home_team_id;
+    const opp = isHome ? activeGame.away_team : activeGame.home_team;
+    const oppAbbr = typeof teamAbbr === 'function' ? teamAbbr(opp) : (opp || '');
+    if (oppAbbr) sub.textContent = 'vs ' + oppAbbr;
+  }
 }
 
 // Reads _activePd, _activeSplits, _activeArsenal, _activeWeather
