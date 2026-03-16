@@ -6066,6 +6066,9 @@ function renderLineup(data, teamId) {
     if (nameEl) nameEl.textContent = player.player_name || '--';
     const posEl = rowEl.querySelector('.br-pos');
     if (posEl) posEl.textContent = player.position || '--';
+    // Clear stale batting hand while new ones load
+    const handEl = rowEl.querySelector('.br-hand');
+    if (handEl) { handEl.textContent = '--'; handEl.className = 'br-hand'; }
     // Clear stale batter stats while new ones load
     rowEl.querySelectorAll('.bs-val').forEach(el => el.textContent = '--');
   });
@@ -6079,13 +6082,16 @@ function renderLineup(data, teamId) {
     if (nameEl) nameEl.textContent = '--';
     const posEl = rowEl.querySelector('.br-pos');
     if (posEl) posEl.textContent = '--';
+    const handEl = rowEl.querySelector('.br-hand');
+    if (handEl) { handEl.textContent = '--'; handEl.className = 'br-hand'; }
   }
 
   console.log('Lineup rendered:', players.length, 'players for team', teamId);
 
-  // Load batter stats and bat tracking for this team
+  // Load batter stats, bat tracking, and batting hand for this team
   const playerIds = players.slice(0, 9).map(p => p.player_id).filter(Boolean);
   if (playerIds.length > 0) {
+    loadBatterHands(playerIds, players.slice(0, 9));
     loadBatterStats(playerIds, players.slice(0, 9), activeStatYear);
     loadBatTracking(playerIds);
   }
@@ -7707,6 +7713,25 @@ function syncSwingPanesArmAngle(armDeg) {
 }
 
 // ── BATTER STATS
+async function loadBatterHands(playerIds, lineupPlayers) {
+  const { data } = await sb
+    .from('rosters')
+    .select('player_id, bats')
+    .in('player_id', playerIds);
+  if (!data) return;
+  const batsMap = {};
+  data.forEach(r => { batsMap[r.player_id] = r.bats; });
+  lineupPlayers.forEach((player, i) => {
+    const rowEl = document.getElementById('row' + (i + 1));
+    if (!rowEl) return;
+    const handEl = rowEl.querySelector('.br-hand');
+    if (!handEl) return;
+    const hand = batsMap[player.player_id] || '--';
+    handEl.textContent = hand;
+    handEl.className = 'br-hand' + (hand === 'R' ? ' R' : hand === 'S' ? ' S' : '');
+  });
+}
+
 async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
   // Map year selector to season(s)
   const is3yr  = year === '3yr';
