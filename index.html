@@ -9419,65 +9419,94 @@ function switchGlossaryTab(btn, tab) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  GUIDED TOUR ENGINE  (9 steps — pitcher panel first, then hitter panel)
+//  GUIDED TOUR ENGINE  (10 steps — pitcher panel first, then hitter panel)
 // ═══════════════════════════════════════════════════════════════════════════
+
+// Viewport-fraction rects for large panels — reliable across all screen sizes
+const FIXED_RECTS = {
+  'pitcher-col': () => {
+    const W = window.innerWidth, H = window.innerHeight;
+    return W > 900
+      ? { top: 125, left: Math.floor(W / 2) + 2, width: Math.floor(W / 2) - 6, height: H - 135 }
+      : { top: 0,   left: 0,                      width: W,                      height: Math.floor(H * 0.45) };
+  },
+  'bp-panel': () => {
+    const W = window.innerWidth, H = window.innerHeight;
+    return W > 900
+      ? { top: 185, left: Math.floor(W / 2) + 2, width: Math.floor(W / 2) - 6, height: H - 195 }
+      : { top: 0,   left: 0,                      width: W,                      height: Math.floor(H * 0.5) };
+  },
+  'lineup-col': () => {
+    const W = window.innerWidth, H = window.innerHeight;
+    return W > 900
+      ? { top: 125, left: 0, width: Math.floor(W / 2) - 2, height: H - 135 }
+      : { top: Math.floor(H * 0.45), left: 0, width: W, height: Math.floor(H * 0.55) };
+  },
+};
+
 const TOUR_STEPS = [
-  // 0 — Welcome (centered, no highlight)
+  // 0 — Welcome
   {
     title: 'Welcome to SlateHub',
     body: 'A quick 2-minute tour covering every panel, score, and badge. You control the pace — click Got it to move forward, or interact with the highlighted element when prompted.',
     selector: null,
   },
-  // 1 — Pick a Game (card below selector bar, arrow up)
+  // 1 — Pick a Game
   {
     title: 'Step 1 — Pick a Game',
     body: 'Click any game button to load the matchup. This populates both the Pitcher Panel on the right and the Hitter Panel below with live data for that game.',
     selector: '#gameButtons', arrow: 'up',
     actionLabel: 'Click any game button to continue →', action: 'click-game',
   },
-  // 2 — Park bar (card BELOW bar so it doesn't cover it, arrow up toward bar)
+  // 2 — Park bar (card BELOW bar, action: user closes it)
   {
     title: 'Step 2 — Park & Weather Bar',
-    body: 'Click the bar to expand this panel and explore today\'s ballpark conditions — wind direction, temperature, humidity, and park HR factor breakdowns. Click it again to close when you\'re done to continue.',
+    body: 'This bar shows today\'s ballpark and weather — wind direction, temperature, humidity, and park HR factors. Explore it, then close it to continue the tour.',
     selector: '#parkBarWrap', arrow: 'up',
-    actionLabel: 'Expand the bar, then close it to continue →', action: 'close-parkbar',
+    actionLabel: 'Close the bar to continue →', action: 'close-parkbar',
   },
-  // 3 — Pitcher panel overview (highlight full #spContent, card to the LEFT)
+  // 3 — Pitcher Panel (viewport-based rect: right half of screen)
   {
     title: 'Step 3 — The Pitcher Panel',
     body: 'The right column is your Pitcher Panel. It shows the projected starter\'s stats, stuff grades, pitch arsenal, and platoon splits. Use the Home / Away buttons at the top to switch between today\'s two starters.',
-    selector: '.pitcher-col', arrow: 'right',
+    getRect: 'pitcher-col', cardSide: 'left',
   },
-  // 4 — Select pitcher (highlight #spPickerWrap, liveResize so highlight grows as picker opens)
+  // 4 — Select Pitcher (liveResize on picker wrap)
   {
     title: 'Step 4 — Select a Pitcher',
-    body: 'Click any pitcher chip from the list to load their full scouting report. Chips are sorted by DK salary — starters at the top. Once selected, all 9 hitter matchup badges update to reflect that pitcher.',
+    body: 'Click any pitcher chip to load their full scouting report. The projected starter is loaded automatically if available — if not, select your pitcher chip from the list. Once selected, all 9 hitter matchup badges update.',
     selector: '#spPickerWrap', arrow: 'right', liveResize: true,
     actionLabel: 'Click any pitcher chip to continue →', action: 'click-pitcher',
   },
-  // 5 — SP grade (card BELOW .sp-hero so it doesn't block, arrow up toward hero)
+  // 5 — SP Grade (card below .sp-hero)
   {
     title: 'Step 5 — SP Grade & Signals',
-    body: 'The letter grade (A+ to F) rates this starter\'s overall quality based on Stuff+, command, SIERA, xFIP, and batted ball profile. Green signal chips = pitcher strengths, red chips = weaknesses you can exploit. Use these as your stacking triggers.',
+    body: 'The letter grade (A+ to F) rates this starter\'s overall quality. Green signal chips = pitcher strengths, red chips = weaknesses you can exploit. Use red chips as your stacking triggers.',
     selector: '.sp-hero', arrow: 'up',
   },
-  // 6 — Bullpen tab (wording: listed by role, not graded by position)
+  // 6 — Bullpen Tab button (action: click it)
   {
     title: 'Step 6 — Bullpen Usage',
     body: 'Switch to the Bullpen tab to see every reliever listed by role (CL / SU / MR) with pitch counts from the last 14 days. Know which closers are available and which are on short rest.',
     selector: 'button.p-tab-btn[data-tab="bp"]', arrow: 'down',
     actionLabel: 'Click the Bullpen tab to continue →', action: 'click-bp',
   },
-  // 7 — Full hitter panel (highlight .lineup-panel, card to the RIGHT via arrow:'left')
+  // 7 — [NEW] Bullpen Panel open — highlight the panel, Got it to advance
+  {
+    title: 'Step 6 — Bullpen Panel',
+    body: 'Each reliever shows their role, pitch counts over the last 14 days, and an appearance log. CL = closer, SU = setup, MR = middle relief. Expand any row for full grade details.',
+    getRect: 'bp-panel', cardSide: 'left',
+  },
+  // 8 — Hitter Panel (viewport-based rect: left half of screen)
   {
     title: 'Step 7 — Hitter Panel',
-    body: 'Now that a pitcher is selected, each badge shows a live PMS score — that hitter\'s grade vs the selected pitcher in the Pitcher Panel. Higher = stronger structural advantage. Click any row to deep dive into splits, swing mechanics, and recent form.',
-    selector: '.lineup-panel', arrow: 'left',
+    body: 'Each badge shows a live PMS score — that hitter\'s grade vs the selected pitcher in the Pitcher Panel. Higher = stronger structural advantage. Click any row to deep dive into splits, swing mechanics, and recent form.',
+    getRect: 'lineup-col', cardSide: 'right',
   },
-  // 8 — HES + Stack Grade together (span matchup-bar through stack-bar, last step)
+  // 9 — HES + Stack (last, spans both elements)
   {
     title: 'Step 8 — HES & Stack Grade',
-    body: 'HES (top right of the matchup bar) grades today\'s park and weather for offense on a 1–10 scale. The Stack Grade directly below combines all 9 PMS scores + HES into one letter — how aggressively to stack this lineup. Open the Hitter\'s Glossary → HES / PMS / Stack tabs for the full breakdown.',
+    body: 'HES (top right of the matchup bar) grades today\'s park and weather for offense on a 1–10 scale. The Stack Grade directly below combines all 9 PMS scores + HES into one letter — how aggressively to stack this lineup. Use the HES, PMS, and Stack buttons at the top for full breakdowns.',
     selector: '.matchup-bar', spanTo: '.stack-bar', arrow: 'down',
     last: true,
   },
@@ -9537,6 +9566,42 @@ function tourShow(idx) {
   hl.style.opacity    = '1';
   arrow.style.display = 'block';
   card.style.transform = 'none';
+
+  // getRect steps: use viewport-fraction rects instead of element detection
+  if (step.getRect) {
+    const fn = FIXED_RECTS[step.getRect];
+    if (!fn) { tourNext(); return; }
+    function _positionFixed() {
+      const PAD = 8, cardW = 330, cardH = 240, arrowSz = 12, margin = 14;
+      const r = fn();
+      hl.style.top    = (r.top    - PAD) + 'px';
+      hl.style.left   = (r.left   - PAD) + 'px';
+      hl.style.width  = (r.width  + PAD * 2) + 'px';
+      hl.style.height = (r.height + PAD * 2) + 'px';
+      arrow.style.display = 'none'; // no arrow for fixed rects
+      let cTop  = r.top + r.height / 2 - cardH / 2;
+      let cLeft;
+      if (step.cardSide === 'left') {
+        // card to the LEFT of the highlight
+        cLeft = r.left - PAD - cardW - arrowSz - margin;
+      } else {
+        // card to the RIGHT of the highlight
+        cLeft = r.left + r.width + PAD + arrowSz + margin;
+      }
+      cTop  = Math.max(10, Math.min(cTop,  window.innerHeight - cardH - 10));
+      cLeft = Math.max(10, Math.min(cLeft, window.innerWidth  - cardW - 10));
+      card.style.top    = cTop  + 'px';
+      card.style.left   = cLeft + 'px';
+      card.style.right  = 'auto';
+      card.style.bottom = 'auto';
+    }
+    setTimeout(_positionFixed, 100);
+    _clearTourResize();
+    if (step.liveResize) {
+      _tourResizeTimer = setInterval(() => { if (_tourActive) _positionFixed(); else _clearTourResize(); }, 350);
+    }
+    return;
+  }
 
   const target = document.querySelector(step.selector);
   if (!target) { tourNext(); return; }
