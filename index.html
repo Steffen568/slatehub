@@ -1784,7 +1784,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
         <button class="ssb-btn" onclick="selectStatYear(this,'2026')" title="2026 season — available after Opening Day">2026</button>
       </div>
     </div>
-    <div class="panel-hdr" style="position:relative;">
+    <div class="panel-hdr" id="hitterPanelHdr" style="position:relative;">
       <div class="ph-label">Batting Order &mdash; NYY vs BOS</div>
       <div style="display:flex;align-items:center;gap:8px;position:relative;">
         <span id="lineupCoverageBadge" style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;display:none;"></span>
@@ -9503,11 +9503,17 @@ const TOUR_STEPS = [
     body: 'Each badge shows a live PMS score — that hitter\'s grade vs the selected pitcher in the Pitcher Panel. Higher = stronger structural advantage. Click any row to deep dive into splits, swing mechanics, and recent form.',
     getRect: 'lineup-col', cardSide: 'right',
   },
-  // 9 — HES + Stack (last, spans both elements)
+  // 9 — HES + Stack (spans both elements)
   {
     title: 'Step 8 — HES & Stack Grade',
-    body: 'HES (top right of the matchup bar) grades today\'s park and weather for offense on a 1–10 scale. The Stack Grade directly below combines all 9 PMS scores + HES into one letter — how aggressively to stack this lineup. Use the HES, PMS, and Stack buttons at the top for full breakdowns.',
+    body: 'HES (top right of the matchup bar) grades today\'s park and weather for offense on a 1–10 scale. The Stack Grade directly below combines all 9 PMS scores + HES into one letter — how aggressively to stack this lineup.',
     selector: '.matchup-bar', spanTo: '.stack-bar', arrow: 'down',
+  },
+  // 10 — Glossary buttons (last step)
+  {
+    title: 'You\'re all set!',
+    body: 'The HES, PMS, and Stack buttons here open in-depth glossary tabs for every score. Hitter\'s Glossary covers all stats and metrics. Use them anytime — or click ? in the bottom-right corner to replay this tour.',
+    selector: '#hitterPanelHdr', arrow: 'up',
     last: true,
   },
 ];
@@ -9552,7 +9558,8 @@ function tourShow(idx) {
   const card  = document.getElementById('tourCard');
   const arrow = document.getElementById('tourArrow');
 
-  if (!step.selector) {
+  // ── No highlight: centered card (Welcome / no selector AND no getRect) ──
+  if (!step.selector && !step.getRect) {
     hl.style.opacity    = '0';
     arrow.style.display = 'none';
     card.style.transform = 'translate(-50%,-50%)';
@@ -9567,36 +9574,31 @@ function tourShow(idx) {
   arrow.style.display = 'block';
   card.style.transform = 'none';
 
-  // getRect steps: use viewport-fraction rects instead of element detection
+  // ── getRect steps: viewport-fraction rects — reliable across all screen sizes ──
   if (step.getRect) {
     const fn = FIXED_RECTS[step.getRect];
     if (!fn) { tourNext(); return; }
-    function _positionFixed() {
+    const _positionFixed = () => {
       const PAD = 8, cardW = 330, cardH = 240, arrowSz = 12, margin = 14;
       const r = fn();
       hl.style.top    = (r.top    - PAD) + 'px';
       hl.style.left   = (r.left   - PAD) + 'px';
       hl.style.width  = (r.width  + PAD * 2) + 'px';
       hl.style.height = (r.height + PAD * 2) + 'px';
-      arrow.style.display = 'none'; // no arrow for fixed rects
+      arrow.style.display = 'none';
       let cTop  = r.top + r.height / 2 - cardH / 2;
-      let cLeft;
-      if (step.cardSide === 'left') {
-        // card to the LEFT of the highlight
-        cLeft = r.left - PAD - cardW - arrowSz - margin;
-      } else {
-        // card to the RIGHT of the highlight
-        cLeft = r.left + r.width + PAD + arrowSz + margin;
-      }
+      let cLeft = step.cardSide === 'left'
+        ? r.left - PAD - cardW - arrowSz - margin
+        : r.left + r.width + PAD + arrowSz + margin;
       cTop  = Math.max(10, Math.min(cTop,  window.innerHeight - cardH - 10));
       cLeft = Math.max(10, Math.min(cLeft, window.innerWidth  - cardW - 10));
       card.style.top    = cTop  + 'px';
       card.style.left   = cLeft + 'px';
       card.style.right  = 'auto';
       card.style.bottom = 'auto';
-    }
-    setTimeout(_positionFixed, 100);
+    };
     _clearTourResize();
+    setTimeout(_positionFixed, 100);
     if (step.liveResize) {
       _tourResizeTimer = setInterval(() => { if (_tourActive) _positionFixed(); else _clearTourResize(); }, 350);
     }
