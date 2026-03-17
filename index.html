@@ -7759,12 +7759,16 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
         .in('player_id', playerIds)
         .eq('season', season);
 
-  const [statsRes, splitsRes, salaryRes] = await Promise.all([
+  const [statsRes, splitsRes, salaryRes, projRes] = await Promise.all([
     statsQuery,
     splitsQuery,
     sb.from('dk_salaries')
       .select('player_id, salary, position, dk_slate')
+      .in('player_id', playerIds),
+    sb.from('player_projections')
+      .select('player_id, proj_dk_pts')
       .in('player_id', playerIds)
+      .eq('game_date', activeDate),
   ]);
 
   if (statsRes.error) { console.log('No batter stats:', statsRes.error); return; }
@@ -7828,6 +7832,10 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
     }
   });
 
+  // Build projection map
+  const projMap = {};
+  (projRes.data || []).forEach(p => { projMap[String(p.player_id)] = p; });
+
   // Build splits map: player_id -> { L: {...}, R: {...} }
   // For 3yr: group by (player_id, split) and average rate stats across seasons
   const splitsMap = {};
@@ -7885,7 +7893,7 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
     const nameEl = rowEl.querySelector('.br-name');
     if (nameEl) {
       // Remove existing badges
-      nameEl.parentNode.querySelectorAll('.br-salary, .batter-sample-badge').forEach(el => el.remove());
+      nameEl.parentNode.querySelectorAll('.br-salary, .br-proj, .br-own, .batter-sample-badge').forEach(el => el.remove());
 
       // Sample badge first (inserted afterend, so it appears immediately after name)
       const splitsForPlayer = splitsMap[player.player_id] || {};
@@ -7913,7 +7921,8 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
       const salaryData = salaryMap[String(player.player_id)];
       if (posElSal && salaryData?.position) posElSal.textContent = salaryData.position;
 
-      // Salary pill second (inserted afterend of nameEl, so it appears between name and sample badge)
+      // Salary pill — inserted afterend of nameEl (between name and sample badge)
+      let lastPill = nameEl;
       if (salaryData?.salary) {
         const sal = document.createElement('span');
         sal.className = 'br-salary';
@@ -7925,12 +7934,39 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
           margin-left:6px;vertical-align:middle;display:inline-block;
         `;
         nameEl.insertAdjacentElement('afterend', sal);
+        lastPill = sal;
       }
+
+      // DK Projection pill
+      const projData = projMap[String(player.player_id)];
+      const projPts = projData?.proj_dk_pts;
+      const proj = document.createElement('span');
+      proj.className = 'br-proj';
+      proj.textContent = projPts != null ? projPts.toFixed(1) + ' pts' : '— pts';
+      proj.style.cssText = `
+        font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;
+        background:rgba(74,222,128,.10);color:#4ade80;
+        border:1px solid rgba(74,222,128,.22);
+        margin-left:5px;vertical-align:middle;display:inline-block;
+      `;
+      lastPill.insertAdjacentElement('afterend', proj);
+
+      // Ownership placeholder pill
+      const own = document.createElement('span');
+      own.className = 'br-own';
+      own.textContent = '—%';
+      own.title = 'Ownership projection coming soon';
+      own.style.cssText = `
+        font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;
+        background:rgba(148,163,184,.08);color:#94a3b8;
+        border:1px solid rgba(148,163,184,.18);
+        margin-left:5px;vertical-align:middle;display:inline-block;
+      `;
+      proj.insertAdjacentElement('afterend', own);
     }
 
     // Core stats tab
     const corePane = document.getElementById('row' + rowNum + '-core');
-console.log('corePane row', rowNum, corePane ? 'FOUND' : 'NULL', 'stats.avg:', stats?.avg);
     if (corePane) {
       updateDetCell(corePane, 'AVG',      stats.avg,          v => parseFloat(v).toFixed(3));
       updateDetCell(corePane, 'OBP',      stats.obp,          v => parseFloat(v).toFixed(3));
