@@ -546,6 +546,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 .det-tab[data-pane="pms"].active    { color:#fbbf24; border-bottom-color:#fbbf24; }
 .det-tab[data-pane="hes"]           { color:#38bdf8; }
 .det-tab[data-pane="hes"].active    { color:#7dd3fc; border-bottom-color:#7dd3fc; }
+.det-tab[data-pane="proj"]          { color:#4ade80; }
+.det-tab[data-pane="proj"].active   { color:#86efac; border-bottom-color:#86efac; }
 .det-tab:hover{ filter:brightness(1.4); }
 .det-pane{display:none;}
 .det-pane.active{display:block;}
@@ -3920,6 +3922,7 @@ let cachedBatTracking    = {};    // player_id -> bat tracking row
 let currentPitcherVAA    = null;  // estimated VAA (deg, negative) from loadArsenal physics
 let _cachedBatterStats   = {};    // player_id -> batter_stats row (for PMS)
 let _cachedBatterSplits  = {};    // player_id -> { L: split, R: split } (for PMS)
+let _projCache           = {};    // rowId -> player_projections row
 let activeStatYear       = 'current';  // 'current', '2025', '3yr'
 let activePitcherYear    = '2025';     // '2025', '3yr', '2026'
 let activeBullpenTeamId  = null;
@@ -4271,7 +4274,8 @@ function switchTab(rowId, pane) {
         (pane === 'swing'  && txt.includes('swing'))  ||
         (pane === 'form'   && txt.includes('form'))   ||
         (pane === 'hes'    && txt.includes('park fit'))||
-        (pane === 'pms'    && txt === 'pms')) {
+        (pane === 'pms'    && txt === 'pms')           ||
+        (pane === 'proj'   && txt === 'proj')) {
       t.classList.add('active');
     }
   });
@@ -4280,6 +4284,7 @@ function switchTab(rowId, pane) {
   if (pane === 'form')  renderFormBars(rowId, 7);
   if (pane === 'pms')   renderPMSBreakdown(rowId);
   if (pane === 'hes')   renderBatterHESTab(rowId);
+  if (pane === 'proj')  renderProjTab(rowId);
 }
 
 /* ── Angle diagram canvas draw ── */
@@ -7772,7 +7777,7 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
       .select('player_id, salary, position, dk_slate')
       .in('player_id', playerIds),
     sb.from('player_projections')
-      .select('player_id, proj_dk_pts')
+      .select('player_id, proj_dk_pts, proj_floor, proj_ceiling, proj_pa, proj_1b, proj_2b, proj_3b, proj_hr, proj_bb, proj_r, proj_rbi, proj_sb')
       .in('player_id', playerIds)
       .eq('game_date', activeDate),
   ]);
@@ -7991,6 +7996,11 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
 
       renderSplitsPane(splitsPane, vsR, vsL, spHand, stats);
     }
+
+    // Proj tab — store data and render immediately
+    const projData = projMap[String(player.player_id)];
+    _projCache['row' + rowNum] = projData || null;
+    renderProjTab('row' + rowNum);
   });
 
   // ── Cache stats + splits for PMS (module-level so renderAllPMS can access them)
@@ -9454,6 +9464,107 @@ function injectPMSTabs() {
   }
 }
 
+// ─── PROJ TAB INJECTION ───────────────────────────────────────────────────────
+function injectProjTabs() {
+  for (let i = 1; i <= 9; i++) {
+    const detail = document.getElementById('row' + i + '-detail');
+    if (!detail) continue;
+    const tabs = detail.querySelector('.det-tabs');
+    if (!tabs) continue;
+
+    // Inject Proj tab (after PMS)
+    if (!tabs.querySelector('[data-pane="proj"]')) {
+      const tab = document.createElement('div');
+      tab.className    = 'det-tab';
+      tab.dataset.pane = 'proj';
+      tab.textContent  = 'Proj';
+      tab.addEventListener('click', (e) => { e.stopPropagation(); switchTab('row' + i, 'proj'); });
+      tabs.appendChild(tab);
+    }
+
+    // Inject Proj pane (empty placeholder)
+    if (!document.getElementById('row' + i + '-proj')) {
+      const pane = document.createElement('div');
+      pane.className = 'det-pane';
+      pane.id = 'row' + i + '-proj';
+      pane.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:12px;text-align:center;">Loading projections…</div>';
+      detail.appendChild(pane);
+    }
+  }
+}
+
+// Renders per-action DK pts breakdown for a single batter row
+function renderProjTab(rowId) {
+  const pane = document.getElementById(rowId + '-proj');
+  if (!pane) return;
+  const p = _projCache[rowId];
+
+  if (!p || p.proj_dk_pts == null) {
+    pane.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:12px;text-align:center;">No projection available for today.</div>';
+    return;
+  }
+
+  const f = (v, dp = 2) => (v != null ? Number(v).toFixed(dp) : '—');
+
+  const actions = [
+    { label: 'Single',    pts: (p.proj_1b  || 0) * 3  },
+    { label: 'Double',    pts: (p.proj_2b  || 0) * 5  },
+    { label: 'Triple',    pts: (p.proj_3b  || 0) * 8  },
+    { label: 'Home Run',  pts: (p.proj_hr  || 0) * 10 },
+    { label: 'Run',       pts: (p.proj_r   || 0) * 2  },
+    { label: 'RBI',       pts: (p.proj_rbi || 0) * 2  },
+    { label: 'Walk',      pts: (p.proj_bb  || 0) * 2  },
+    { label: 'Stolen Base', pts: (p.proj_sb || 0) * 5 },
+  ];
+
+  const totalCheck = actions.reduce((s, a) => s + a.pts, 0);
+
+  pane.innerHTML = `
+    <div style="padding:10px 4px 4px;">
+      <!-- Header row: total / floor / ceiling -->
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <div style="flex:1;background:rgba(74,222,128,.10);border:1px solid rgba(74,222,128,.22);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#4ade80;margin-bottom:3px;">Projection</div>
+          <div style="font-size:18px;font-weight:700;color:#86efac;">${f(p.proj_dk_pts, 1)}</div>
+          <div style="font-size:9px;color:var(--muted);">DK pts</div>
+        </div>
+        <div style="flex:1;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.18);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#60a5fa;margin-bottom:3px;">Floor</div>
+          <div style="font-size:18px;font-weight:700;color:#93c5fd;">${f(p.proj_floor, 1)}</div>
+          <div style="font-size:9px;color:var(--muted);">DK pts</div>
+        </div>
+        <div style="flex:1;background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.18);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#fbbf24;margin-bottom:3px;">Ceiling</div>
+          <div style="font-size:18px;font-weight:700;color:#fcd34d;">${f(p.proj_ceiling, 1)}</div>
+          <div style="font-size:9px;color:var(--muted);">DK pts</div>
+        </div>
+      </div>
+
+      <!-- Section label -->
+      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid var(--border);">Pts by Action</div>
+
+      <!-- Action breakdown rows -->
+      ${actions.map(a => {
+        const pct = p.proj_dk_pts > 0 ? (a.pts / p.proj_dk_pts) : 0;
+        const barW = Math.round(pct * 100);
+        return `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
+          <div style="width:72px;font-size:11px;font-weight:600;color:var(--text2);">${a.label}</div>
+          <div style="flex:1;height:6px;background:var(--s3);border-radius:3px;overflow:hidden;">
+            <div style="height:100%;width:${barW}%;background:rgba(74,222,128,.5);border-radius:3px;"></div>
+          </div>
+          <div style="width:42px;text-align:right;font-size:12px;font-weight:700;color:${a.pts >= 1 ? '#4ade80' : 'var(--text)'};">${f(a.pts, 2)} <span style="font-size:9px;font-weight:400;color:var(--muted);">pts</span></div>
+        </div>`;
+      }).join('')}
+
+      <!-- Proj PA footer -->
+      <div style="margin-top:8px;padding-top:7px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:10px;color:var(--muted);">
+        <span>Projected PA</span>
+        <span style="color:var(--text2);font-weight:600;">${f(p.proj_pa, 2)}</span>
+      </div>
+    </div>`;
+}
+
 // Renders the 5-component PMS breakdown for a single batter row
 function renderPMSBreakdown(rowId) {
   const pane  = document.getElementById(rowId + '-pms');
@@ -9904,6 +10015,7 @@ function _tourHookHitterExpand() {
 document.addEventListener('DOMContentLoaded', () => {
   loadGames();
   injectPMSTabs();
+  injectProjTabs();
   if (!localStorage.getItem('slateHubTourDone')) {
     setTimeout(tourStart, 1400);
   }
