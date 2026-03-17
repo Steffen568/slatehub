@@ -498,7 +498,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 .batter-row{border-bottom:1px solid var(--border);cursor:pointer;transition:background 0.1s;}
 .batter-row:hover .br-main{background:var(--s2);}
 .batter-row.expanded .br-main{background:var(--s2);}
-.br-main{display:grid;grid-template-columns:28px 1fr 54px 54px 54px 54px 80px;align-items:center;padding:10px 20px;transition:background 0.1s;}
+.br-main{display:grid;grid-template-columns:28px 1fr 185px 54px 54px 54px 80px;align-items:center;padding:10px 20px;transition:background 0.1s;}
+.br-dfs-pills{display:flex;align-items:center;gap:5px;flex-wrap:nowrap;}
 .br-order{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:18px;color:var(--muted);line-height:1;}
 .br-order.top3{color:var(--text);}
 .br-id{padding-left:8px;}
@@ -976,7 +977,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 /* COMBINED OVERRIDES */
 .pitcher-panel{max-width:100%;border-right:none;min-height:0;}
 .lineup-panel{max-width:100%;border-right:none;min-height:0;}
-@media(max-width:1100px){.br-main{grid-template-columns:24px 1fr 48px 48px 48px 48px 72px;padding:9px 14px;}}
+@media(max-width:1100px){.br-main{grid-template-columns:24px 1fr 165px 48px 48px 48px 72px;padding:9px 14px;}}
 
   /* ═══ GLOBAL FONT BOOST ═══ */
   /* Panel headers */
@@ -1904,6 +1905,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
       <div class="br-name">Juan Soto</div>
       <div class="br-meta"><span class="br-pos">RF</span><span class="br-hand">L</span></div>
     </div>
+    <div class="br-dfs-pills"></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val hi">168</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val hi">.418</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val hi">14.2</div></div>
@@ -2121,6 +2123,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
       <div class="br-name">Aaron Judge</div>
       <div class="br-meta"><span class="br-pos">CF</span><span class="br-hand R">R</span></div>
     </div>
+    <div class="br-dfs-pills"></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val hi">181</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val hi">.432</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val mid">26.8</div></div>
@@ -2291,6 +2294,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   <div class="br-main" onclick="toggleBatter('row3')">
     <div class="br-order top3">3</div>
     <div class="br-id"><div class="br-name">Goldschmidt</div><div class="br-meta"><span class="br-pos">1B</span><span class="br-hand R">R</span></div></div>
+    <div class="br-dfs-pills"></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val mid">118</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val mid">.348</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val mid">22.1</div></div>
@@ -2439,6 +2443,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   <div class="br-main" onclick="toggleBatter('row4')">
     <div class="br-order">4</div>
     <div class="br-id"><div class="br-name">Jazz Chisholm</div><div class="br-meta"><span class="br-pos">3B</span><span class="br-hand">L</span></div></div>
+    <div class="br-dfs-pills"></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val mid">128</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val mid">.362</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val lo">29.4</div></div>
@@ -2605,6 +2610,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   <div class="br-main" onclick="toggleBatter('row5')">
     <div class="br-order">5</div>
     <div class="br-id"><div class="br-name">Giancarlo Stanton</div><div class="br-meta"><span class="br-pos">DH</span><span class="br-hand R">R</span></div></div>
+    <div class="br-dfs-pills"></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val mid">122</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val mid">.352</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val lo">34.1</div></div>
@@ -2772,6 +2778,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   <div class="br-main" onclick="toggleBatter('row6')">
     <div class="br-order">6</div>
     <div class="br-id"><div class="br-name">Anthony Volpe</div><div class="br-meta"><span class="br-pos">SS</span><span class="br-hand R">R</span></div></div>
+    <div class="br-dfs-pills"></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val mid">104</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val mid">.321</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val mid">24.8</div></div>
@@ -2938,6 +2945,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   <div class="br-main" onclick="toggleBatter('row7')">
     <div class="br-order">7</div>
     <div class="br-id"><div class="br-name">Jose Trevino</div><div class="br-meta"><span class="br-pos">C</span><span class="br-hand R">R</span></div></div>
+    <div class="br-dfs-pills"></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val lo">78</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val lo">.286</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val mid">21.2</div></div>
@@ -3104,6 +3112,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   <div class="br-main" onclick="toggleBatter('row8')">
     <div class="br-order">8</div>
     <div class="br-id"><div class="br-name">Oswaldo Cabrera</div><div class="br-meta"><span class="br-pos">LF</span><span class="br-hand S">S</span></div></div>
+    <div class="br-dfs-pills"></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val lo">88</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val lo">.302</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val mid">25.6</div></div>
@@ -3270,6 +3279,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   <div class="br-main" onclick="toggleBatter('row9')">
     <div class="br-order">9</div>
     <div class="br-id"><div class="br-name">Gleyber Torres</div><div class="br-meta"><span class="br-pos">2B</span><span class="br-hand R">R</span></div></div>
+    <div class="br-dfs-pills"></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val mid">98</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val mid">.316</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val hi">18.4</div></div>
@@ -7835,7 +7845,6 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
   // Build projection map
   const projMap = {};
   (projRes.data || []).forEach(p => { projMap[String(p.player_id)] = p; });
-  console.log('[Proj] date:', activeDate, 'rows returned:', projRes.data?.length, 'error:', projRes.error, 'playerIds sample:', playerIds.slice(0,3));
 
   // Build splits map: player_id -> { L: {...}, R: {...} }
   // For 3yr: group by (player_id, split) and average rate stats across seasons
@@ -7890,18 +7899,17 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
     updateBatterCell(rowEl, '.br-stat-val', 'K%',    stats.k_pct,        v => (v*100).toFixed(1) + '%');
     updateBatterCell(rowEl, '.br-stat-val', 'ISO',   stats.iso,          v => parseFloat(v).toFixed(3));
 
-    // ── BATTER BADGES (salary + proj + own + sample) — all appended inside .br-name so they sit inline
-    const nameEl = rowEl.querySelector('.br-name');
-    if (nameEl) {
-      // Remove existing inline badges
-      nameEl.querySelectorAll('.br-salary, .br-proj, .br-own, .batter-sample-badge').forEach(el => el.remove());
+    // ── BATTER BADGES (salary + proj + own) — in dedicated .br-dfs-pills grid column
+    const pillsEl = rowEl.querySelector('.br-dfs-pills');
+    if (pillsEl) {
+      pillsEl.innerHTML = '';
 
       // Update position badge from DK salary — DK shows multi-position eligibility (e.g. "1B/3B")
       const posElSal = rowEl.querySelector('.br-pos');
       const salaryData = salaryMap[String(player.player_id)];
       if (posElSal && salaryData?.position) posElSal.textContent = salaryData.position;
 
-      const PILL_BASE = 'font-weight:700;padding:3px 8px;border-radius:4px;margin-left:7px;vertical-align:middle;display:inline-block;font-size:12px;';
+      const PILL_BASE = 'font-weight:700;padding:3px 8px;border-radius:4px;display:inline-block;font-size:12px;white-space:nowrap;';
 
       // Salary pill
       if (salaryData?.salary) {
@@ -7909,7 +7917,7 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
         sal.className = 'br-salary';
         sal.textContent = '$' + salaryData.salary.toLocaleString();
         sal.style.cssText = PILL_BASE + 'background:rgba(96,165,250,.12);color:#60a5fa;border:1px solid rgba(96,165,250,.25);';
-        nameEl.appendChild(sal);
+        pillsEl.appendChild(sal);
       }
 
       // DK Projection pill
@@ -7919,7 +7927,7 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
       proj.className = 'br-proj';
       proj.textContent = projPts != null ? projPts.toFixed(1) + ' pts' : '— pts';
       proj.style.cssText = PILL_BASE + 'background:rgba(74,222,128,.10);color:#4ade80;border:1px solid rgba(74,222,128,.22);';
-      nameEl.appendChild(proj);
+      pillsEl.appendChild(proj);
 
       // Ownership placeholder pill
       const own = document.createElement('span');
@@ -7927,9 +7935,13 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
       own.textContent = '—%';
       own.title = 'Ownership projection coming soon';
       own.style.cssText = PILL_BASE + 'background:rgba(148,163,184,.08);color:#94a3b8;border:1px solid rgba(148,163,184,.18);';
-      nameEl.appendChild(own);
+      pillsEl.appendChild(own);
+    }
 
-      // Sample size warning badge
+    // Sample size warning badge (stays inside .br-name area)
+    const nameEl = rowEl.querySelector('.br-name');
+    if (nameEl) {
+      nameEl.querySelectorAll('.batter-sample-badge').forEach(el => el.remove());
       const splitsForPlayer = splitsMap[player.player_id] || {};
       const paL = splitsForPlayer['L']?.pa || 0;
       const paR = splitsForPlayer['R']?.pa || 0;
