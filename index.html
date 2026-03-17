@@ -9494,6 +9494,101 @@ function injectProjTabs() {
 }
 
 // Renders per-action DK pts breakdown for a single batter row
+// ── Poisson sampler (Knuth's algorithm) ──────────────────────────────────────
+function poissonSample(lambda) {
+  if (lambda <= 0) return 0;
+  const L = Math.exp(-Math.min(lambda, 20)); // cap to avoid underflow
+  let k = 0, p = 1;
+  do { k++; p *= Math.random(); } while (p > L);
+  return k - 1;
+}
+
+// Simulate one game's DK pts from a player_projections row
+function simulateDKGame(p) {
+  const n1b  = poissonSample(p.proj_1b  || 0);
+  const n2b  = poissonSample(p.proj_2b  || 0);
+  const n3b  = poissonSample(p.proj_3b  || 0);
+  const nhr  = poissonSample(p.proj_hr  || 0);
+  const nbb  = poissonSample(p.proj_bb  || 0);
+  const nr   = poissonSample(p.proj_r   || 0);
+  const nrbi = poissonSample(p.proj_rbi || 0);
+  const nsb  = poissonSample(p.proj_sb  || 0);
+  return n1b*3 + n2b*5 + n3b*8 + nhr*10 + nbb*2 + nr*2 + nrbi*2 + nsb*5;
+}
+
+// Draw right-skewed histogram on canvas with median + mean markers
+function drawDKHistogram(canvas, outcomes, mean, median) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Build bins (1-pt wide) up to P99
+  const p99val = outcomes[Math.floor(outcomes.length * 0.99)] || mean * 2;
+  const maxX = Math.max(Math.ceil(p99val) + 2, Math.ceil(mean) + 4);
+  const bins = new Array(maxX + 1).fill(0);
+  outcomes.forEach(v => { const b = Math.min(Math.round(v), maxX); bins[b]++; });
+  const maxCount = Math.max(...bins, 1);
+
+  const padL = 2, padR = 4, padT = 14, padB = 18;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const barW = plotW / bins.length;
+
+  // Draw bars — gradient: muted blue-gray (left) → green (mid) → gold (right)
+  bins.forEach((count, i) => {
+    if (count === 0) return;
+    const x = padL + i * barW;
+    const bH = (count / maxCount) * plotH;
+    const y = padT + plotH - bH;
+    const t = i / maxX;
+    let r, g, b;
+    if (t < 0.5) {
+      const u = t * 2;
+      r = Math.round(80  + u * (74  - 80));
+      g = Math.round(100 + u * (222 - 100));
+      b = Math.round(130 + u * (128 - 130));
+    } else {
+      const u = (t - 0.5) * 2;
+      r = Math.round(74  + u * (251 - 74));
+      g = Math.round(222 + u * (191 - 222));
+      b = Math.round(128 + u * (36  - 128));
+    }
+    ctx.fillStyle = `rgba(${r},${g},${b},0.72)`;
+    ctx.fillRect(x, y, Math.max(barW - 0.5, 0.5), bH);
+  });
+
+  // Median line (blue)
+  const medX = padL + Math.min(median, maxX) * barW + barW / 2;
+  ctx.strokeStyle = 'rgba(96,165,250,0.85)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([3, 2]);
+  ctx.beginPath(); ctx.moveTo(medX, padT); ctx.lineTo(medX, padT + plotH); ctx.stroke();
+  ctx.fillStyle = '#60a5fa';
+  ctx.font = 'bold 8px Barlow Condensed, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('MED', medX, padT - 3);
+
+  // Mean / projection line (green)
+  const meanX = padL + Math.min(mean, maxX) * barW + barW / 2;
+  ctx.strokeStyle = 'rgba(74,222,128,0.85)';
+  ctx.setLineDash([3, 2]);
+  ctx.beginPath(); ctx.moveTo(meanX, padT); ctx.lineTo(meanX, padT + plotH); ctx.stroke();
+  ctx.fillStyle = '#4ade80';
+  ctx.fillText('PROJ', meanX, padT - 3);
+
+  ctx.setLineDash([]);
+
+  // X-axis labels every 5 pts
+  ctx.fillStyle = 'rgba(184,202,216,0.55)';
+  ctx.font = '8px Barlow Condensed, sans-serif';
+  ctx.textAlign = 'center';
+  for (let v = 0; v <= maxX; v += 5) {
+    ctx.fillText(v, padL + v * barW + barW / 2, H - 4);
+  }
+}
+
+// ── PROJ TAB RENDERER ────────────────────────────────────────────────────────
 function renderProjTab(rowId) {
   const pane = document.getElementById(rowId + '-proj');
   if (!pane) return;
@@ -9504,65 +9599,109 @@ function renderProjTab(rowId) {
     return;
   }
 
-  const f = (v, dp = 2) => (v != null ? Number(v).toFixed(dp) : '—');
+  // ── Monte Carlo simulation (4 000 games) ──────────────────────────────────
+  const N = 4000;
+  const outcomes = [];
+  for (let i = 0; i < N; i++) outcomes.push(simulateDKGame(p));
+  outcomes.sort((a, b) => a - b);
 
-  const actions = [
-    { label: 'Single',    pts: (p.proj_1b  || 0) * 3  },
-    { label: 'Double',    pts: (p.proj_2b  || 0) * 5  },
-    { label: 'Triple',    pts: (p.proj_3b  || 0) * 8  },
-    { label: 'Home Run',  pts: (p.proj_hr  || 0) * 10 },
-    { label: 'Run',       pts: (p.proj_r   || 0) * 2  },
-    { label: 'RBI',       pts: (p.proj_rbi || 0) * 2  },
-    { label: 'Walk',      pts: (p.proj_bb  || 0) * 2  },
-    { label: 'Stolen Base', pts: (p.proj_sb || 0) * 5 },
+  const pct  = q => outcomes[Math.floor(q * N)] ?? 0;
+  const p10  = pct(0.10);
+  const p25  = pct(0.25);
+  const p50  = pct(0.50);   // median
+  const p75  = pct(0.75);
+  const p90  = pct(0.90);
+  const mean = p.proj_dk_pts;
+
+  const f1 = v => Number(v).toFixed(1);
+  const f2 = v => (v != null ? Number(v).toFixed(2) : '—');
+
+  // ── Percentile strip ───────────────────────────────────────────────────────
+  const stripMax = Math.max(p90 * 1.15, mean * 1.6, 15);
+  const sp = v => Math.min((v / stripMax) * 100, 99.5).toFixed(1); // % position
+  const nodes = [
+    { v: p10,  label: 'P10',  color: '#94a3b8' },
+    { v: p50,  label: 'Med',  color: '#60a5fa' },
+    { v: mean, label: 'Proj', color: '#4ade80' },
+    { v: p90,  label: 'P90',  color: '#fbbf24' },
   ];
 
-  const totalCheck = actions.reduce((s, a) => s + a.pts, 0);
+  // ── Per-action rows ────────────────────────────────────────────────────────
+  const actions = [
+    { label: 'Single',      rate: p.proj_1b,  mult: 3,  pts: (p.proj_1b  || 0) * 3  },
+    { label: 'Double',      rate: p.proj_2b,  mult: 5,  pts: (p.proj_2b  || 0) * 5  },
+    { label: 'Triple',      rate: p.proj_3b,  mult: 8,  pts: (p.proj_3b  || 0) * 8  },
+    { label: 'Home Run',    rate: p.proj_hr,  mult: 10, pts: (p.proj_hr  || 0) * 10 },
+    { label: 'Run',         rate: p.proj_r,   mult: 2,  pts: (p.proj_r   || 0) * 2  },
+    { label: 'RBI',         rate: p.proj_rbi, mult: 2,  pts: (p.proj_rbi || 0) * 2  },
+    { label: 'Walk',        rate: p.proj_bb,  mult: 2,  pts: (p.proj_bb  || 0) * 2  },
+    { label: 'Stolen Base', rate: p.proj_sb,  mult: 5,  pts: (p.proj_sb  || 0) * 5  },
+  ];
 
   pane.innerHTML = `
-    <div style="padding:10px 4px 4px;">
-      <!-- Header row: total / floor / ceiling -->
-      <div style="display:flex;gap:8px;margin-bottom:10px;">
-        <div style="flex:1;background:rgba(74,222,128,.10);border:1px solid rgba(74,222,128,.22);border-radius:6px;padding:8px;text-align:center;">
-          <div style="font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#4ade80;margin-bottom:3px;">Projection</div>
-          <div style="font-size:18px;font-weight:700;color:#86efac;">${f(p.proj_dk_pts, 1)}</div>
-          <div style="font-size:9px;color:var(--muted);">DK pts</div>
-        </div>
-        <div style="flex:1;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.18);border-radius:6px;padding:8px;text-align:center;">
-          <div style="font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#60a5fa;margin-bottom:3px;">Floor</div>
-          <div style="font-size:18px;font-weight:700;color:#93c5fd;">${f(p.proj_floor, 1)}</div>
-          <div style="font-size:9px;color:var(--muted);">DK pts</div>
-        </div>
-        <div style="flex:1;background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.18);border-radius:6px;padding:8px;text-align:center;">
-          <div style="font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#fbbf24;margin-bottom:3px;">Ceiling</div>
-          <div style="font-size:18px;font-weight:700;color:#fcd34d;">${f(p.proj_ceiling, 1)}</div>
-          <div style="font-size:9px;color:var(--muted);">DK pts</div>
-        </div>
+  <div style="padding:10px 2px 4px;">
+
+    <!-- ── HEADER: Proj / Median / Ceiling ── -->
+    <div style="display:flex;gap:6px;margin-bottom:14px;">
+      <div style="flex:1;background:rgba(74,222,128,.10);border:1px solid rgba(74,222,128,.22);border-radius:6px;padding:8px;text-align:center;">
+        <div style="font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#4ade80;margin-bottom:2px;">Projection</div>
+        <div style="font-size:17px;font-weight:700;color:#86efac;">${f1(mean)}</div>
+        <div style="font-size:8px;color:var(--muted);">mean · DK pts</div>
       </div>
+      <div style="flex:1;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.18);border-radius:6px;padding:8px;text-align:center;">
+        <div style="font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#60a5fa;margin-bottom:2px;">Median</div>
+        <div style="font-size:17px;font-weight:700;color:#93c5fd;">${f1(p50)}</div>
+        <div style="font-size:8px;color:var(--muted);">P50 · DK pts</div>
+      </div>
+      <div style="flex:1;background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.18);border-radius:6px;padding:8px;text-align:center;">
+        <div style="font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#fbbf24;margin-bottom:2px;">Ceiling</div>
+        <div style="font-size:17px;font-weight:700;color:#fcd34d;">${f1(p90)}</div>
+        <div style="font-size:8px;color:var(--muted);">P90 · DK pts</div>
+      </div>
+    </div>
 
-      <!-- Section label -->
-      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid var(--border);">Pts by Action</div>
-
-      <!-- Action breakdown rows -->
-      ${actions.map(a => {
-        const pct = p.proj_dk_pts > 0 ? (a.pts / p.proj_dk_pts) : 0;
-        const barW = Math.round(pct * 100);
-        return `
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
-          <div style="width:72px;font-size:11px;font-weight:600;color:var(--text2);">${a.label}</div>
-          <div style="flex:1;height:6px;background:var(--s3);border-radius:3px;overflow:hidden;">
-            <div style="height:100%;width:${barW}%;background:rgba(74,222,128,.5);border-radius:3px;"></div>
+    <!-- ── PERCENTILE STRIP ── -->
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:8px;">Outcome Range</div>
+    <div style="position:relative;height:4px;background:linear-gradient(to right,rgba(148,163,184,.25),rgba(74,222,128,.4),rgba(251,191,36,.5));border-radius:2px;margin:0 4px 38px;">
+      ${nodes.map(d => `
+        <div style="position:absolute;left:${sp(d.v)}%;top:50%;transform:translate(-50%,-50%);">
+          <div style="width:9px;height:9px;border-radius:50%;background:${d.color};border:2px solid #141920;"></div>
+          <div style="position:absolute;top:12px;left:50%;transform:translateX(-50%);text-align:center;white-space:nowrap;">
+            <div style="font-size:8px;font-weight:700;color:${d.color};">${d.label}</div>
+            <div style="font-size:9px;font-weight:600;color:var(--text2);">${f1(d.v)}</div>
           </div>
-          <div style="width:42px;text-align:right;font-size:12px;font-weight:700;color:${a.pts >= 1 ? '#4ade80' : 'var(--text)'};">${f(a.pts, 2)} <span style="font-size:9px;font-weight:400;color:var(--muted);">pts</span></div>
-        </div>`;
-      }).join('')}
+        </div>`).join('')}
+    </div>
 
-      <!-- Proj PA footer -->
-      <div style="margin-top:8px;padding-top:7px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:10px;color:var(--muted);">
-        <span>Projected PA</span>
-        <span style="color:var(--text2);font-weight:600;">${f(p.proj_pa, 2)}</span>
-      </div>
-    </div>`;
+    <!-- ── DISTRIBUTION HISTOGRAM ── -->
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:4px;">
+      Outcome Distribution <span style="font-size:8px;font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted);">(${N.toLocaleString()} simulations)</span>
+    </div>
+    <canvas id="${rowId}-proj-canvas" width="280" height="115" style="width:100%;height:auto;display:block;border-radius:4px;background:rgba(255,255,255,.02);margin-bottom:12px;"></canvas>
+
+    <!-- ── PTS BY ACTION TABLE ── -->
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid var(--border);">Pts by Action</div>
+    <div style="display:grid;grid-template-columns:1fr 44px 30px 48px;gap:3px 6px;align-items:center;margin-bottom:8px;">
+      <div style="font-size:8px;font-weight:700;text-transform:uppercase;color:var(--muted);">Action</div>
+      <div style="font-size:8px;font-weight:700;text-transform:uppercase;color:var(--muted);text-align:right;">Proj</div>
+      <div style="font-size:8px;font-weight:700;text-transform:uppercase;color:var(--muted);text-align:center;">Mult</div>
+      <div style="font-size:8px;font-weight:700;text-transform:uppercase;color:var(--muted);text-align:right;">Exp Pts</div>
+      ${actions.map(a => `
+        <div style="font-size:11px;font-weight:600;color:var(--text2);padding:1px 0;">${a.label}</div>
+        <div style="font-size:11px;color:var(--muted);text-align:right;">${f2(a.rate)}</div>
+        <div style="font-size:11px;color:var(--muted);text-align:center;">×${a.mult}</div>
+        <div style="font-size:12px;font-weight:700;color:${a.pts >= 0.8 ? '#4ade80' : 'var(--text)'};text-align:right;">${f2(a.pts)}</div>`).join('')}
+    </div>
+    <div style="display:flex;justify-content:space-between;padding-top:6px;border-top:1px solid var(--border);font-size:10px;">
+      <span style="color:var(--muted);">Proj PA &nbsp;·&nbsp; Floor</span>
+      <span style="color:var(--text2);">${f2(p.proj_pa)} PA &nbsp;·&nbsp; <span style="color:#94a3b8;">0 pts (any game)</span></span>
+    </div>
+  </div>`;
+
+  // Draw histogram after DOM update so canvas dimensions are resolved
+  requestAnimationFrame(() => {
+    drawDKHistogram(document.getElementById(rowId + '-proj-canvas'), outcomes, mean, p50);
+  });
 }
 
 // Renders the 5-component PMS breakdown for a single batter row
