@@ -7835,6 +7835,7 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
   // Build projection map
   const projMap = {};
   (projRes.data || []).forEach(p => { projMap[String(p.player_id)] = p; });
+  console.log('[Proj] date:', activeDate, 'rows returned:', projRes.data?.length, 'error:', projRes.error, 'playerIds sample:', playerIds.slice(0,3));
 
   // Build splits map: player_id -> { L: {...}, R: {...} }
   // For 3yr: group by (player_id, split) and average rate stats across seasons
