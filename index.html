@@ -9519,9 +9519,19 @@ function simulateDKGame(p) {
 // Draw right-skewed histogram on canvas with median + mean markers
 function drawDKHistogram(canvas, outcomes, mean, median) {
   if (!canvas) return;
+
+  // Crisp rendering: match container width × devicePixelRatio
+  const dpr  = window.devicePixelRatio || 1;
+  const cssW = canvas.parentElement ? Math.floor(canvas.parentElement.clientWidth) : 280;
+  const cssH = 68;
+  canvas.width        = cssW * dpr;
+  canvas.height       = cssH * dpr;
+  canvas.style.width  = cssW + 'px';
+  canvas.style.height = cssH + 'px';
+
   const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
-  ctx.clearRect(0, 0, W, H);
+  ctx.scale(dpr, dpr);
+  const W = cssW, H = cssH;
 
   // Build bins (1-pt wide) up to P99
   const p99val = outcomes[Math.floor(outcomes.length * 0.99)] || mean * 2;
@@ -9530,18 +9540,18 @@ function drawDKHistogram(canvas, outcomes, mean, median) {
   outcomes.forEach(v => { const b = Math.min(Math.round(v), maxX); bins[b]++; });
   const maxCount = Math.max(...bins, 1);
 
-  const padL = 2, padR = 4, padT = 14, padB = 18;
+  const padL = 2, padR = 4, padT = 4, padB = 16;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
-  const barW = plotW / bins.length;
+  const barW  = plotW / bins.length;
 
-  // Draw bars — gradient: muted blue-gray (left) → green (mid) → gold (right)
+  // Draw bars — gradient: blue-gray (left) → green (mid) → gold (right)
   bins.forEach((count, i) => {
     if (count === 0) return;
-    const x = padL + i * barW;
+    const x  = padL + i * barW;
     const bH = (count / maxCount) * plotH;
-    const y = padT + plotH - bH;
-    const t = i / maxX;
+    const y  = padT + plotH - bH;
+    const t  = i / maxX;
     let r, g, b;
     if (t < 0.5) {
       const u = t * 2;
@@ -9558,34 +9568,40 @@ function drawDKHistogram(canvas, outcomes, mean, median) {
     ctx.fillRect(x, y, Math.max(barW - 0.5, 0.5), bH);
   });
 
-  // Median line (blue)
-  const medX = padL + Math.min(median, maxX) * barW + barW / 2;
-  ctx.strokeStyle = 'rgba(96,165,250,0.85)';
-  ctx.lineWidth = 1.5;
+  // Median line + label (blue) — label below x-axis
+  const medX  = padL + Math.min(median, maxX) * barW + barW / 2;
+  ctx.strokeStyle = 'rgba(96,165,250,0.8)';
+  ctx.lineWidth = 1;
   ctx.setLineDash([3, 2]);
   ctx.beginPath(); ctx.moveTo(medX, padT); ctx.lineTo(medX, padT + plotH); ctx.stroke();
-  ctx.fillStyle = '#60a5fa';
-  ctx.font = 'bold 8px Barlow Condensed, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('MED', medX, padT - 3);
 
-  // Mean / projection line (green)
+  // Mean / projection line + label (green) — label below x-axis
   const meanX = padL + Math.min(mean, maxX) * barW + barW / 2;
-  ctx.strokeStyle = 'rgba(74,222,128,0.85)';
+  ctx.strokeStyle = 'rgba(74,222,128,0.8)';
   ctx.setLineDash([3, 2]);
   ctx.beginPath(); ctx.moveTo(meanX, padT); ctx.lineTo(meanX, padT + plotH); ctx.stroke();
-  ctx.fillStyle = '#4ade80';
-  ctx.fillText('PROJ', meanX, padT - 3);
-
   ctx.setLineDash([]);
 
   // X-axis labels every 5 pts
-  ctx.fillStyle = 'rgba(184,202,216,0.55)';
-  ctx.font = '8px Barlow Condensed, sans-serif';
+  ctx.font = '9px Barlow Condensed, sans-serif';
   ctx.textAlign = 'center';
   for (let v = 0; v <= maxX; v += 5) {
-    ctx.fillText(v, padL + v * barW + barW / 2, H - 4);
+    const px = padL + v * barW + barW / 2;
+    // Highlight label if it's at/near median or mean
+    const nearMed  = Math.abs(px - medX)  < barW * 3;
+    const nearMean = Math.abs(px - meanX) < barW * 3;
+    ctx.fillStyle = nearMean ? '#4ade80' : nearMed ? '#60a5fa' : 'rgba(184,202,216,0.5)';
+    ctx.fillText(v, px, H - 4);
   }
+
+  // Small inline labels at top of each marker line
+  ctx.font = 'bold 8px Barlow Condensed, sans-serif';
+  ctx.fillStyle = '#60a5fa';
+  ctx.textAlign = medX < meanX ? 'right' : 'left';
+  ctx.fillText('MED', medX - 2, padT + 8);
+  ctx.fillStyle = '#4ade80';
+  ctx.textAlign = medX < meanX ? 'left' : 'right';
+  ctx.fillText('PROJ', meanX + 2, padT + 8);
 }
 
 // ── PROJ TAB RENDERER ────────────────────────────────────────────────────────
@@ -9677,7 +9693,7 @@ function renderProjTab(rowId) {
     <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:4px;">
       Outcome Distribution <span style="font-size:8px;font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted);">(${N.toLocaleString()} simulations)</span>
     </div>
-    <canvas id="${rowId}-proj-canvas" width="280" height="115" style="width:100%;height:auto;display:block;border-radius:4px;background:rgba(255,255,255,.02);margin-bottom:12px;"></canvas>
+    <canvas id="${rowId}-proj-canvas" style="display:block;border-radius:4px;background:rgba(255,255,255,.02);margin-bottom:12px;"></canvas>
 
     <!-- ── PTS BY ACTION TABLE ── -->
     <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid var(--border);">Pts by Action</div>
