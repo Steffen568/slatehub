@@ -498,8 +498,11 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 .batter-row{border-bottom:1px solid var(--border);cursor:pointer;transition:background 0.1s;}
 .batter-row:hover .br-main{background:var(--s2);}
 .batter-row.expanded .br-main{background:var(--s2);}
-.br-main{display:grid;grid-template-columns:28px 1fr 185px 54px 54px 54px 80px;align-items:center;padding:10px 20px;transition:background 0.1s;}
-.br-dfs-pills{display:flex;align-items:center;gap:5px;flex-wrap:nowrap;}
+.br-main{display:grid;grid-template-columns:28px 1fr 54px 54px 54px 54px 80px;align-items:center;padding:10px 20px;transition:background 0.1s;}
+.br-id{display:flex;flex-wrap:wrap;align-items:center;}
+.br-name{flex:0 0 130px;}
+.br-dfs-pills{flex:0 0 auto;display:flex;align-items:center;gap:5px;}
+.br-meta{flex:0 0 100%;margin-top:2px;}
 .br-order{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:18px;color:var(--muted);line-height:1;}
 .br-order.top3{color:var(--text);}
 .br-id{padding-left:8px;}
@@ -977,7 +980,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 /* COMBINED OVERRIDES */
 .pitcher-panel{max-width:100%;border-right:none;min-height:0;}
 .lineup-panel{max-width:100%;border-right:none;min-height:0;}
-@media(max-width:1100px){.br-main{grid-template-columns:24px 1fr 165px 48px 48px 48px 72px;padding:9px 14px;}}
+@media(max-width:1100px){.br-main{grid-template-columns:24px 1fr 48px 48px 48px 48px 72px;padding:9px 14px;}}
 
   /* ═══ GLOBAL FONT BOOST ═══ */
   /* Panel headers */
@@ -1903,9 +1906,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     <div class="br-order top3">1</div>
     <div class="br-id">
       <div class="br-name">Juan Soto</div>
+      <div class="br-dfs-pills"></div>
       <div class="br-meta"><span class="br-pos">RF</span><span class="br-hand">L</span></div>
     </div>
-    <div class="br-dfs-pills"></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val hi">168</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val hi">.418</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val hi">14.2</div></div>
@@ -2121,9 +2124,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     <div class="br-order top3">2</div>
     <div class="br-id">
       <div class="br-name">Aaron Judge</div>
+      <div class="br-dfs-pills"></div>
       <div class="br-meta"><span class="br-pos">CF</span><span class="br-hand R">R</span></div>
     </div>
-    <div class="br-dfs-pills"></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val hi">181</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val hi">.432</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val mid">26.8</div></div>
@@ -2293,8 +2296,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 <div class="batter-row" id="row3">
   <div class="br-main" onclick="toggleBatter('row3')">
     <div class="br-order top3">3</div>
-    <div class="br-id"><div class="br-name">Goldschmidt</div><div class="br-meta"><span class="br-pos">1B</span><span class="br-hand R">R</span></div></div>
-    <div class="br-dfs-pills"></div>
+    <div class="br-id"><div class="br-name">Goldschmidt</div><div class="br-dfs-pills"></div><div class="br-meta"><span class="br-pos">1B</span><span class="br-hand R">R</span></div></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val mid">118</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val mid">.348</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val mid">22.1</div></div>
@@ -2442,8 +2444,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 <div class="batter-row" id="row4">
   <div class="br-main" onclick="toggleBatter('row4')">
     <div class="br-order">4</div>
-    <div class="br-id"><div class="br-name">Jazz Chisholm</div><div class="br-meta"><span class="br-pos">3B</span><span class="br-hand">L</span></div></div>
-    <div class="br-dfs-pills"></div>
+    <div class="br-id"><div class="br-name">Jazz Chisholm</div><div class="br-dfs-pills"></div><div class="br-meta"><span class="br-pos">3B</span><span class="br-hand">L</span></div></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val mid">128</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val mid">.362</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val lo">29.4</div></div>
@@ -2609,8 +2610,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 <div class="batter-row" id="row5">
   <div class="br-main" onclick="toggleBatter('row5')">
     <div class="br-order">5</div>
-    <div class="br-id"><div class="br-name">Giancarlo Stanton</div><div class="br-meta"><span class="br-pos">DH</span><span class="br-hand R">R</span></div></div>
-    <div class="br-dfs-pills"></div>
+    <div class="br-id"><div class="br-name">Giancarlo Stanton</div><div class="br-dfs-pills"></div><div class="br-meta"><span class="br-pos">DH</span><span class="br-hand R">R</span></div></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val mid">122</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val mid">.352</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val lo">34.1</div></div>
@@ -2777,8 +2777,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 <div class="batter-row" id="row6">
   <div class="br-main" onclick="toggleBatter('row6')">
     <div class="br-order">6</div>
-    <div class="br-id"><div class="br-name">Anthony Volpe</div><div class="br-meta"><span class="br-pos">SS</span><span class="br-hand R">R</span></div></div>
-    <div class="br-dfs-pills"></div>
+    <div class="br-id"><div class="br-name">Anthony Volpe</div><div class="br-dfs-pills"></div><div class="br-meta"><span class="br-pos">SS</span><span class="br-hand R">R</span></div></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val mid">104</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val mid">.321</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val mid">24.8</div></div>
@@ -2944,8 +2943,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 <div class="batter-row" id="row7">
   <div class="br-main" onclick="toggleBatter('row7')">
     <div class="br-order">7</div>
-    <div class="br-id"><div class="br-name">Jose Trevino</div><div class="br-meta"><span class="br-pos">C</span><span class="br-hand R">R</span></div></div>
-    <div class="br-dfs-pills"></div>
+    <div class="br-id"><div class="br-name">Jose Trevino</div><div class="br-dfs-pills"></div><div class="br-meta"><span class="br-pos">C</span><span class="br-hand R">R</span></div></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val lo">78</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val lo">.286</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val mid">21.2</div></div>
@@ -3111,8 +3109,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 <div class="batter-row" id="row8">
   <div class="br-main" onclick="toggleBatter('row8')">
     <div class="br-order">8</div>
-    <div class="br-id"><div class="br-name">Oswaldo Cabrera</div><div class="br-meta"><span class="br-pos">LF</span><span class="br-hand S">S</span></div></div>
-    <div class="br-dfs-pills"></div>
+    <div class="br-id"><div class="br-name">Oswaldo Cabrera</div><div class="br-dfs-pills"></div><div class="br-meta"><span class="br-pos">LF</span><span class="br-hand S">S</span></div></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val lo">88</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val lo">.302</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val mid">25.6</div></div>
@@ -3278,8 +3275,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 <div class="batter-row" id="row9">
   <div class="br-main" onclick="toggleBatter('row9')">
     <div class="br-order">9</div>
-    <div class="br-id"><div class="br-name">Gleyber Torres</div><div class="br-meta"><span class="br-pos">2B</span><span class="br-hand R">R</span></div></div>
-    <div class="br-dfs-pills"></div>
+    <div class="br-id"><div class="br-name">Gleyber Torres</div><div class="br-dfs-pills"></div><div class="br-meta"><span class="br-pos">2B</span><span class="br-hand R">R</span></div></div>
     <div class="br-stat"><div class="br-stat-lbl">wRC+</div><div class="br-stat-val mid">98</div></div>
     <div class="br-stat"><div class="br-stat-lbl">wOBA</div><div class="br-stat-val mid">.316</div></div>
     <div class="br-stat"><div class="br-stat-lbl">K%</div><div class="br-stat-val hi">18.4</div></div>
