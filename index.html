@@ -9386,7 +9386,6 @@ function renderPitcherProjBreakdown(projData) {
 
   // ── Monte Carlo (4 000 sims) ────────────────────────────────────────────────
   const N = 4000;
-  const outcomes = [];
   const rawOutcomes = [];
   for (let i = 0; i < N; i++) rawOutcomes.push(simulateDKPitcherGame(p));
   // Calibrate: scale all outcomes so sim mean == proj_dk_pts.
