@@ -9387,8 +9387,14 @@ function renderPitcherProjBreakdown(projData) {
   // ── Monte Carlo (4 000 sims) ────────────────────────────────────────────────
   const N = 4000;
   const outcomes = [];
-  for (let i = 0; i < N; i++) outcomes.push(simulateDKPitcherGame(p));
-  outcomes.sort((a, b) => a - b);
+  const rawOutcomes = [];
+  for (let i = 0; i < N; i++) rawOutcomes.push(simulateDKPitcherGame(p));
+  // Calibrate: scale all outcomes so sim mean == proj_dk_pts.
+  // This anchors the distribution to the DB projection while preserving its shape,
+  // and ensures mean >= median for right-skewed outcomes (K upside pulls right tail).
+  const simMean = rawOutcomes.reduce((a, b) => a + b, 0) / N;
+  const calibFactor = simMean !== 0 ? p.proj_dk_pts / simMean : 1;
+  const outcomes = rawOutcomes.map(x => x * calibFactor).sort((a, b) => a - b);
   const pct  = q => outcomes[Math.floor(q * N)] ?? 0;
   const p10  = pct(0.10);
   const p25  = pct(0.25);
