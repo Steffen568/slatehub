@@ -6288,9 +6288,10 @@ async function showPitcherPicker(teamId) {
   const pids = pitchers.map(p => p.player_id);
   const statSeason = (activePitcherYear === '3yr' || activePitcherYear === '2026') ? 2025 : parseInt(activePitcherYear) || 2025;
 
-  const [{ data: statsRows }, { data: salaryRows }] = await Promise.all([
+  const [{ data: statsRows }, { data: salaryRows }, { data: projRows }] = await Promise.all([
     sb.from('pitcher_stats').select('player_id, era, k_pct, whip').in('player_id', pids).eq('season', statSeason),
     sb.from('dk_salaries').select('player_id, salary').in('player_id', pids),
+    sb.from('player_projections').select('player_id, proj_dk_pts, proj_floor, proj_ceiling').in('player_id', pids).eq('game_date', activeDate),
   ]);
 
   const statsMap = {};
@@ -6300,13 +6301,18 @@ async function showPitcherPicker(teamId) {
     const key = s.player_id;
     if (!salaryMap[key] || (activeSlate && s.dk_slate === activeSlate)) salaryMap[key] = s;
   });
+  const projMap = {};
+  (projRows || []).forEach(r => projMap[r.player_id] = r);
 
   const enriched = pitchers.map(p => ({
     ...p,
-    salary: salaryMap[p.player_id]?.salary || null,
-    era:    statsMap[p.player_id]?.era    || null,
-    k_pct:  statsMap[p.player_id]?.k_pct  || null,
-    whip:   statsMap[p.player_id]?.whip   || null,
+    salary:      salaryMap[p.player_id]?.salary      || null,
+    era:         statsMap[p.player_id]?.era          || null,
+    k_pct:       statsMap[p.player_id]?.k_pct        || null,
+    whip:        statsMap[p.player_id]?.whip         || null,
+    proj_dk_pts: projMap[p.player_id]?.proj_dk_pts   ?? null,
+    proj_floor:  projMap[p.player_id]?.proj_floor    ?? null,
+    proj_ceiling:projMap[p.player_id]?.proj_ceiling  ?? null,
   }));
 
   // Sort: salary desc (starters > bullpen > no salary), then alpha
@@ -6329,16 +6335,26 @@ async function showPitcherPicker(teamId) {
     const safeName = p.player_name.replace(/'/g, "\\'").replace(/"/g, '&quot;');
     const lastName  = p.player_name.split(' ').pop();
     const firstName = p.player_name.split(' ').slice(0, -1).join(' ');
+    const proj      = p.proj_dk_pts != null ? p.proj_dk_pts.toFixed(1) : null;
+    const projFloor = p.proj_floor  != null ? p.proj_floor.toFixed(1)  : null;
+    const projCeil  = p.proj_ceiling!= null ? p.proj_ceiling.toFixed(1): null;
+    const projRange = projFloor && projCeil ? ` [${projFloor}–${projCeil}]` : '';
+    const projBadge = proj
+      ? `<span style="margin-left:auto;font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:800;color:var(--hi);" title="Projected DK pts${projRange}">${proj}<span style="font-weight:400;font-size:9px;color:var(--muted);"> pts</span></span>`
+      : '';
     return `<div class="sp-pitcher-chip${isActive ? ' active' : ''}"
       onclick="spPickerSelect(${p.player_id},'${safeName}','${hand}')"
-      title="${p.player_name}${salary ? ' · ' + salary : ''}">
+      title="${p.player_name}${salary ? ' · ' + salary : ''}${proj ? ' · ' + proj + ' proj pts' + projRange : ''}">
       <div class="sp-pitcher-chip-top">
         ${salary
           ? `<span class="sp-pitcher-chip-salary">${salary}</span>`
           : `<span style="font-size:9px;color:var(--muted);">—</span>`}
         <span class="sp-pitcher-chip-hand" style="color:${handColor}">${hand}HP</span>
       </div>
-      <div class="sp-pitcher-chip-name">${lastName}<span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:4px;">${firstName}</span></div>
+      <div class="sp-pitcher-chip-name" style="display:flex;align-items:baseline;gap:4px;">
+        <span>${lastName}<span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:4px;">${firstName}</span></span>
+        ${projBadge}
+      </div>
       <div class="sp-pitcher-chip-stats">
         <div class="sp-pitcher-chip-stat">
           <span class="sp-pitcher-chip-stat-val" style="color:${eraCol}">${era}</span>
