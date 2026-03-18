@@ -1429,9 +1429,33 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   .le-btn-apply:disabled { opacity: .4; cursor: not-allowed; }
   .le-count { font-size: 10px; color: var(--muted); }
 
+/* ── SUITE TOP NAV ──────────────────────────────────────────────────────────── */
+.sh-topnav{display:flex;align-items:stretch;background:#0a0d12;border-bottom:1px solid var(--border);height:52px;flex-shrink:0;z-index:100;}
+.sh-topnav-logo{display:flex;align-items:center;padding:0 20px 0 16px;font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:17px;letter-spacing:2px;text-transform:uppercase;color:var(--text);white-space:nowrap;border-right:1px solid var(--border);margin-right:4px;}
+.sh-topnav-logo em{color:var(--hi);font-style:normal;}
+.sh-tab{display:flex;align-items:center;padding:0 24px;font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;text-decoration:none;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-1px;transition:all .15s;white-space:nowrap;}
+.sh-tab:hover{color:var(--text);background:rgba(255,255,255,.04);}
+.sh-tab.sh-green:hover,.sh-tab.sh-green.active{color:var(--hi);}
+.sh-tab.sh-green.active{border-bottom-color:var(--hi);background:rgba(74,222,128,.07);}
+.sh-tab.sh-blue:hover,.sh-tab.sh-blue.active{color:var(--blue);}
+.sh-tab.sh-blue.active{border-bottom-color:var(--blue);background:rgba(96,165,250,.07);}
+.sh-tab.sh-orange:hover,.sh-tab.sh-orange.active{color:var(--orange);}
+.sh-tab.sh-orange.active{border-bottom-color:var(--orange);background:rgba(251,146,60,.07);}
+.sh-tab.sh-purple:hover,.sh-tab.sh-purple.active{color:var(--purple);}
+.sh-tab.sh-purple.active{border-bottom-color:var(--purple);background:rgba(232,121,249,.07);}
+.sh-tab.sh-soon{opacity:.4;pointer-events:none;}
+
 </style>
 </head>
 <body>
+
+<nav class="sh-topnav">
+  <div class="sh-topnav-logo">Slate<em>Hub</em></div>
+  <a class="sh-tab sh-green active" href="index.html">SlateHub</a>
+  <a class="sh-tab sh-blue" href="hand-builders-hub.html">Hand Builders Hub</a>
+  <a class="sh-tab sh-orange sh-soon" href="#">Top Stacks</a>
+  <a class="sh-tab sh-purple sh-soon" href="#">Top Pitchers</a>
+</nav>
 
 <!-- LINEUP EDITOR DRAWER -->
 <div class="le-drawer" id="leDrawer">
@@ -1794,6 +1818,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
       <div class="ph-label">Batting Order &mdash; NYY vs BOS</div>
       <div style="display:flex;align-items:center;gap:8px;position:relative;">
         <span id="lineupCoverageBadge" style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;display:none;"></span>
+        <a href="hand-builders-hub.html" style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:2px 10px;border-radius:4px;border:1px solid rgba(251,191,36,.35);color:#fbbf24;text-decoration:none;transition:all .12s;" title="Hand Builders Hub">✎ Build</a>
         <button class="gl-btn" onclick="openGlossaryTab('hes')"   title="Hitter Environment Score glossary" style="padding:2px 8px;font-size:11px;border-color:rgba(74,222,128,.35);color:#86efac;">HES</button>
         <button class="gl-btn" onclick="openGlossaryTab('pms')"   title="Pitcher Matchup Score glossary"    style="padding:2px 8px;font-size:11px;border-color:rgba(251,146,60,.35);color:#fdba74;">PMS</button>
         <button class="gl-btn" onclick="openGlossaryTab('stack')" title="Stack Grade glossary"              style="padding:2px 8px;font-size:11px;border-color:rgba(251,191,36,.35);color:#fde68a;">Stack</button>
@@ -3798,6 +3823,18 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 </div>
 
 <script>
+// Maps MLB fielding position → DK eligibility label
+function mlbPosToDK(pos) {
+  if (!pos) return '--';
+  const p = pos.toUpperCase().trim();
+  if (['LF','CF','RF','OF'].includes(p)) return 'OF';
+  if (p === 'DH') return '--'; // DH is a lineup role, not a DK eligibility — drop it
+  if (['SP','P','ST'].includes(p)) return 'SP';
+  if (p === 'RP') return 'RP';
+  if (['C','1B','2B','3B','SS'].includes(p)) return p;
+  return pos; // passthrough for multi-position strings already like "2B/SS"
+}
+
 function openGlossary(side) {
   closeAllGlossaries();
   document.getElementById(side==='hitter' ? 'hitterGlossary' : 'pitcherGlossary').classList.add('open');
@@ -5197,9 +5234,18 @@ function teamAbbr(name) {
     'Los Angeles Angels':'LAA','Oakland Athletics':'ATH','Athletics':'ATH',
     'Arizona Diamondbacks':'ARI','Colorado Rockies':'COL','San Diego Padres':'SD',
     'Milwaukee Brewers':'MIL','Cincinnati Reds':'CIN','Pittsburgh Pirates':'PIT',
-    'Washington Nationals':'WSH'
+    'Washington Nationals':'WSH',
+    // WBC / International
+    'United States':'USI','Dominican Republic':'DOM','Japan':'JPN',
+    'Puerto Rico':'PRI','Mexico':'MEX','Venezuela':'VEN','Cuba':'CUB','Canada':'CAN',
+    'Kingdom of the Netherlands':'NED','Colombia':'COL',
   };
-  return map[name] || name.split(' ').pop().substring(0,3).toUpperCase();
+  const n = (name || '').trim();
+  if (n === 'United States') return 'USA';
+  if (n === 'Dominican Republic') return 'DOM';
+  if (n === 'Venezuela') return 'VEN';
+  if (n === 'Puerto Rico') return 'PRI';
+  return map[n] || n.split(' ').pop().substring(0,3).toUpperCase();
 }
 
 function pfColor(val) {
@@ -5226,16 +5272,20 @@ function rvColor(rv) {
 }
 
 // ── LOAD ALL UPCOMING GAMES (today + 7 days)
-let activeDate = new Date().toISOString().split('T')[0];
+// Use local date so the slate doesn't roll over until actual midnight (not UTC midnight)
+function localDateStr(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+let activeDate = localDateStr();
 let activeSlate = 'all';
 
 async function loadGames() {
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDateStr();
   const dates = [];
   for (let i = 0; i < 8; i++) {
     const d = new Date();
     d.setDate(d.getDate() + i);
-    dates.push(d.toISOString().split('T')[0]);
+    dates.push(localDateStr(d));
   }
 
   console.log('Querying games for date:', today);
@@ -5273,7 +5323,7 @@ function renderDateButtons(games) {
 
   gameDates.forEach((d) => {
     const dateObj = new Date(d + 'T12:00:00');
-    const today   = new Date().toISOString().split('T')[0];
+    const today   = localDateStr();
     const isToday = d === today;
     const count   = games.filter(g => g.game_date === d).length;
     const label   = isToday ? 'Today'
@@ -5297,6 +5347,45 @@ function filterGamesByDate(dateStr) {
   activeDate = dateStr;
   activeSlate = 'all';
   applySlateFilter();
+  // Bulk-cache all lineups for this date → feeds Hand Builders Hub via localStorage
+  _cacheAllLineupsForDate(dateStr);
+}
+
+async function _cacheAllLineupsForDate(dateStr) {
+  try {
+    const games = allGames.filter(g => g.game_date === dateStr);
+    if (!games.length) return;
+    const gamePks = games.map(g => g.game_pk);
+
+    // Batch-fetch all lineups for every game on this date
+    const CHUNK = 50;
+    let allRows = [];
+    for (let i = 0; i < gamePks.length; i += CHUNK) {
+      const { data } = await sb.from('lineups').select('player_id,player_name,team_id,batting_order,position,game_pk,status')
+        .in('game_pk', gamePks.slice(i, i + CHUNK)).order('batting_order', { ascending: true });
+      if (data) allRows = allRows.concat(data);
+    }
+
+    // Build team_id → team_name map from allGames for name resolution
+    const teamNames = {};
+    games.forEach(g => { teamNames[g.home_team_id] = g.home_team; teamNames[g.away_team_id] = g.away_team; });
+
+    const pool = [];
+    const seen = new Set();
+    allRows.forEach(p => {
+      if (!p.player_id || seen.has(p.player_id)) return;
+      if (p.batting_order == null) return;   // only starters
+      pool.push({ player_id: p.player_id, player_name: p.player_name || null,
+        team_id: p.team_id, batting_order: p.batting_order,
+        position: p.position || null, game_pk: p.game_pk,
+        status: p.status || 'projected' });
+      seen.add(p.player_id);
+    });
+
+    if (pool.length > 0) {
+      localStorage.setItem('sh_hbh_lineup', JSON.stringify({ date: dateStr, players: pool }));
+    }
+  } catch(e) { /* silent — HBH has its own Supabase fallback */ }
 }
 
 
@@ -5339,7 +5428,8 @@ const TEAM_COLORS = {
   'Los Angeles Dodgers'   : { bg:'#005a9c', text:'#fff' },
   'San Diego Padres'      : { bg:'#2f241d', text:'#ffc425' },
   'San Francisco Giants'  : { bg:'#fd5a1e', text:'#27251f' },
-  // WBC / International
+  // WBC / International — full names (from MLB API) and DK abbreviations
+  'United States'         : { bg:'#002868', text:'#bf0a30' },
   'Canada'                : { bg:'#d52b1e', text:'#fff' },
   'Colombia'              : { bg:'#fcd116', text:'#003087' },
   'Kingdom of the Netherlands': { bg:'#ae1c28', text:'#fff' },
@@ -6028,6 +6118,22 @@ async function loadLineup(gamePk, homeTeamId, awayTeamId) {
   cachedLineupData   = data;
   activeLineupTeamId = homeTeamId;
 
+  // ── Share lineup data with Hand Builders Hub via localStorage ──────────────
+  try {
+    const existing = JSON.parse(localStorage.getItem('sh_hbh_lineup') || 'null');
+    const pool = (existing && existing.date === activeDate) ? existing.players : [];
+    const seen = new Set(pool.map(p => p.player_id));
+    data.forEach(p => {
+      if (p.batting_order != null && p.player_id && !seen.has(p.player_id)) {
+        pool.push({ player_id: p.player_id, player_name: p.player_name || null,
+          team_id: p.team_id, batting_order: p.batting_order,
+          position: p.position || null, game_pk: p.game_pk });
+        seen.add(p.player_id);
+      }
+    });
+    localStorage.setItem('sh_hbh_lineup', JSON.stringify({ date: activeDate, players: pool }));
+  } catch(e) {}
+
   // Check confirmed status
   const confirmed = data.some(p => p.status === 'confirmed');
   updateLineupStatus(
@@ -6076,7 +6182,7 @@ function renderLineup(data, teamId) {
     const nameEl = rowEl.querySelector('.br-name');
     if (nameEl) nameEl.textContent = player.player_name || '--';
     const posEl = rowEl.querySelector('.br-pos');
-    if (posEl) posEl.textContent = player.position || '--';
+    if (posEl) posEl.textContent = mlbPosToDK(player.position);
     // Clear stale batting hand while new ones load
     const handEl = rowEl.querySelector('.br-hand');
     if (handEl) { handEl.textContent = '--'; handEl.className = 'br-hand'; }

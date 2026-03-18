@@ -1,0 +1,1382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SlateHub — Hand Builders Hub</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=Barlow:wght@300;400;500;600&family=Barlow+Semi+Condensed:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f1318;--surface:#181d25;--s2:#1f2530;--s3:#252d38;--border:#2a3344;--border2:#334055;--text:#e8edf4;--text2:#b8cad8;--muted:#8899b0;--hi:#4ade80;--lo:#f87171;--mid:#fbbf24;--blue:#60a5fa;--orange:#fb923c;--purple:#e879f9;}
+*{margin:0;padding:0;box-sizing:border-box;}html{font-size:14px;}
+body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:var(--bg);}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
+
+/* ── HEADER ─────────────────────────────────────────────────────────────── */
+.hbh-header{display:flex;align-items:center;gap:10px;padding:0 14px;height:48px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;z-index:20;}
+.hbh-logo{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;letter-spacing:2px;text-transform:uppercase;color:var(--text);white-space:nowrap;}
+.hbh-logo span{color:var(--hi);}
+.hbh-sep{width:1px;height:24px;background:var(--border2);}
+.hbh-selectors{display:flex;gap:6px;align-items:center;}
+.hbh-select{background:var(--s2);border:1px solid var(--border2);color:var(--text2);font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:600;letter-spacing:.8px;padding:4px 8px;border-radius:4px;cursor:pointer;outline:none;max-width:200px;}
+.hbh-select:hover{border-color:var(--hi);color:var(--text);}
+.hbh-back{margin-left:auto;font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);text-decoration:none;padding:4px 10px;border:1px solid var(--border2);border-radius:4px;transition:all 0.15s;flex-shrink:0;}
+.hbh-back:hover{color:var(--text);background:var(--s3);}
+
+/* ── GAME STRIP ──────────────────────────────────────────────────────────── */
+.game-strip{background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;overflow-x:auto;}
+.game-strip::-webkit-scrollbar{height:3px;}
+.game-strip-inner{display:flex;gap:6px;align-items:flex-start;padding:7px 12px;min-width:max-content;}
+
+/* ALL button */
+.gc-all{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;padding:6px 12px;border-radius:6px;border:1px solid var(--border2);background:var(--s2);color:var(--muted);cursor:pointer;transition:all .15s;align-self:center;height:fit-content;}
+.gc-all.active{color:var(--hi);border-color:rgba(74,222,128,.4);background:rgba(74,222,128,.06);}
+
+/* Game card */
+.game-card{border-radius:6px;border:1px solid var(--border2);background:var(--s2);overflow:hidden;flex-shrink:0;transition:border-color .15s;min-width:130px;}
+.game-card.active{border-color:rgba(74,222,128,.35);}
+.game-card.dimmed{opacity:.45;}
+.game-card-header{display:flex;align-items:center;gap:5px;padding:5px 8px;cursor:pointer;user-select:none;}
+.game-card-header:hover{background:rgba(255,255,255,.04);}
+.t-pill{display:inline-flex;align-items:center;justify-content:center;padding:1px 5px;border-radius:3px;font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:800;letter-spacing:.5px;}
+.gc-at{font-size:9px;color:var(--muted);}
+.gc-time{font-size:9px;color:var(--muted);margin-left:auto;white-space:nowrap;}
+.game-card-teams{display:flex;gap:3px;padding:0 5px 5px;}
+.team-iso-btn{flex:1;padding:3px 2px;border-radius:3px;border:none;font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:800;letter-spacing:.4px;cursor:pointer;transition:opacity .12s;text-align:center;outline:none;}
+.team-iso-btn.dimmed{opacity:.3;}
+
+/* ── MAIN LAYOUT ─────────────────────────────────────────────────────────── */
+.hbh-body{display:flex;flex:1;overflow:hidden;}
+
+/* ── PLAYER POOL ─────────────────────────────────────────────────────────── */
+.pool-panel{display:flex;flex-direction:column;width:58%;border-right:1px solid var(--border);overflow:hidden;}
+.pool-header{flex-shrink:0;padding:7px 10px;background:var(--surface);border-bottom:1px solid var(--border);}
+.pool-tabs{display:flex;gap:4px;margin-bottom:7px;}
+.pool-tab{font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:4px 12px;border-radius:4px;border:1px solid var(--border2);background:transparent;color:var(--muted);cursor:pointer;transition:all .12s;}
+.pool-tab.active{background:var(--s3);color:var(--text);border-color:var(--border2);}
+.pool-tab[data-tab="hitters"].active{color:var(--hi);border-color:rgba(74,222,128,.3);}
+.pool-tab[data-tab="pitchers"].active{color:var(--blue);border-color:rgba(96,165,250,.3);}
+.pool-filters{display:flex;gap:5px;align-items:center;flex-wrap:wrap;}
+.pos-filter{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;padding:3px 8px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .12s;letter-spacing:.5px;}
+.pos-filter.active{background:var(--s3);color:var(--text);border-color:var(--border2);}
+.pool-search{margin-left:auto;background:var(--s2);border:1px solid var(--border);color:var(--text2);font-family:'Barlow',sans-serif;font-size:12px;padding:3px 8px;border-radius:4px;outline:none;width:130px;}
+.pool-search::placeholder{color:var(--muted);}
+.pool-count{font-size:10px;color:var(--muted);padding:3px 10px 0;flex-shrink:0;}
+.pool-list{flex:1;overflow-y:auto;padding:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:5px;align-content:start;}
+
+/* ── PLAYER CHIPS ────────────────────────────────────────────────────────── */
+.pc{display:flex;flex-direction:column;gap:3px;padding:7px 9px;border-radius:6px;border:1px solid var(--border);background:var(--surface);cursor:grab;transition:all .12s;position:relative;min-width:0;}
+.pc:hover{border-color:var(--border2);background:var(--s2);}
+.pc.in-lineup{border-color:rgba(74,222,128,.35);background:rgba(74,222,128,.05);}
+.pc.in-lineup:hover{border-color:rgba(74,222,128,.5);}
+.pc.dragging{opacity:.5;cursor:grabbing;}
+.pc-row1{display:flex;align-items:center;gap:5px;min-width:0;}
+.pc-name{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:13px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+.pc-pos{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;color:var(--muted);padding:1px 4px;border-radius:3px;border:1px solid var(--border);flex-shrink:0;}
+.pc-row2{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+.pc-stat{font-size:10px;color:var(--muted);white-space:nowrap;}
+.pc-stat span{color:var(--text2);font-weight:600;}
+.pc-row3{display:flex;gap:5px;align-items:center;flex-wrap:wrap;min-width:0;}
+/* Team tag */
+.team-tag{display:inline-flex;align-items:center;justify-content:center;padding:1px 4px;border-radius:3px;font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:800;letter-spacing:.4px;flex-shrink:0;}
+/* Lineup badges */
+.lu-badge{font-family:'Barlow Condensed',sans-serif;font-size:9px;font-weight:800;letter-spacing:.5px;padding:1px 4px;border-radius:3px;flex-shrink:0;}
+.lu-conf{background:rgba(74,222,128,.18);border:1px solid rgba(74,222,128,.5);color:#4ade80;}
+.lu-proj{background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.35);color:#fbbf24;}
+/* Grade boxes */
+.pc-grade-box{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:12px;padding:2px 6px;border-radius:4px;flex-shrink:0;}
+.g-A{background:rgba(74,222,128,.15);border:1px solid rgba(74,222,128,.4);color:#4ade80;}
+.g-B{background:rgba(96,165,250,.15);border:1px solid rgba(96,165,250,.4);color:#60a5fa;}
+.g-C{background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3);color:#fbbf24;}
+.g-D{background:rgba(248,113,113,.12);border:1px solid rgba(248,113,113,.3);color:#f87171;}
+/* Empty state */
+.pool-empty{padding:32px;text-align:center;color:var(--muted);font-size:13px;grid-column:1/-1;}
+
+/* ── LINEUP BUILDER ───────────────────────────────────────────────────────── */
+.builder-panel{display:flex;flex-direction:column;width:42%;overflow:hidden;}
+.builder-header{flex-shrink:0;padding:7px 10px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:7px;}
+.builder-title{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text2);}
+.lineup-name-input{flex:1;background:var(--s2);border:1px solid var(--border);color:var(--text);font-family:'Barlow Condensed',sans-serif;font-size:12px;padding:3px 8px;border-radius:4px;outline:none;letter-spacing:.5px;}
+.lineup-name-input::placeholder{color:var(--muted);}
+.builder-body{flex:1;overflow-y:auto;padding:7px;}
+
+/* ── LINEUP SLOTS ────────────────────────────────────────────────────────── */
+.lineup-slot{display:flex;align-items:center;gap:7px;padding:4px 7px;border-radius:5px;border:1px solid var(--border);background:var(--s2);margin-bottom:3px;min-height:40px;transition:all .12s;}
+.lineup-slot.filled{border-color:rgba(74,222,128,.25);background:rgba(74,222,128,.04);}
+.lineup-slot.drag-over{border-color:var(--hi);background:rgba(74,222,128,.12);border-style:dashed;}
+.lineup-slot.drag-invalid{border-color:var(--lo);background:rgba(248,113,113,.08);border-style:dashed;}
+.slot-pos{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:11px;color:var(--muted);width:26px;flex-shrink:0;text-align:center;}
+.slot-empty{flex:1;font-size:10px;color:var(--muted);font-style:italic;}
+.slot-player{flex:1;display:flex;align-items:center;gap:5px;overflow:hidden;min-width:0;}
+.slot-pname{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.slot-psal{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;color:var(--blue);flex-shrink:0;}
+.slot-pproj{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;color:var(--hi);flex-shrink:0;margin-left:auto;}
+.slot-remove{width:17px;height:17px;border-radius:50%;background:transparent;border:1px solid var(--border2);color:var(--muted);font-size:11px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:all .12s;line-height:1;}
+.slot-remove:hover{background:rgba(248,113,113,.15);border-color:var(--lo);color:var(--lo);}
+
+/* ── TOTALS ──────────────────────────────────────────────────────────────── */
+.totals-bar{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:7px 0;padding:8px;background:var(--s3);border-radius:6px;border:1px solid var(--border);}
+.total-cell{text-align:center;}
+.total-lbl{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:2px;}
+.total-val{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:17px;}
+.total-val.over{color:var(--lo);}
+.total-val.ok{color:var(--hi);}
+.total-val.neutral{color:var(--text2);}
+.sal-bar-wrap{margin:0 0 7px;height:3px;background:var(--border);border-radius:2px;}
+.sal-bar-fill{height:100%;border-radius:2px;transition:width .2s;}
+
+/* ── BUILDER ACTIONS ─────────────────────────────────────────────────────── */
+.builder-actions{display:flex;gap:5px;flex-wrap:wrap;}
+.bld-btn{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:5px 12px;border-radius:4px;cursor:pointer;border:1px solid var(--border2);background:var(--s3);color:var(--text2);transition:all .12s;}
+.bld-btn:hover{color:var(--text);background:var(--border);}
+.bld-btn.primary{background:rgba(74,222,128,.12);border-color:rgba(74,222,128,.3);color:var(--hi);}
+.bld-btn.primary:hover{background:rgba(74,222,128,.2);}
+.bld-btn.danger{background:rgba(248,113,113,.1);border-color:rgba(248,113,113,.25);color:var(--lo);}
+
+/* ── SAVED LINEUPS ───────────────────────────────────────────────────────── */
+.saved-section{margin-top:8px;padding-top:7px;border-top:1px solid var(--border);}
+.saved-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:5px;}
+.saved-list{display:flex;flex-direction:column;gap:3px;max-height:100px;overflow-y:auto;}
+.saved-item{display:flex;align-items:center;gap:5px;padding:4px 7px;border-radius:4px;border:1px solid var(--border);background:var(--s2);cursor:pointer;font-size:11px;}
+.saved-item:hover{border-color:var(--border2);background:var(--s3);}
+.saved-item-name{flex:1;font-family:'Barlow Condensed',sans-serif;font-weight:600;color:var(--text2);}
+.saved-item-pts{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;color:var(--hi);}
+.saved-item-del{color:var(--muted);font-size:12px;cursor:pointer;transition:color .12s;padding:1px 3px;}
+.saved-item-del:hover{color:var(--lo);}
+
+/* ── SUITE TOP NAV ──────────────────────────────────────────────────────────── */
+.sh-topnav{display:flex;align-items:stretch;background:#0a0d12;border-bottom:1px solid var(--border);height:52px;flex-shrink:0;z-index:100;}
+.sh-topnav-logo{display:flex;align-items:center;padding:0 20px 0 16px;font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:17px;letter-spacing:2px;text-transform:uppercase;color:var(--text);white-space:nowrap;border-right:1px solid var(--border);margin-right:4px;}
+.sh-topnav-logo em{color:var(--hi);font-style:normal;}
+.sh-tab{display:flex;align-items:center;padding:0 24px;font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;text-decoration:none;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-1px;transition:all .15s;white-space:nowrap;}
+.sh-tab:hover{color:var(--text);background:rgba(255,255,255,.04);}
+.sh-tab.sh-green:hover,.sh-tab.sh-green.active{color:var(--hi);}
+.sh-tab.sh-green.active{border-bottom-color:var(--hi);background:rgba(74,222,128,.07);}
+.sh-tab.sh-blue:hover,.sh-tab.sh-blue.active{color:var(--blue);}
+.sh-tab.sh-blue.active{border-bottom-color:var(--blue);background:rgba(96,165,250,.07);}
+.sh-tab.sh-orange:hover,.sh-tab.sh-orange.active{color:var(--orange);}
+.sh-tab.sh-orange.active{border-bottom-color:var(--orange);background:rgba(251,146,60,.07);}
+.sh-tab.sh-purple:hover,.sh-tab.sh-purple.active{color:var(--purple);}
+.sh-tab.sh-purple.active{border-bottom-color:var(--purple);background:rgba(232,121,249,.07);}
+.sh-tab.sh-soon{opacity:.4;pointer-events:none;}
+</style>
+</head>
+<body>
+
+<nav class="sh-topnav">
+  <div class="sh-topnav-logo">Slate<em>Hub</em></div>
+  <a class="sh-tab sh-green" href="index.html">SlateHub</a>
+  <a class="sh-tab sh-blue active" href="hand-builders-hub.html">Hand Builders Hub</a>
+  <a class="sh-tab sh-orange sh-soon" href="#">Top Stacks</a>
+  <a class="sh-tab sh-purple sh-soon" href="#">Top Pitchers</a>
+</nav>
+
+<header class="hbh-header">
+  <div class="hbh-logo">Slate<span>Hub</span> — Hand Builders Hub</div>
+  <div class="hbh-sep"></div>
+  <div class="hbh-selectors">
+    <select class="hbh-select" id="date-select"><option>Loading…</option></select>
+    <select class="hbh-select" id="slate-select"><option>Select slate</option></select>
+  </div>
+  <a href="index.html" class="hbh-back">← Main View</a>
+</header>
+
+<div class="game-strip" id="game-strip">
+  <div class="game-strip-inner" id="game-cards"></div>
+</div>
+
+<div class="hbh-body">
+
+  <section class="pool-panel">
+    <div class="pool-header">
+      <div class="pool-tabs">
+        <button class="pool-tab active" data-tab="hitters" onclick="switchPoolTab('hitters')">Hitters</button>
+        <button class="pool-tab" data-tab="pitchers" onclick="switchPoolTab('pitchers')">Pitchers</button>
+      </div>
+      <div class="pool-filters" id="pos-filters">
+        <button class="pos-filter active" data-pos="ALL" onclick="setPositionFilter('ALL')">All</button>
+        <button class="pos-filter" data-pos="C"  onclick="setPositionFilter('C')">C</button>
+        <button class="pos-filter" data-pos="1B" onclick="setPositionFilter('1B')">1B</button>
+        <button class="pos-filter" data-pos="2B" onclick="setPositionFilter('2B')">2B</button>
+        <button class="pos-filter" data-pos="3B" onclick="setPositionFilter('3B')">3B</button>
+        <button class="pos-filter" data-pos="SS" onclick="setPositionFilter('SS')">SS</button>
+        <button class="pos-filter" data-pos="OF" onclick="setPositionFilter('OF')">OF</button>
+        <input class="pool-search" id="pool-search" type="text" placeholder="Search player…" oninput="renderPool()">
+      </div>
+    </div>
+    <div class="pool-count" id="pool-count"></div>
+    <div class="pool-list" id="pool-list">
+      <div class="pool-empty">Select a date and slate to load the player pool.</div>
+    </div>
+  </section>
+
+  <section class="builder-panel">
+    <div class="builder-header">
+      <span class="builder-title">DK Lineup</span>
+      <input class="lineup-name-input" id="lineup-name" type="text" placeholder="Lineup name…" maxlength="40">
+    </div>
+    <div class="builder-body">
+      <div id="lineup-slots"></div>
+      <div class="totals-bar">
+        <div class="total-cell">
+          <div class="total-lbl">Salary</div>
+          <div class="total-val neutral" id="tot-salary">$0</div>
+          <div style="font-size:9px;color:var(--muted);" id="sal-remaining">$50,000 left</div>
+        </div>
+        <div class="total-cell">
+          <div class="total-lbl">Projection</div>
+          <div class="total-val neutral" id="tot-proj">0.0 pts</div>
+          <div style="font-size:9px;color:var(--muted);">expected DK pts</div>
+        </div>
+        <div class="total-cell">
+          <div class="total-lbl">Players</div>
+          <div class="total-val neutral" id="tot-filled">0/10</div>
+          <div style="font-size:9px;color:var(--muted);">slots filled</div>
+        </div>
+      </div>
+      <div class="sal-bar-wrap"><div class="sal-bar-fill" id="sal-bar" style="width:0%;background:var(--hi);"></div></div>
+      <div class="builder-actions">
+        <button class="bld-btn primary" onclick="saveLineup()">Save Lineup</button>
+        <button class="bld-btn" onclick="clearLineup()">Clear</button>
+        <button class="bld-btn" onclick="exportCSV()">↓ DK CSV</button>
+      </div>
+      <div class="saved-section">
+        <div class="saved-lbl">Saved Lineups</div>
+        <div class="saved-list" id="saved-list"></div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+// ── SUPABASE ────────────────────────────────────────────────────────────────
+const { createClient } = supabase;
+const sb = createClient(
+  'https://rzgmnjfxlthxpoecyvnv.supabase.co',
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ6Z21uamZ4bHRoeHBvZWN5dm52Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTMwMjUsImV4cCI6MjA4ODIyOTAyNX0.WCAkPKJCH5KM4E15QVOYr7BR6aW2M4dmu6WzsGnYlio'
+);
+
+// ── TEAM COLORS ─────────────────────────────────────────────────────────────
+const TEAM_COLORS = {
+  'New York Yankees'      :{ bg:'#003087', tx:'#fff' },
+  'Boston Red Sox'        :{ bg:'#bd3039', tx:'#fff' },
+  'Tampa Bay Rays'        :{ bg:'#092c5c', tx:'#8fbce6' },
+  'Toronto Blue Jays'     :{ bg:'#134a8e', tx:'#1d7cf2' },
+  'Baltimore Orioles'     :{ bg:'#df4601', tx:'#fff' },
+  'Chicago White Sox'     :{ bg:'#27251f', tx:'#c4ced4' },
+  'Cleveland Guardians'   :{ bg:'#e31937', tx:'#fff' },
+  'Detroit Tigers'        :{ bg:'#0c2340', tx:'#fa4616' },
+  'Kansas City Royals'    :{ bg:'#004687', tx:'#bd9b60' },
+  'Minnesota Twins'       :{ bg:'#002b5c', tx:'#d31145' },
+  'Houston Astros'        :{ bg:'#002d62', tx:'#eb6e1f' },
+  'Los Angeles Angels'    :{ bg:'#ba0021', tx:'#fff' },
+  'Oakland Athletics'     :{ bg:'#003831', tx:'#efb21e' },
+  'Athletics'             :{ bg:'#003831', tx:'#efb21e' },
+  'Seattle Mariners'      :{ bg:'#0c2c56', tx:'#7ab2c8' },
+  'Texas Rangers'         :{ bg:'#003278', tx:'#c0111f' },
+  'Atlanta Braves'        :{ bg:'#ce1141', tx:'#13274f' },
+  'Miami Marlins'         :{ bg:'#00a3e0', tx:'#ff6600' },
+  'New York Mets'         :{ bg:'#002d72', tx:'#ff5910' },
+  'Philadelphia Phillies' :{ bg:'#e81828', tx:'#fff' },
+  'Washington Nationals'  :{ bg:'#ab0003', tx:'#fff' },
+  'Chicago Cubs'          :{ bg:'#0e3386', tx:'#cc3433' },
+  'Cincinnati Reds'       :{ bg:'#c6011f', tx:'#fff' },
+  'Milwaukee Brewers'     :{ bg:'#12284b', tx:'#ffc52f' },
+  'Pittsburgh Pirates'    :{ bg:'#27251f', tx:'#fdb827' },
+  'St. Louis Cardinals'   :{ bg:'#c41e3a', tx:'#0c2340' },
+  'Arizona Diamondbacks'  :{ bg:'#a71930', tx:'#e3d4ad' },
+  'Colorado Rockies'      :{ bg:'#33006f', tx:'#c4ced4' },
+  'Los Angeles Dodgers'   :{ bg:'#005a9c', tx:'#fff' },
+  'San Diego Padres'      :{ bg:'#2f241d', tx:'#ffc425' },
+  'San Francisco Giants'  :{ bg:'#fd5a1e', tx:'#27251f' },
+};
+const ABBR_COLORS = {
+  'ARI':{ bg:'#a71930', tx:'#e3d4ad' }, 'ATL':{ bg:'#ce1141', tx:'#fff' },
+  'BAL':{ bg:'#df4601', tx:'#fff' },    'BOS':{ bg:'#bd3039', tx:'#fff' },
+  'CHC':{ bg:'#0e3386', tx:'#cc3433' },'CWS':{ bg:'#27251f', tx:'#c4ced4' },
+  'CIN':{ bg:'#c6011f', tx:'#fff' },   'CLE':{ bg:'#e31937', tx:'#fff' },
+  'COL':{ bg:'#33006f', tx:'#c4ced4' },'DET':{ bg:'#0c2340', tx:'#fa4616' },
+  'HOU':{ bg:'#002d62', tx:'#eb6e1f' },'KC': { bg:'#004687', tx:'#bd9b60' },
+  'LAA':{ bg:'#ba0021', tx:'#fff' },   'LAD':{ bg:'#005a9c', tx:'#fff' },
+  'MIA':{ bg:'#00a3e0', tx:'#ff6600' },'MIL':{ bg:'#12284b', tx:'#ffc52f' },
+  'MIN':{ bg:'#002b5c', tx:'#d31145' },'NYM':{ bg:'#002d72', tx:'#ff5910' },
+  'NYY':{ bg:'#003087', tx:'#fff' },   'OAK':{ bg:'#003831', tx:'#efb21e' },
+  'PHI':{ bg:'#e81828', tx:'#fff' },   'PIT':{ bg:'#27251f', tx:'#fdb827' },
+  'SD': { bg:'#2f241d', tx:'#ffc425' },'SF': { bg:'#fd5a1e', tx:'#27251f' },
+  'SEA':{ bg:'#0c2c56', tx:'#7ab2c8' },'STL':{ bg:'#c41e3a', tx:'#0c2340' },
+  'TB': { bg:'#092c5c', tx:'#8fbce6' },'TEX':{ bg:'#003278', tx:'#c0111f' },
+  'TOR':{ bg:'#134a8e', tx:'#1d7cf2' },'WSH':{ bg:'#ab0003', tx:'#fff' },
+  // WBC / International teams
+  'USA':{ bg:'#002868', tx:'#bf0a30' },'USI':{ bg:'#002868', tx:'#bf0a30' },'DOM':{ bg:'#002d62', tx:'#cf142b' },
+  'JPN':{ bg:'#bc002d', tx:'#fff' },  'PRI':{ bg:'#ed0c34', tx:'#fff' },
+  'MEX':{ bg:'#006847', tx:'#ce1126' },'VEN':{ bg:'#cf142b', tx:'#fff' },
+  'CUB':{ bg:'#002a8f', tx:'#cf142b' },'CAN':{ bg:'#ff0000', tx:'#fff' },
+};
+const NAME_TO_ABBR = {
+  'New York Yankees':'NYY','Boston Red Sox':'BOS','Tampa Bay Rays':'TB','Toronto Blue Jays':'TOR',
+  'Baltimore Orioles':'BAL','Chicago White Sox':'CWS','Cleveland Guardians':'CLE',
+  'Detroit Tigers':'DET','Kansas City Royals':'KC','Minnesota Twins':'MIN',
+  'Houston Astros':'HOU','Los Angeles Angels':'LAA','Oakland Athletics':'OAK',
+  'Athletics':'OAK','Seattle Mariners':'SEA','Texas Rangers':'TEX',
+  'Atlanta Braves':'ATL','Miami Marlins':'MIA','New York Mets':'NYM',
+  'Philadelphia Phillies':'PHI','Washington Nationals':'WSH','Chicago Cubs':'CHC',
+  'Cincinnati Reds':'CIN','Milwaukee Brewers':'MIL','Pittsburgh Pirates':'PIT',
+  'St. Louis Cardinals':'STL','Arizona Diamondbacks':'ARI','Colorado Rockies':'COL',
+  'Los Angeles Dodgers':'LAD','San Diego Padres':'SD','San Francisco Giants':'SF',
+  // WBC / International
+  'United States':'USA','Dominican Republic':'DOM','Japan':'JPN',
+  'Puerto Rico':'PRI','Mexico':'MEX','Venezuela':'VEN','Cuba':'CUB','Canada':'CAN',
+  'Kingdom of the Netherlands':'NED','Colombia':'COL',
+};
+
+function teamColor(name)    { return TEAM_COLORS[name] || { bg:'#252d38', tx:'#8899b0' }; }
+function abbrColor(abbr)    { return ABBR_COLORS[(abbr||'').toUpperCase()] || { bg:'#252d38', tx:'#8899b0' }; }
+function teamAbbr(fullName) { return NAME_TO_ABBR[fullName] || (fullName||'').slice(0,3).toUpperCase(); }
+
+// Map MLB API positions → DraftKings position eligibility
+// Used only when dk_salaries has no entry for a player
+function mlbPosToDK(pos) {
+  if (!pos) return 'UTIL';
+  const p = pos.toUpperCase().trim();
+  if (['LF','CF','RF','OF'].includes(p)) return 'OF';
+  if (p === 'DH') return null; // DH is a lineup role, not a DK eligibility — drop it
+  if (['SP','P','ST'].includes(p)) return 'SP';
+  if (p === 'RP') return 'RP';
+  if (['C','1B','2B','3B','SS'].includes(p)) return p;
+  return 'UTIL';
+}
+
+// ── STATE ───────────────────────────────────────────────────────────────────
+const CAP = 50000;
+const LINEUP_SLOTS = [
+  { key:'sp1', pos:'SP', label:'SP', accepts:['SP'] },
+  { key:'sp2', pos:'SP', label:'SP', accepts:['SP'] },
+  { key:'c',   pos:'C',  label:'C',  accepts:['C']  },
+  { key:'1b',  pos:'1B', label:'1B', accepts:['1B'] },
+  { key:'2b',  pos:'2B', label:'2B', accepts:['2B'] },
+  { key:'3b',  pos:'3B', label:'3B', accepts:['3B'] },
+  { key:'ss',  pos:'SS', label:'SS', accepts:['SS'] },
+  { key:'of1', pos:'OF', label:'OF', accepts:['OF'] },
+  { key:'of2', pos:'OF', label:'OF', accepts:['OF'] },
+  { key:'of3', pos:'OF', label:'OF', accepts:['OF'] },
+];
+
+let activeTab   = 'hitters';
+let activePos   = 'ALL';
+let activeTeamIds = new Set(); // Set of team_id integers — empty = all teams shown
+
+let allHitters  = [];
+let allPitchers = [];
+let lineup      = {};
+
+let _games          = [];
+let _parkFactors    = {};
+let _weather        = {};
+let _allSlates      = [];
+let _teamIdAbbrMap  = {};   // team_id → dk_salaries abbreviation (e.g. 139 → "SF")
+let dragPlayerId    = null;
+
+// ── INIT ────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+  buildSlots();
+  renderSavedList();
+  await loadDates();
+});
+
+// ── BATCHED SUPABASE QUERY (avoids URL length limit with large .in() arrays) ─
+async function batchIn(table, select, column, ids, extra) {
+  const CHUNK = 150;
+  let out = [];
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    let q = sb.from(table).select(select).in(column, ids.slice(i, i + CHUNK));
+    if (extra) q = extra(q);
+    const { data, error } = await q;
+    if (error) console.warn(`batchIn(${table}) error:`, error.message);
+    if (data) out = out.concat(data);
+  }
+  return out;
+}
+
+// ── DATE PARSING ─────────────────────────────────────────────────────────────
+function parseDateFromSlate(slate) {
+  if (!slate) return null;
+  const m1 = slate.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  if (m1) return m1[1];
+  const m2 = slate.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
+  if (m2) return `${m2[3]}-${m2[1].padStart(2,'0')}-${m2[2].padStart(2,'0')}`;
+  return null;
+}
+
+// ── DATE / SLATE LOADING ────────────────────────────────────────────────────
+async function loadDates() {
+  const { data: gameData } = await sb.from('games')
+    .select('game_date').gte('game_date','2025-01-01').order('game_date',{ascending:true});
+
+  const { data: slateData } = await sb.from('dk_salaries')
+    .select('dk_slate').limit(3000);
+
+  _allSlates = [...new Set((slateData||[]).map(r=>r.dk_slate).filter(Boolean))].sort();
+
+  const gameDates  = new Set((gameData||[]).map(r=>r.game_date));
+  const slateDates = new Set();
+  _allSlates.forEach(s => { const d = parseDateFromSlate(s); if (d) slateDates.add(d); });
+  const allDates   = [...new Set([...gameDates,...slateDates])].sort();
+
+  if (!allDates.length) {
+    document.getElementById('date-select').innerHTML = '<option value="all">All Dates</option>';
+    await loadSlates('all'); return;
+  }
+
+  // Use local date (not UTC) so the slate doesn't roll over until actual midnight
+  const now   = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  const defaultDate = allDates.find(d=>d>=today) || allDates[allDates.length-1];
+
+  const sel = document.getElementById('date-select');
+  sel.innerHTML = allDates.map(d=>`<option value="${d}"${d===defaultDate?' selected':''}>${formatDate(d)}</option>`).join('');
+  sel.addEventListener('change', ()=>loadSlates(sel.value));
+  await loadSlates(defaultDate);
+}
+
+async function loadSlates(date) {
+  const orig = document.getElementById('slate-select');
+  const sel  = orig.cloneNode(false);
+  orig.parentNode.replaceChild(sel, orig);
+  sel.innerHTML = '<option>Loading…</option>';
+
+  let matching = date === 'all' ? _allSlates
+    : _allSlates.filter(s => parseDateFromSlate(s) === date);
+  if (!matching.length) matching = _allSlates;
+
+  if (!matching.length) { sel.innerHTML = '<option>No slates</option>'; return; }
+
+  sel.innerHTML = matching.map(s=>`<option value="${s}">${s}</option>`).join('');
+  sel.addEventListener('change', ()=>loadPlayerPool(date, sel.value));
+  await loadPlayerPool(date, matching[0]);
+}
+
+// ── PLAYER POOL LOADING ──────────────────────────────────────────────────────
+async function loadPlayerPool(date, slate) {
+  document.getElementById('pool-list').innerHTML = '<div class="pool-empty">Loading…</div>';
+  activeTeamIds = new Set();
+
+  // 1. Games for this date
+  const { data: games } = date && date !== 'all'
+    ? await sb.from('games')
+        .select('game_pk,game_date,home_team_id,away_team_id,home_team,away_team,home_sp_id,away_sp_id,home_sp_name,away_sp_name,venue_name,venue_id,game_time_utc')
+        .eq('game_date', date)
+    : { data: [] };
+  _games = games || [];
+
+  const gamePks = _games.map(g => g.game_pk);
+
+  // team_id → game_pk
+  const teamGameMap = {};
+  _games.forEach(g => {
+    teamGameMap[g.home_team_id] = g.game_pk;
+    teamGameMap[g.away_team_id] = g.game_pk;
+  });
+
+  // 2. Lineups — prefer SlateHub localStorage cache (populated when user clicks games there)
+  //    Fall back to direct Supabase query only if cache is empty/stale.
+  let lineupRaw = [];
+  try {
+    const cached = JSON.parse(localStorage.getItem('sh_hbh_lineup') || 'null');
+    if (cached && cached.date === date && cached.players.length > 0) {
+      lineupRaw = cached.players;
+    }
+  } catch(e) {}
+  if (!lineupRaw.length && gamePks.length) {
+    lineupRaw = await batchIn('lineups','player_id,player_name,team_id,batting_order,position,game_pk,status','game_pk',gamePks);
+  }
+  const lineupMap = {};
+  lineupRaw.forEach(r => { if (r.player_id) lineupMap[r.player_id] = r; });
+  // batting_order is always set in load_schedule.py (projected lineups copy from previous game)
+  const starterPids = lineupRaw
+    .filter(r => r.batting_order != null)
+    .map(r => r.player_id).filter(Boolean);
+
+  // 3. DK Salaries
+  //    HITTERS: query by lineup player_ids (reverse-join guarantees ID match across tables)
+  //    PITCHERS: query all SP/RP from the slate directly (pitchers aren't in lineups)
+  const salByPid = {};
+  let salaries   = [];
+
+  const [pitcherSalRes, hitterSalRaw, dkPosRaw, rosterPosRaw] = await Promise.all([
+    // All SP/RP on this slate
+    sb.from('dk_salaries').select('player_id,name,salary,position,team,dk_slate')
+      .eq('dk_slate', slate).limit(3000),
+    // Hitters via lineup player_ids — today's slate match (salary + DK position)
+    starterPids.length
+      ? batchIn('dk_salaries','player_id,name,salary,position,team,dk_slate','player_id',starterPids,
+          q => q.eq('dk_slate', slate))
+      : Promise.resolve([]),
+    // DK position eligibility from ANY previous slate — for players not in today's slate yet
+    starterPids.length
+      ? batchIn('dk_salaries','player_id,position','player_id',starterPids)
+      : Promise.resolve([]),
+    // Primary MLB position from rosters table — fallback for DH players not in dk_salaries
+    starterPids.length
+      ? batchIn('rosters','player_id,position','player_id',starterPids)
+      : Promise.resolve([]),
+  ]);
+
+  const rosterPosMap = {};
+  rosterPosRaw.forEach(r => { if (r.player_id && r.position) rosterPosMap[r.player_id] = r.position; });
+
+  // Build DK position map from any historical slate (most recent entry wins)
+  // This gives us correct DK eligibility (e.g. 2B/SS, 1B/3B, OF) before today's salaries load
+  const dkPosMap = {};
+  dkPosRaw.forEach(r => {
+    if (!r.player_id || !r.position) return;
+    // Normalize each component through mlbPosToDK (handles LF→OF, DH→1B, etc.)
+    const normalized = [...new Set(r.position.split('/').map(p => mlbPosToDK(p.trim())).filter(p => p && p !== 'UTIL'))].join('/') || 'UTIL';
+    const existing = dkPosMap[r.player_id];
+    // Prefer multi-position entries (e.g. "2B/SS", "1B/3B") over single-position ones
+    if (!existing || (!existing.includes('/') && normalized.includes('/'))) {
+      dkPosMap[r.player_id] = normalized;
+    }
+  });
+
+  // Add SP/RP from slate first
+  (pitcherSalRes.data || [])
+    .filter(r => (r.position||'').split('/').some(p => ['SP','RP','P'].includes(p.trim())))
+    .forEach(r => { if (r.player_id) { salByPid[r.player_id] = r; salaries.push(r); } });
+
+  // Add hitters from today's slate (salary + correct DK position)
+  hitterSalRaw.forEach(r => {
+    if (!r.player_id) return;
+    if (!salByPid[r.player_id] || r.dk_slate === slate) salByPid[r.player_id] = r;
+  });
+
+  // Build team_id → abbreviation from games table (initial pass)
+  const teamIdToAbbr = {};
+  _games.forEach(g => {
+    teamIdToAbbr[g.home_team_id] = teamAbbr(g.home_team);
+    teamIdToAbbr[g.away_team_id] = teamAbbr(g.away_team);
+  });
+
+  // Patch teamIdToAbbr with real DK abbreviations from matched salary rows
+  // This fixes WBC/international teams where games table name ≠ DK abbreviation (e.g. "USI")
+  const DK_ABBR_NORM = { 'USI':'USA' };
+  Object.values(salByPid).forEach(r => {
+    if (r.team && r.player_id) {
+      const lu = lineupMap[r.player_id];
+      if (lu?.team_id) teamIdToAbbr[lu.team_id] = DK_ABBR_NORM[r.team] || r.team;
+    }
+  });
+
+  // Name-based fallback map from all slate salary rows (catches ID-mismatch players)
+  const nameToSalMap = {};
+  (pitcherSalRes.data || []).forEach(r => {
+    if (r.name) nameToSalMap[r.name.toLowerCase()] = r;
+  });
+
+  // Fallback: for any lineup starter not matched by player_id, try name match then MLB→DK mapping
+  for (const pid of starterPids) {
+    if (!salByPid[pid]) {
+      const lu = lineupMap[pid];
+      const luName = lu?.player_name?.toLowerCase();
+      const nameSal = luName ? nameToSalMap[luName] : null;
+      if (nameSal) {
+        salByPid[pid] = { ...nameSal, player_id: pid, team: DK_ABBR_NORM[nameSal.team] || nameSal.team };
+      } else {
+        const pos = dkPosMap[pid] || mlbPosToDK(rosterPosMap[pid]) || mlbPosToDK(lu?.position) || 'UTIL';
+        salByPid[pid] = {
+          player_id: pid,
+          name:      lu?.player_name || null,
+          salary:    null,
+          position:  pos,
+          team:      lu?.team_id ? (teamIdToAbbr[lu.team_id] || null) : null,
+          dk_slate:  slate,
+        };
+      }
+    }
+  }
+
+  // Merge hitters into salaries array
+  Object.values(salByPid).forEach(r => {
+    const isPitcher = (r.position||'').split('/').some(p => ['SP','RP','P'].includes(p.trim()));
+    if (!isPitcher && !salaries.find(s => s.player_id === r.player_id)) salaries.push(r);
+  });
+
+  if (!salaries.length) {
+    document.getElementById('pool-list').innerHTML = '<div class="pool-empty">No salary data for this slate.</div>';
+    buildGameStrip(); return;
+  }
+
+  // Build abbr → team_id from hitter lineup cross-ref (lineup has team_id; dk_salaries has team abbr)
+  const abbrToTeamId = {};
+  starterPids.forEach(pid => {
+    const lu  = lineupMap[pid];
+    const sal = salByPid[pid];
+    if (sal?.team && lu?.team_id) abbrToTeamId[sal.team] = lu.team_id;
+  });
+
+  const allPlayerIds = Object.keys(salByPid).map(Number).filter(Boolean);
+
+  // 4. Batter stats — batched to avoid URL length limits
+  const bRaw = allPlayerIds.length
+    ? await batchIn('batter_stats','player_id,full_name,wrc_plus,woba,iso,season','player_id',allPlayerIds,
+        q => q.order('season',{ascending:false}))
+    : [];
+  const bStatMap = {};
+  bRaw.forEach(r => { if (!bStatMap[r.player_id]) bStatMap[r.player_id] = r; });
+
+  // 5. Projections — full stat line for hitters + pitcher stats
+  const projRaw = allPlayerIds.length && date && date !== 'all'
+    ? await batchIn('player_projections',
+        'player_id,proj_dk_pts,proj_floor,proj_ceiling,' +
+        'proj_hr,proj_r,proj_rbi,proj_sb,' +
+        'proj_ip,proj_ks,proj_er,win_prob',
+        'player_id', allPlayerIds, q => q.eq('game_date', date))
+    : [];
+  const projMap = {};
+  projRaw.forEach(r => { projMap[r.player_id] = r; });
+
+  // 6. Park factors (keyed by venue_id — the home park for each game)
+  const venueIds = [...new Set(_games.map(g=>g.venue_id).filter(Boolean))];
+  const pfRaw = venueIds.length
+    ? (await sb.from('park_factors').select('venue_id,basic_factor,hr_factor,woba_con,xwoba_con,bb_factor,k_factor').in('venue_id',venueIds).order('season',{ascending:false})).data || []
+    : [];
+  _parkFactors = {};
+  pfRaw.forEach(r => { if (!_parkFactors[r.venue_id]) _parkFactors[r.venue_id] = r; });
+
+  // 7. Weather
+  const wxRaw = gamePks.length
+    ? (await sb.from('weather').select('game_pk,temp_f,wind_speed,wind_dir,precip_pct').in('game_pk',gamePks)).data || []
+    : [];
+  _weather = {};
+  wxRaw.forEach(r => { _weather[r.game_pk] = r; });
+
+  // 8. SP stats for game starters (for hitter SP grade)
+  const spIds = [...new Set(_games.flatMap(g=>[g.home_sp_id,g.away_sp_id]).filter(Boolean))];
+  const spRaw = spIds.length
+    ? await batchIn('pitcher_stats','player_id,full_name,xfip,siera,k_pct,bb_pct,swstr_pct,stuff_plus,location_plus,pitching_plus,era','player_id',spIds,
+        q => q.order('season',{ascending:false}))
+    : [];
+  const spStatMap = {};
+  spRaw.forEach(r => { if (!spStatMap[r.player_id]) spStatMap[r.player_id] = r; });
+
+  // Name-based fallback: spStatMap uses MLB API ids (from games table) which match pitcher_stats.
+  // dk_salaries may use different ids, so we also index by lowercase full_name for fallback lookup.
+  const spStatByName = {};
+  Object.values(spStatMap).forEach(ps => { if (ps.full_name) spStatByName[ps.full_name.toLowerCase()] = ps; });
+
+  // 9. Pitcher stats for ALL pitchers in slate (for pitcher chip display)
+  //    Try by dk_salaries player_id first; spStatByName is the name-based fallback.
+  const allPitcherIds = salaries
+    .filter(s => (s.position||'').split('/').some(p => ['SP','RP','P'].includes(p.trim())))
+    .map(s=>s.player_id).filter(Boolean);
+  const pRaw = allPitcherIds.length
+    ? await batchIn('pitcher_stats','player_id,full_name,xfip,siera,k_pct,bb_pct,swstr_pct,stuff_plus,location_plus,pitching_plus,era','player_id',allPitcherIds,
+        q => q.order('season',{ascending:false}))
+    : [];
+  const pitcherStatMap = {};
+  pRaw.forEach(r => { if (!pitcherStatMap[r.player_id]) pitcherStatMap[r.player_id] = r; });
+
+  // ── Context maps ───────────────────────────────────────────────────────────
+  const gameSpMap  = {};  // team_id → { name, grade }
+  const gameHesMap = {};  // game_pk → { score, grade }
+
+  _games.forEach(g => {
+    const wx = _weather[g.game_pk];
+    gameHesMap[g.game_pk] = computeHES(_parkFactors[g.venue_id], wx);
+
+    const homeSp = spStatMap[g.home_sp_id];
+    const awaySp = spStatMap[g.away_sp_id];
+
+    // Always set SP name from games table; grade is bonus if stats exist
+    if (g.home_sp_name || g.home_sp_id) {
+      gameSpMap[g.away_team_id] = {
+        name:  g.home_sp_name || homeSp?.full_name || '—',
+        grade: homeSp ? computeSpGrade(homeSp) : null,
+      };
+    }
+    if (g.away_sp_name || g.away_sp_id) {
+      gameSpMap[g.home_team_id] = {
+        name:  g.away_sp_name || awaySp?.full_name || '—',
+        grade: awaySp ? computeSpGrade(awaySp) : null,
+      };
+    }
+  });
+
+  // ── Build player objects ───────────────────────────────────────────────────
+  allHitters  = [];
+  allPitchers = [];
+
+  salaries.forEach(s => {
+    if (!s.player_id) return;
+    const rawPos = (s.position||'').split('/').map(p => p.trim()).filter(Boolean);
+    const positions = rawPos.length ? rawPos : ['UTIL'];
+    const isPitcher = positions.some(p => ['SP','RP','P'].includes(p));
+    const lu        = lineupMap[s.player_id];
+    const proj      = projMap[s.player_id];
+    const bs        = bStatMap[s.player_id];
+
+    const teamId  = lu?.team_id ?? abbrToTeamId[s.team] ?? null;
+    const gamePk  = teamId ? teamGameMap[teamId] : null;
+    const spInfo  = teamId ? gameSpMap[teamId]   : null;
+    const hesInfo = gamePk ? gameHesMap[gamePk]  : null;
+
+    const player = {
+      player_id:        s.player_id,
+      name:             s.name || bs?.full_name || lu?.player_name || '—',
+      positions,
+      salary:           s.salary || 0,
+      team_id:          teamId,
+      team:             s.team || '',
+      game_pk:          gamePk,
+      in_lineup:        lu != null,
+      lineup_confirmed: lu?.status === 'confirmed',
+      batting_order:    lu?.batting_order ?? null,
+      proj_dk_pts:      proj?.proj_dk_pts  ?? null,
+      proj_floor:       proj?.proj_floor   ?? null,
+      proj_ceiling:     proj?.proj_ceiling ?? null,
+      proj_hr:          proj?.proj_hr      ?? null,
+      proj_r:           proj?.proj_r       ?? null,
+      proj_rbi:         proj?.proj_rbi     ?? null,
+      proj_sb:          proj?.proj_sb      ?? null,
+      proj_ip:          proj?.proj_ip      ?? null,
+      proj_ks:          proj?.proj_ks      ?? null,
+      proj_er:          proj?.proj_er      ?? null,
+      win_prob:         proj?.win_prob     ?? null,
+      wrc_plus:         bs?.wrc_plus ?? null,
+      woba:             bs?.woba     ?? null,
+      iso:              bs?.iso      ?? null,
+      sp_name:          spInfo?.name  ?? null,
+      sp_grade:         spInfo?.grade ?? null,
+      hes:              hesInfo?.score ?? null,
+      pms:              isPitcher ? null : computeSimplePMS(spInfo, hesInfo?.score),
+      ...(isPitcher ? getPitcherStats(s.player_id, pitcherStatMap, s.name, spStatByName) : {}),
+    };
+
+    if (isPitcher) allPitchers.push(player);
+    else           allHitters.push(player);
+  });
+
+  // ── Filter hitters: lineup players only (reverse-join means all hitters came from lineup pids)
+  if (starterPids.length > 0) {
+    allHitters = allHitters.filter(h => h.in_lineup);
+  }
+
+  // ── Filter pitchers: keep scheduled SPs + all pitchers from games with no SP data
+  const scheduledSpNames = new Set(
+    _games.flatMap(g => [g.home_sp_name, g.away_sp_name])
+      .filter(Boolean).map(n => n.toLowerCase())
+  );
+  const noSpTeamIds = new Set(
+    _games.filter(g => !g.home_sp_name && !g.away_sp_name)
+      .flatMap(g => [g.home_team_id, g.away_team_id]).filter(Boolean)
+  );
+
+  if (scheduledSpNames.size > 0) {
+    allPitchers = allPitchers.filter(p =>
+      scheduledSpNames.has((p.name || '').toLowerCase()) || noSpTeamIds.has(p.team_id)
+    );
+  }
+
+  // Deduplicate allPitchers by player_id (multiple dg_ids in dk_salaries cause duplicates)
+  {
+    const seen = new Set();
+    allPitchers = allPitchers.filter(p => {
+      if (seen.has(p.player_id)) return false;
+      seen.add(p.player_id); return true;
+    });
+  }
+
+  // ── Sort ────────────────────────────────────────────────────────────────────
+  const sortFn = (a,b) =>
+    (b.proj_dk_pts??0) - (a.proj_dk_pts??0) || b.salary - a.salary;
+  allHitters.sort(sortFn);
+  allPitchers.sort(sortFn);
+
+  // Build team_id → abbreviation map using dk_salaries abbreviations (authoritative)
+  // Must be built BEFORE pitcher stack loop so opp_team_abbr can use it
+  _teamIdAbbrMap = {};
+  [...allHitters, ...allPitchers].forEach(p => {
+    if (p.team_id && p.team) _teamIdAbbrMap[p.team_id] = p.team;
+  });
+
+  // ── Stack score for pitchers ───────────────────────────────────────────────
+  const teamProjMap = {};
+  allHitters.forEach(h => {
+    if (!h.team_id || h.proj_dk_pts == null) return;
+    if (!teamProjMap[h.team_id]) teamProjMap[h.team_id] = { pts:0, count:0 };
+    teamProjMap[h.team_id].pts   += h.proj_dk_pts;
+    teamProjMap[h.team_id].count += 1;
+  });
+  allPitchers.forEach(p => {
+    const game = _games.find(g=>g.game_pk===p.game_pk);
+    if (!game) { p.opp_stack_pts=null; p.opp_team_abbr=null; return; }
+    const isHome    = game.home_team_id === p.team_id;
+    const oppTeamId = isHome ? game.away_team_id : game.home_team_id;
+    const stack     = teamProjMap[oppTeamId];
+    p.opp_stack_pts = stack?.pts   ?? null;
+    p.opp_stack_n   = stack?.count ?? 0;
+    p.opp_team_abbr = _teamIdAbbrMap[oppTeamId] || teamAbbr(isHome ? game.away_team : game.home_team);
+  });
+
+  buildGameStrip();
+
+  // Auto-switch to Pitchers tab if no hitters (lineups not posted yet)
+  if (allHitters.length === 0 && allPitchers.length > 0 && activeTab === 'hitters') {
+    switchPoolTab('pitchers');
+  } else {
+    renderPool();
+  }
+}
+
+function getPitcherStats(playerId, statMap, name, nameMap) {
+  const ps = statMap[playerId]
+          || (name && nameMap && nameMap[name.toLowerCase()]);
+  if (!ps) return {};
+  return {
+    xfip:          ps.xfip,
+    k_pct:         ps.k_pct,
+    stuff_plus:    ps.stuff_plus,
+    location_plus: ps.location_plus,
+    pitching_plus: ps.pitching_plus,
+    era:           ps.era,
+    sp_grade_self: computeSpGrade(ps),
+  };
+}
+
+// ── GAME STRIP ────────────────────────────────────────────────────────────────
+function buildGameStrip() {
+  const wrap = document.getElementById('game-cards');
+  wrap.innerHTML = '';
+  activeTeamIds = new Set();
+
+  if (!_games.length) {
+    wrap.innerHTML = '<span style="font-size:11px;color:var(--muted);padding:6px 0;font-style:italic;">No game data for this slate</span>';
+    return;
+  }
+
+  const allBtn = document.createElement('button');
+  allBtn.className = 'gc-all active';
+  allBtn.id = 'gc-all';
+  allBtn.textContent = 'ALL';
+  allBtn.onclick = () => { activeTeamIds.clear(); syncGameCards(); renderPool(); };
+  wrap.appendChild(allBtn);
+
+  _games.forEach(g => { try {
+    const awayAb = teamAbbr(g.away_team) || (g.away_team_id && _teamIdAbbrMap[g.away_team_id]) || '???';
+    const homeAb = teamAbbr(g.home_team) || (g.home_team_id && _teamIdAbbrMap[g.home_team_id]) || '???';
+    const awayC  = abbrColor(awayAb);
+    const homeC  = abbrColor(homeAb);
+    const time   = g.game_time_utc
+      ? new Date(g.game_time_utc).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true})
+      : '';
+
+    const card = document.createElement('div');
+    card.className = 'game-card active';
+    card.dataset.homeId = g.home_team_id;
+    card.dataset.awayId = g.away_team_id;
+
+    const hdr = document.createElement('div');
+    hdr.className = 'game-card-header';
+    hdr.innerHTML = `
+      <span class="t-pill" style="background:${awayC.bg};color:${awayC.tx};">${awayAb}</span>
+      <span class="gc-at">@</span>
+      <span class="t-pill" style="background:${homeC.bg};color:${homeC.tx};">${homeAb}</span>
+      ${time ? `<span class="gc-time">${time}</span>` : ''}`;
+    hdr.onclick = () => toggleGameIds(g.home_team_id, g.away_team_id);
+
+    const teamsRow = document.createElement('div');
+    teamsRow.className = 'game-card-teams';
+
+    const awayBtn = document.createElement('button');
+    awayBtn.className = 'team-iso-btn';
+    awayBtn.style.cssText = `background:${awayC.bg};color:${awayC.tx};`;
+    awayBtn.dataset.teamId = g.away_team_id;
+    awayBtn.textContent = awayAb;
+    awayBtn.onclick = e => { e.stopPropagation(); isoTeamId(g.away_team_id); };
+
+    const homeBtn = document.createElement('button');
+    homeBtn.className = 'team-iso-btn';
+    homeBtn.style.cssText = `background:${homeC.bg};color:${homeC.tx};`;
+    homeBtn.dataset.teamId = g.home_team_id;
+    homeBtn.textContent = homeAb;
+    homeBtn.onclick = e => { e.stopPropagation(); isoTeamId(g.home_team_id); };
+
+    teamsRow.appendChild(awayBtn);
+    teamsRow.appendChild(homeBtn);
+    card.appendChild(hdr);
+    card.appendChild(teamsRow);
+    wrap.appendChild(card);
+  } catch(e) { console.warn('[HBH] game card error:', g?.away_team, '@', g?.home_team, e.message); }
+  });
+}
+
+function toggleGameIds(homeId, awayId) {
+  if (activeTeamIds.size === 0) {
+    activeTeamIds = new Set([homeId, awayId]);
+  } else {
+    const bothOn = activeTeamIds.has(homeId) && activeTeamIds.has(awayId);
+    if (bothOn) { activeTeamIds.delete(homeId); activeTeamIds.delete(awayId); }
+    else        { activeTeamIds.add(homeId);    activeTeamIds.add(awayId);    }
+    if (activeTeamIds.size === 0) activeTeamIds = new Set();
+  }
+  syncGameCards();
+  renderPool();
+}
+
+function isoTeamId(teamId) {
+  if (activeTeamIds.size === 1 && activeTeamIds.has(teamId)) {
+    activeTeamIds = new Set();
+  } else {
+    activeTeamIds = new Set([teamId]);
+  }
+  syncGameCards();
+  renderPool();
+}
+
+function syncGameCards() {
+  const allOn = activeTeamIds.size === 0;
+  document.getElementById('gc-all')?.classList.toggle('active', allOn);
+  document.querySelectorAll('.game-card').forEach(card => {
+    const hId = Number(card.dataset.homeId);
+    const aId = Number(card.dataset.awayId);
+    const either = allOn || activeTeamIds.has(hId) || activeTeamIds.has(aId);
+    card.classList.toggle('active', either);
+    card.classList.toggle('dimmed', !either);
+    card.querySelectorAll('.team-iso-btn').forEach(btn => {
+      btn.classList.toggle('dimmed', !allOn && !activeTeamIds.has(Number(btn.dataset.teamId)));
+    });
+  });
+}
+
+// ── POOL RENDERING ───────────────────────────────────────────────────────────
+function switchPoolTab(tab) {
+  activeTab = tab; activePos = 'ALL';
+  document.querySelectorAll('.pool-tab').forEach(t => t.classList.toggle('active', t.dataset.tab===tab));
+  const pf = document.getElementById('pos-filters');
+  pf.innerHTML = tab === 'pitchers'
+    ? `<button class="pos-filter active" data-pos="ALL" onclick="setPositionFilter('ALL')">All</button>
+       <button class="pos-filter" data-pos="SP"  onclick="setPositionFilter('SP')">SP</button>
+       <input class="pool-search" id="pool-search" type="text" placeholder="Search player…" oninput="renderPool()">`
+    : `<button class="pos-filter active" data-pos="ALL" onclick="setPositionFilter('ALL')">All</button>
+       <button class="pos-filter" data-pos="C"   onclick="setPositionFilter('C')">C</button>
+       <button class="pos-filter" data-pos="1B"  onclick="setPositionFilter('1B')">1B</button>
+       <button class="pos-filter" data-pos="2B"  onclick="setPositionFilter('2B')">2B</button>
+       <button class="pos-filter" data-pos="3B"  onclick="setPositionFilter('3B')">3B</button>
+       <button class="pos-filter" data-pos="SS"  onclick="setPositionFilter('SS')">SS</button>
+       <button class="pos-filter" data-pos="OF"  onclick="setPositionFilter('OF')">OF</button>
+       <input class="pool-search" id="pool-search" type="text" placeholder="Search player…" oninput="renderPool()">`;
+  renderPool();
+}
+
+function setPositionFilter(pos) {
+  activePos = pos;
+  document.querySelectorAll('.pos-filter').forEach(b => b.classList.toggle('active', b.dataset.pos===pos));
+  renderPool();
+}
+
+function renderPool() {
+  const pool       = activeTab === 'hitters' ? allHitters : allPitchers;
+  const search     = (document.getElementById('pool-search')?.value||'').toLowerCase();
+  const inLineupIds = new Set(Object.values(lineup).filter(Boolean).map(p=>p.player_id));
+
+  const filtered = pool.filter(p => {
+    if (activeTeamIds.size > 0 && p.team_id != null && !activeTeamIds.has(p.team_id)) return false;
+    if (activePos !== 'ALL' && !p.positions.includes(activePos)) return false;
+    if (search && !p.name.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  const total      = pool.length;
+  const hasLineups = pool.some(p => p.in_lineup);
+  const note       = total === 0 ? '' : hasLineups ? ' · lineup' : ' · lineups not posted';
+  document.getElementById('pool-count').textContent = `${filtered.length} of ${total}${note}`;
+
+  const list = document.getElementById('pool-list');
+  if (!filtered.length) {
+    const emptyMsg = total === 0
+      ? (activeTab === 'hitters'
+          ? `<div class="pool-empty">No hitters loaded yet.<br><span style="font-size:11px;color:var(--muted);">Click games in <b style="color:var(--text2);">SlateHub</b> to load lineups — they'll appear here automatically.</span></div>`
+          : '<div class="pool-empty">No pitchers found for this slate.</div>')
+      : '<div class="pool-empty">No players match your filters.</div>';
+    list.innerHTML = emptyMsg;
+    return;
+  }
+
+  list.innerHTML = filtered.map(p => {
+    const inL = inLineupIds.has(p.player_id);
+    return activeTab === 'hitters' ? renderHitterChip(p, inL) : renderPitcherChip(p, inL);
+  }).join('');
+}
+
+// ── CHIP TEMPLATES ───────────────────────────────────────────────────────────
+function lineupBadge(p) {
+  if (p.lineup_confirmed) return '<span class="lu-badge lu-conf" title="Confirmed lineup">✓ CONF</span>';
+  if (p.in_lineup)        return '<span class="lu-badge lu-proj" title="Projected lineup">~ PROJ</span>';
+  return '';
+}
+
+function renderHitterChip(p, inL) {
+  const tc      = abbrColor(p.team);
+  const teamTag = p.team ? `<span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${p.team}</span>` : '';
+  const badge   = lineupBadge(p);
+  const sal     = p.salary ? '$'+p.salary.toLocaleString() : '—';
+  const pos     = p.positions.join('/');
+
+  // Projection
+  const proj    = p.proj_dk_pts != null ? p.proj_dk_pts.toFixed(1) : '—';
+  const floor   = p.proj_floor   != null ? p.proj_floor.toFixed(1)   : null;
+  const ceil    = p.proj_ceiling != null ? p.proj_ceiling.toFixed(1) : null;
+  const range   = floor && ceil ? `<span style="color:var(--muted);font-size:9px;"> [${floor}–${ceil}]</span>` : '';
+
+  // Projected stat line
+  const pHR  = p.proj_hr  != null ? p.proj_hr.toFixed(2)  : null;
+  const pR   = p.proj_r   != null ? p.proj_r.toFixed(2)   : null;
+  const pRBI = p.proj_rbi != null ? p.proj_rbi.toFixed(2) : null;
+  const pSB  = p.proj_sb  != null && p.proj_sb >= 0.01 ? p.proj_sb.toFixed(2) : null;
+  const statLine = (pHR || pR || pRBI)
+    ? `<span class="pc-stat" style="margin-left:auto;color:var(--muted);font-size:9px;">` +
+      `${pHR!=null?'HR '+pHR:''}${pR!=null?' R '+pR:''}${pRBI!=null?' RBI '+pRBI:''}${pSB!=null?' SB '+pSB:''}</span>`
+    : '';
+
+  const wrc  = p.wrc_plus != null ? Math.round(p.wrc_plus) : '—';
+  const woba = p.woba     != null ? Number(p.woba).toFixed(3) : '—';
+  const iso  = p.iso      != null ? Number(p.iso).toFixed(3)  : '—';
+  const hes  = p.hes      != null ? p.hes.toFixed(1) : '—';
+
+  const spLine = p.sp_name
+    ? `vs <b style="color:var(--text2);">${p.sp_name}</b>${p.sp_grade ? '&nbsp;'+spGradePill(p.sp_grade) : ''}`
+    : 'vs SP: <span style="color:var(--muted);">—</span>';
+
+  return `<div class="pc${inL?' in-lineup':''}" draggable="true"
+    ondragstart="dragStart(event,${p.player_id})" ondragend="dragEnd(event)"
+    onclick="addToLineup(${p.player_id})">
+    <div class="pc-row1">${teamTag}${badge}
+      <span class="pc-name">${p.name}</span>
+      <span class="pc-pos">${pos}</span>
+    </div>
+    <div class="pc-row2">
+      <span class="pc-stat" style="color:var(--blue);font-weight:700;">${sal}</span>
+      <span class="pc-stat" style="color:var(--hi);font-weight:700;">${proj} pts${range}</span>
+      <span class="pc-stat">wRC+ <span>${wrc}</span></span>
+      <span class="pc-stat">wOBA <span>${woba}</span></span>
+      <span class="pc-stat">ISO <span>${iso}</span></span>
+    </div>
+    <div class="pc-row3">
+      <span class="pc-stat">HES <span style="${hesColor(p.hes)}">${hes}</span></span>
+      <span class="pc-stat">PMS <span>${p.pms != null ? p.pms : '—'}</span></span>
+      ${statLine}
+    </div>
+    <div class="pc-row3" style="border-top:none;padding-top:0;">
+      <span class="pc-stat" style="color:var(--muted);">${spLine}</span>
+    </div>
+  </div>`;
+}
+
+function renderPitcherChip(p, inL) {
+  const tc      = abbrColor(p.team);
+  const teamTag = p.team ? `<span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${p.team}</span>` : '';
+  const badge   = lineupBadge(p);
+  const sal     = p.salary ? '$'+p.salary.toLocaleString() : '—';
+  const g       = p.sp_grade_self;
+  const gPill   = g ? `<span class="pc-grade-box ${g.cls}">${g.letter}</span>` : '';
+
+  // Projection pts + range
+  const proj  = p.proj_dk_pts != null ? p.proj_dk_pts.toFixed(1) : '—';
+  const floor = p.proj_floor   != null ? p.proj_floor.toFixed(1)   : null;
+  const ceil  = p.proj_ceiling != null ? p.proj_ceiling.toFixed(1) : null;
+  const range = floor && ceil ? `<span style="color:var(--muted);font-size:9px;"> [${floor}–${ceil}]</span>` : '';
+
+  // Pitcher true-talent stats
+  const xfip  = p.xfip         != null ? Number(p.xfip).toFixed(2) : '—';
+  const kpct  = p.k_pct        != null ? (p.k_pct > 1 ? p.k_pct.toFixed(1) : (p.k_pct*100).toFixed(1))+'%' : '—';
+  const stuff = p.stuff_plus    != null ? Math.round(p.stuff_plus) : '—';
+  const loc   = p.location_plus != null ? Math.round(p.location_plus) : '—';
+  const pit   = p.pitching_plus != null ? Math.round(p.pitching_plus) : '—';
+
+  // Projected stat line: IP, K, ER, Win%
+  const pIP  = p.proj_ip  != null ? p.proj_ip.toFixed(1)         : null;
+  const pKS  = p.proj_ks  != null ? p.proj_ks.toFixed(1)         : null;
+  const pER  = p.proj_er  != null ? p.proj_er.toFixed(2)         : null;
+  const pWin = p.win_prob != null ? (p.win_prob*100).toFixed(0)+'%' : null;
+  const pitStatLine = (pIP || pKS || pER)
+    ? `<span class="pc-stat" style="margin-left:auto;color:var(--muted);font-size:9px;">` +
+      `${pIP!=null?'IP '+pIP:''}${pKS!=null?' K '+pKS:''}${pER!=null?' ER '+pER:''}${pWin!=null?' W '+pWin:''}</span>`
+    : '';
+
+  const oppAb = p.opp_team_abbr || '—';
+  const oppTc = p.opp_team_abbr ? abbrColor(p.opp_team_abbr) : null;
+  const oppTag = oppTc
+    ? `<span class="team-tag" style="background:${oppTc.bg};color:${oppTc.tx};font-size:9px;">${oppAb}</span>`
+    : `<span style="color:var(--muted);">${oppAb}</span>`;
+  const stackTxt = p.opp_stack_pts != null ? p.opp_stack_pts.toFixed(1) : '—';
+  const stackN   = p.opp_stack_n   || 0;
+
+  return `<div class="pc${inL?' in-lineup':''}" draggable="true"
+    ondragstart="dragStart(event,${p.player_id})" ondragend="dragEnd(event)"
+    onclick="addToLineup(${p.player_id})">
+    <div class="pc-row1">${teamTag}${badge}
+      <span class="pc-name">${p.name}</span>
+      <span class="pc-pos">SP</span>
+    </div>
+    <div class="pc-row2">
+      <span class="pc-stat" style="color:var(--blue);font-weight:700;">${sal}</span>
+      <span class="pc-stat" style="color:var(--hi);font-weight:700;">${proj} pts${range}</span>
+      ${gPill}
+      <span class="pc-stat">Stuff+ <span>${stuff}</span></span>
+      <span class="pc-stat">Loc+ <span>${loc}</span></span>
+      <span class="pc-stat">Pit+ <span>${pit}</span></span>
+    </div>
+    <div class="pc-row3">
+      <span class="pc-stat">xFIP <span>${xfip}</span></span>
+      <span class="pc-stat">K% <span>${kpct}</span></span>
+      ${pitStatLine}
+    </div>
+    <div class="pc-row3" style="border-top:none;padding-top:0;">
+      <span class="pc-stat" style="color:var(--muted);">vs ${oppTag} stack <span style="color:var(--mid);">${stackTxt}</span>${stackN?` <span style="color:var(--muted);">(${stackN})</span>`:''}</span>
+    </div>
+  </div>`;
+}
+
+function spGradePill(g) {
+  if (!g) return '';
+  return `<span class="pc-grade-box ${g.cls}" style="font-size:9px;padding:1px 4px;">${g.letter}</span>`;
+}
+function hesColor(score) {
+  if (score == null)    return 'color:var(--muted);';
+  if (score >= 7.0)     return 'color:#4ade80;font-weight:700;';
+  if (score >= 5.5)     return 'color:#fbbf24;font-weight:700;';
+  return 'color:#f87171;font-weight:700;';
+}
+
+// ── DRAG AND DROP ─────────────────────────────────────────────────────────────
+function dragStart(e, pid) {
+  dragPlayerId = pid;
+  e.dataTransfer.effectAllowed = 'copy';
+  e.currentTarget.classList.add('dragging');
+}
+function dragEnd(e) { e.currentTarget.classList.remove('dragging'); }
+
+function slotDragOver(e, key) {
+  e.preventDefault();
+  const p = [...allHitters,...allPitchers].find(p=>p.player_id===dragPlayerId);
+  const s = LINEUP_SLOTS.find(s=>s.key===key);
+  const ok = p && s && s.accepts.some(a=>p.positions.includes(a));
+  e.currentTarget.classList.remove('drag-over','drag-invalid');
+  e.currentTarget.classList.add(ok ? 'drag-over' : 'drag-invalid');
+}
+function slotDragLeave(e) { e.currentTarget.classList.remove('drag-over','drag-invalid'); }
+function dropPlayer(e, key) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over','drag-invalid');
+  if (!dragPlayerId) return;
+  const player  = [...allHitters,...allPitchers].find(p=>p.player_id===dragPlayerId);
+  if (!player) return;
+  const slotDef = LINEUP_SLOTS.find(s=>s.key===key);
+  if (!slotDef.accepts.some(a=>player.positions.includes(a))) {
+    showToast(`${player.name} can't play ${slotDef.label}`); dragPlayerId=null; return;
+  }
+  // Move from existing slot if needed
+  const existKey = Object.keys(lineup).find(k=>lineup[k]?.player_id===player.player_id);
+  if (existKey && existKey!==key) { lineup[existKey]=null; renderSlot(existKey); }
+  lineup[key]=player; renderSlot(key); updateTotals(); renderPool();
+  dragPlayerId=null;
+}
+
+// ── LINEUP MANAGEMENT ────────────────────────────────────────────────────────
+function buildSlots() {
+  document.getElementById('lineup-slots').innerHTML = LINEUP_SLOTS.map(s=>`
+    <div class="lineup-slot" id="slot-${s.key}" data-key="${s.key}"
+      ondragover="slotDragOver(event,'${s.key}')"
+      ondragleave="slotDragLeave(event)"
+      ondrop="dropPlayer(event,'${s.key}')">
+      <span class="slot-pos">${s.label}</span>
+      <span class="slot-empty">Click or drag player</span>
+    </div>`).join('');
+}
+
+function addToLineup(pid) {
+  const player = [...allHitters,...allPitchers].find(p=>p.player_id===pid);
+  if (!player) return;
+  if (Object.values(lineup).some(p=>p?.player_id===pid)) {
+    showToast(`${player.name} is already in your lineup`); return;
+  }
+  for (const s of LINEUP_SLOTS) {
+    if (lineup[s.key]) continue;
+    if (s.accepts.some(a=>player.positions.includes(a))) {
+      lineup[s.key]=player; renderSlot(s.key); updateTotals(); renderPool(); return;
+    }
+  }
+  showToast(`No open ${player.positions.join('/')} slot`);
+}
+
+function removeFromSlot(key) { lineup[key]=null; renderSlot(key); updateTotals(); renderPool(); }
+
+function renderSlot(key) {
+  const def = LINEUP_SLOTS.find(s=>s.key===key);
+  const el  = document.getElementById('slot-'+key);
+  const p   = lineup[key];
+  el.setAttribute('ondragover',  `slotDragOver(event,'${key}')`);
+  el.setAttribute('ondragleave', 'slotDragLeave(event)');
+  el.setAttribute('ondrop',      `dropPlayer(event,'${key}')`);
+  if (!p) {
+    el.className='lineup-slot';
+    el.innerHTML=`<span class="slot-pos">${def.label}</span><span class="slot-empty">Click or drag player</span>`;
+    return;
+  }
+  const tc  = abbrColor(p.team);
+  const tag = p.team ? `<span class="team-tag" style="background:${tc.bg};color:${tc.tx};font-size:9px;padding:1px 3px;">${p.team}</span>` : '';
+  el.className='lineup-slot filled';
+  el.innerHTML=`
+    <span class="slot-pos">${def.label}</span>
+    <div class="slot-player">
+      ${tag}
+      ${p.lineup_confirmed?'<span style="color:var(--hi);font-size:9px;">✓</span>':p.in_lineup?'<span style="color:var(--mid);font-size:9px;">~</span>':''}
+      <span class="slot-pname">${p.name}</span>
+    </div>
+    <span class="slot-psal">$${p.salary.toLocaleString()}</span>
+    <span class="slot-pproj">${p.proj_dk_pts!=null?p.proj_dk_pts.toFixed(1)+' pts':'—'}</span>
+    <span class="slot-remove" onclick="removeFromSlot('${key}')" title="Remove">×</span>`;
+}
+
+function updateTotals() {
+  const filled   = Object.values(lineup).filter(Boolean);
+  const totSal   = filled.reduce((s,p)=>s+(p.salary||0),0);
+  const totProj  = filled.reduce((s,p)=>s+(p.proj_dk_pts||0),0);
+  const rem      = CAP - totSal;
+  const pct      = Math.min((totSal/CAP)*100,100);
+  const over     = totSal > CAP;
+  document.getElementById('tot-salary').textContent  = '$'+totSal.toLocaleString();
+  document.getElementById('tot-salary').className    = 'total-val '+(over?'over':totSal>0?'ok':'neutral');
+  document.getElementById('sal-remaining').textContent = over?`$${(totSal-CAP).toLocaleString()} over cap`:`$${rem.toLocaleString()} remaining`;
+  document.getElementById('tot-proj').textContent    = totProj.toFixed(1)+' pts';
+  document.getElementById('tot-proj').className      = 'total-val '+(totProj>0?'ok':'neutral');
+  document.getElementById('tot-filled').textContent  = `${filled.length}/10`;
+  document.getElementById('tot-filled').className    = 'total-val '+(filled.length===10?'ok':'neutral');
+  document.getElementById('sal-bar').style.width     = pct+'%';
+  document.getElementById('sal-bar').style.background = over?'var(--lo)':pct>85?'var(--mid)':'var(--hi)';
+}
+
+function clearLineup() { lineup={}; buildSlots(); updateTotals(); renderPool(); }
+
+// ── SAVE / LOAD ──────────────────────────────────────────────────────────────
+function saveLineup() {
+  if (Object.values(lineup).filter(Boolean).length < 10) { showToast('Fill all 10 slots before saving'); return; }
+  const name    = document.getElementById('lineup-name').value.trim() || 'Lineup '+new Date().toLocaleTimeString();
+  const totProj = Object.values(lineup).filter(Boolean).reduce((s,p)=>s+(p.proj_dk_pts||0),0);
+  const saved   = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
+  saved.unshift({name, totProj, lineup:{...lineup}, ts:Date.now()});
+  localStorage.setItem('hbh_lineups', JSON.stringify(saved.slice(0,20)));
+  renderSavedList(); showToast('Lineup saved!');
+}
+
+function renderSavedList() {
+  const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
+  const list  = document.getElementById('saved-list');
+  if (!saved.length) { list.innerHTML='<div style="font-size:11px;color:var(--muted);padding:4px 0;">No saved lineups.</div>'; return; }
+  list.innerHTML = saved.map((s,i)=>`
+    <div class="saved-item" onclick="loadSavedLineup(${i})">
+      <span class="saved-item-name">${s.name}</span>
+      <span class="saved-item-pts">${(s.totProj||s.totalProj||0).toFixed(1)} pts</span>
+      <span class="saved-item-del" onclick="deleteSavedLineup(event,${i})" title="Delete">×</span>
+    </div>`).join('');
+}
+
+function loadSavedLineup(idx) {
+  const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
+  if (!saved[idx]) return;
+  lineup = {...saved[idx].lineup};
+  document.getElementById('lineup-name').value = saved[idx].name;
+  LINEUP_SLOTS.forEach(s=>renderSlot(s.key));
+  updateTotals(); renderPool();
+}
+
+function deleteSavedLineup(e, idx) {
+  e.stopPropagation();
+  const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
+  saved.splice(idx,1);
+  localStorage.setItem('hbh_lineups', JSON.stringify(saved));
+  renderSavedList();
+}
+
+// ── CSV EXPORT ───────────────────────────────────────────────────────────────
+function exportCSV() {
+  if (Object.values(lineup).filter(Boolean).length < 10) { showToast('Fill all 10 slots to export'); return; }
+  const csv = 'P,P,C,1B,2B,3B,SS,OF,OF,OF\n' +
+    LINEUP_SLOTS.map(s=>{ const p=lineup[s.key]; return p?`"${p.name} (${p.team})"`:'"" '; }).join(',');
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([csv],{type:'text/csv'})),
+    download: (document.getElementById('lineup-name').value.trim()||'lineup')+'.csv',
+  });
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+// ── HES ──────────────────────────────────────────────────────────────────────
+function computeHES(pf, wx) {
+  let s=5; const p=pf||{};
+  const basic=parseFloat(p.basic_factor)||100, hr=parseFloat(p.hr_factor)||100;
+  const wc=parseFloat(p.woba_con)||100, xwc=parseFloat(p.xwoba_con)||100;
+  const bb=parseFloat(p.bb_factor)||100, k=parseFloat(p.k_factor)||100;
+  s+=(xwc*.55+wc*.45-100)/18; s+=(hr-100)/20; s+=(bb-k)/80; s+=(basic-100)/50;
+  const w=wx||{}, temp=parseFloat(w.temp_f)||72, wind=parseFloat(w.wind_speed)||0;
+  const dir=(w.wind_dir||'').toUpperCase();
+  if(temp<45) s-=1.2; else if(temp<55) s-=.6; else if(temp>80) s+=.3;
+  const out=dir.includes('OUT')||dir.includes('OUTWARD');
+  const inw=dir.includes('IN')&&!out;
+  if(wind>10) s+=out?wind/14:inw?-(wind/14):0;
+  if(parseFloat(w.precip_pct)>70) s-=.5;
+  return { score:Math.max(1,Math.min(10,s)) };
+}
+
+// ── SP GRADE ─────────────────────────────────────────────────────────────────
+function computeSpGrade(pd) {
+  if(!pd) return null;
+  let score=0, w=0;
+  const add=(v,hi,mid,lo,wt,up)=>{ if(v==null) return; const n=parseFloat(v);
+    score+=(up?n>=hi?10:n>=mid?7:n>=lo?4:1:n<=hi?10:n<=mid?7:n<=lo?4:1)*wt; w+=wt; };
+  const toD=v=>v==null?null:v>1?v/100:v;
+  add(pd.xfip,2.80,3.50,4.50,3,false); add(pd.siera,3.00,3.80,4.80,2,false);
+  add(toD(pd.k_pct),.280,.220,.170,2,true); add(toD(pd.bb_pct),.060,.090,.120,2,false);
+  add(toD(pd.swstr_pct),.135,.110,.085,1,true); add(pd.stuff_plus,110,100,90,1,true);
+  if(!w) return null;
+  const a=score/w;
+  return a>=9.2?{letter:'A+',cls:'g-A'}:a>=8.0?{letter:'A',cls:'g-A'}:
+         a>=6.8?{letter:'B+',cls:'g-B'}:a>=5.6?{letter:'B',cls:'g-B'}:
+         a>=4.4?{letter:'C+',cls:'g-C'}:a>=3.2?{letter:'C',cls:'g-C'}:
+         a>=2.0?{letter:'D',cls:'g-D'}:{letter:'F',cls:'g-D'};
+}
+
+// PMS = Pitcher Matchup Score (1–10). Higher = better matchup for hitter.
+// Inverts SP grade: elite pitcher (A+) → low PMS, bad pitcher (F) → high PMS.
+// Adjusted by HES (park/weather environment).
+function computeSimplePMS(spInfo, hesScore) {
+  if (!spInfo?.grade) return null;
+  const gradeBase = {'A+':1,'A':2,'B+':3,'B':4,'B-':5,'C+':6,'C':7,'C-':7,'D':8,'F':9};
+  const base = gradeBase[spInfo.grade.letter] ?? 5;
+  const hesAdj = hesScore != null ? (hesScore - 5) * 0.2 : 0;
+  return Math.min(10, Math.max(1, Math.round(base + hesAdj)));
+}
+
+// ── UTILS ────────────────────────────────────────────────────────────────────
+function parseDateFromSlate(slate) {
+  if(!slate) return null;
+  const m=slate.match(/\b(\d{4}-\d{2}-\d{2})\b/); if(m) return m[1];
+  const m2=slate.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
+  if(m2) return `${m2[3]}-${m2[1].padStart(2,'0')}-${m2[2].padStart(2,'0')}`;
+  return null;
+}
+function formatDate(d) {
+  if(!d) return '—';
+  const [y,m,day]=d.split('-');
+  return `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m-1]} ${+day}, ${y}`;
+}
+function showToast(msg) {
+  let t=document.getElementById('hbh-toast');
+  if(!t){ t=document.createElement('div'); t.id='hbh-toast';
+    t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--s3);border:1px solid var(--border2);color:var(--text2);font-family:Barlow Condensed,sans-serif;font-size:13px;font-weight:600;padding:8px 18px;border-radius:6px;z-index:999;pointer-events:none;opacity:0;transition:opacity .2s;white-space:nowrap;';
+    document.body.appendChild(t); }
+  t.textContent=msg; t.style.opacity='1';
+  clearTimeout(t._tid); t._tid=setTimeout(()=>{ t.style.opacity='0'; },2200);
+}
+</script>
+</body>
+</html>
