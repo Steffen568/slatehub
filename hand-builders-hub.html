@@ -786,6 +786,7 @@ async function loadPlayerPool(date, slate) {
 
     allPitchers.push({
       player_id:        proj.player_id,
+      dk_id:            salRow?.player_id || null,  // DK player ID for CSV export
       name,
       positions:        ['SP'],
       salary:           salRow?.salary || null,
@@ -1270,7 +1271,7 @@ function renderSlot(key) {
       ${p.lineup_confirmed?'<span style="color:var(--hi);font-size:9px;">✓</span>':p.in_lineup?'<span style="color:var(--mid);font-size:9px;">~</span>':''}
       <span class="slot-pname">${p.name}</span>
     </div>
-    <span class="slot-psal">$${p.salary.toLocaleString()}</span>
+    <span class="slot-psal">${p.salary != null ? '$'+p.salary.toLocaleString() : '—'}</span>
     <span class="slot-pproj">${p.proj_dk_pts!=null?p.proj_dk_pts.toFixed(1)+' pts':'—'}</span>
     <span class="slot-remove" onclick="removeFromSlot('${key}')" title="Remove">×</span>`;
 }
@@ -1339,7 +1340,7 @@ function deleteSavedLineup(e, idx) {
 function exportCSV() {
   if (Object.values(lineup).filter(Boolean).length < 10) { showToast('Fill all 10 slots to export'); return; }
   const csv = 'P,P,C,1B,2B,3B,SS,OF,OF,OF\n' +
-    LINEUP_SLOTS.map(s=>{ const p=lineup[s.key]; return p?`"${p.name} (${p.team})"`:'"" '; }).join(',');
+    LINEUP_SLOTS.map(s=>{ const p=lineup[s.key]; const id=p?.dk_id||p?.player_id; return p?`${p.name} (${id})`:''; }).join(',');
   const a = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(new Blob([csv],{type:'text/csv'})),
     download: (document.getElementById('lineup-name').value.trim()||'lineup')+'.csv',
