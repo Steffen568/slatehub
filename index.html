@@ -3587,6 +3587,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     <div class="sec-body">
       <div id="signalChipsTop" class="chips" style="margin-bottom:12px;"></div>
       <div id="signalCardsBottom"></div>
+      <div id="spProjBreakdown"></div>
     </div>
   </div>
 
@@ -6229,6 +6230,8 @@ function clearSPPanel() {
 
   const spProjEl = document.getElementById('spProjDisplay');
   if (spProjEl) { spProjEl.style.display = 'none'; spProjEl.innerHTML = ''; }
+  const spProjBreakdown = document.getElementById('spProjBreakdown');
+  if (spProjBreakdown) spProjBreakdown.innerHTML = '';
 
   const todayBadge = document.getElementById('splitsTodayBadge');
   if (todayBadge) { todayBadge.style.display = 'none'; todayBadge.textContent = ''; }
@@ -6515,6 +6518,9 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
       spProjEl.style.display = 'none';
     }
   }
+
+  // Render projection breakdown in signals section
+  renderPitcherProjBreakdown(projData);
 
   if (!data || error) {
     console.log('No stats for pitcher', spId, spName, error);
@@ -9348,6 +9354,137 @@ function updateSpGradeBox(pd) {
 }
 
 // Reads _activePd, _activeSplits, _activeArsenal, _activeWeather
+// ── PITCHER PROJECTION BREAKDOWN ─────────────────────────────────────────────
+function normalSample(mu, sigma) {
+  // Box-Muller transform
+  const u = 1 - Math.random(), v = Math.random();
+  return mu + sigma * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function simulateDKPitcherGame(p) {
+  const projIP  = p.proj_ip   || 5.1;
+  const projKS  = p.proj_ks   || 0;
+  const projER  = p.proj_er   || 0;
+  const winProb = p.win_prob  || 0;
+  // IP varies ±~1 inning (normal), floor at 0
+  const ip = Math.max(0, normalSample(projIP, 1.1));
+  const scale = projIP > 0 ? ip / projIP : 1;
+  const ks  = poissonSample(projKS * scale);
+  const er  = poissonSample(projER * scale);
+  const win = Math.random() < winProb ? 1 : 0;
+  return ip * 2.25 + ks * 2.0 - er * 2.0 + win * 4.0;
+}
+
+function renderPitcherProjBreakdown(projData) {
+  const el = document.getElementById('spProjBreakdown');
+  if (!el) return;
+  if (!projData || projData.proj_dk_pts == null) { el.innerHTML = ''; return; }
+
+  const p   = projData;
+  const f1  = v => Number(v).toFixed(1);
+  const f2  = v => (v != null ? Number(v).toFixed(2) : '—');
+
+  // ── Monte Carlo (4 000 sims) ────────────────────────────────────────────────
+  const N = 4000;
+  const outcomes = [];
+  for (let i = 0; i < N; i++) outcomes.push(simulateDKPitcherGame(p));
+  outcomes.sort((a, b) => a - b);
+  const pct  = q => outcomes[Math.floor(q * N)] ?? 0;
+  const p10  = pct(0.10);
+  const p25  = pct(0.25);
+  const p50  = pct(0.50);
+  const p75  = pct(0.75);
+  const p90  = pct(0.90);
+  const mean = p.proj_dk_pts;
+
+  // ── Percentile strip ────────────────────────────────────────────────────────
+  const stripMax = Math.max(p90 * 1.15, mean * 1.6, 20);
+  const sp = v => Math.min((v / stripMax) * 100, 99.5).toFixed(1);
+  const nodes = [
+    { v: p10,  label: 'P10',  color: '#94a3b8' },
+    { v: p50,  label: 'Med',  color: '#60a5fa' },
+    { v: mean, label: 'Proj', color: '#4ade80' },
+    { v: p90,  label: 'P90',  color: '#fbbf24' },
+  ];
+
+  // ── Per-action pts breakdown ─────────────────────────────────────────────────
+  const ipPts  = (p.proj_ip  || 0) * 2.25;
+  const kPts   = (p.proj_ks  || 0) * 2.0;
+  const erPts  = (p.proj_er  || 0) * 2.0;  // will be negative
+  const winPts = (p.win_prob || 0) * 4.0;
+  const actions = [
+    { label: 'Innings Pitched', rate: f1(p.proj_ip  ?? 0), mult: '×2.25', pts:  ipPts,  pos: true  },
+    { label: 'Strikeouts',      rate: f1(p.proj_ks  ?? 0), mult: '×2',    pts:  kPts,   pos: true  },
+    { label: 'Earned Runs',     rate: f2(p.proj_er  ?? 0), mult: '×−2',   pts: -erPts,  pos: false },
+    { label: 'Win (prob)',       rate: f2(p.win_prob ?? 0), mult: '×4',    pts:  winPts, pos: true  },
+  ];
+
+  el.innerHTML = `
+  <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#fb923c;margin-bottom:10px;">Projection Breakdown</div>
+
+    <!-- Header cards -->
+    <div style="display:flex;gap:6px;margin-bottom:14px;">
+      <div style="flex:1;background:rgba(74,222,128,.10);border:1px solid rgba(74,222,128,.22);border-radius:6px;padding:8px;text-align:center;">
+        <div style="font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#4ade80;margin-bottom:2px;">Projection</div>
+        <div style="font-size:17px;font-weight:700;color:#86efac;">${f1(mean)}</div>
+        <div style="font-size:8px;color:var(--muted);">mean · DK pts</div>
+      </div>
+      <div style="flex:1;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.18);border-radius:6px;padding:8px;text-align:center;">
+        <div style="font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#60a5fa;margin-bottom:2px;">Median</div>
+        <div style="font-size:17px;font-weight:700;color:#93c5fd;">${f1(p50)}</div>
+        <div style="font-size:8px;color:var(--muted);">P50 · DK pts</div>
+      </div>
+      <div style="flex:1;background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.18);border-radius:6px;padding:8px;text-align:center;">
+        <div style="font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#fbbf24;margin-bottom:2px;">Ceiling</div>
+        <div style="font-size:17px;font-weight:700;color:#fcd34d;">${f1(p90)}</div>
+        <div style="font-size:8px;color:var(--muted);">P90 · DK pts</div>
+      </div>
+    </div>
+
+    <!-- Percentile strip -->
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:8px;">Outcome Range</div>
+    <div style="position:relative;height:4px;background:linear-gradient(to right,rgba(148,163,184,.25),rgba(74,222,128,.4),rgba(251,191,36,.5));border-radius:2px;margin:0 4px 38px;">
+      ${nodes.map(d => `
+        <div style="position:absolute;left:${sp(d.v)}%;top:50%;transform:translate(-50%,-50%);">
+          <div style="width:9px;height:9px;border-radius:50%;background:${d.color};border:2px solid #141920;"></div>
+          <div style="position:absolute;top:12px;left:50%;transform:translateX(-50%);text-align:center;white-space:nowrap;">
+            <div style="font-size:8px;font-weight:700;color:${d.color};">${d.label}</div>
+            <div style="font-size:9px;font-weight:600;color:var(--text2);">${f1(d.v)}</div>
+          </div>
+        </div>`).join('')}
+    </div>
+
+    <!-- Histogram -->
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:4px;">
+      Outcome Distribution <span style="font-size:8px;font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted);">(${N.toLocaleString()} simulations)</span>
+    </div>
+    <canvas id="sp-proj-canvas" style="display:block;border-radius:4px;background:rgba(255,255,255,.02);margin-bottom:12px;"></canvas>
+
+    <!-- Pts by action -->
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid var(--border);">Pts by Action</div>
+    <div style="display:grid;grid-template-columns:1fr 44px 44px 48px;gap:3px 6px;align-items:center;margin-bottom:8px;">
+      <div style="font-size:8px;font-weight:700;text-transform:uppercase;color:var(--muted);">Action</div>
+      <div style="font-size:8px;font-weight:700;text-transform:uppercase;color:var(--muted);text-align:right;">Proj</div>
+      <div style="font-size:8px;font-weight:700;text-transform:uppercase;color:var(--muted);text-align:center;">Mult</div>
+      <div style="font-size:8px;font-weight:700;text-transform:uppercase;color:var(--muted);text-align:right;">Exp Pts</div>
+      ${actions.map(a => `
+        <div style="font-size:11px;font-weight:600;color:var(--text2);padding:1px 0;">${a.label}</div>
+        <div style="font-size:11px;color:var(--muted);text-align:right;">${a.rate}</div>
+        <div style="font-size:11px;color:var(--muted);text-align:center;">${a.mult}</div>
+        <div style="font-size:12px;font-weight:700;color:${a.pos ? (Math.abs(a.pts) >= 1 ? '#4ade80' : 'var(--text)') : '#f87171'};text-align:right;">${a.pos ? '+' : '−'}${f2(Math.abs(a.pts))}</div>`).join('')}
+    </div>
+    <div style="display:flex;justify-content:space-between;padding-top:6px;border-top:1px solid var(--border);font-size:10px;">
+      <span style="color:var(--muted);">Floor &nbsp;·&nbsp; Ceiling</span>
+      <span style="color:var(--text2);"><span style="color:#94a3b8;">${f1(p.proj_floor ?? p10)}</span> &nbsp;·&nbsp; <span style="color:#fbbf24;">${f1(p.proj_ceiling ?? p90)}</span></span>
+    </div>
+  </div>`;
+
+  requestAnimationFrame(() => {
+    drawDKHistogram(document.getElementById('sp-proj-canvas'), outcomes, mean, p50);
+  });
+}
+
 // Called whenever any of those update. Max 6 signals, priority-sorted.
 // ══════════════════════════════════════════════════════════════
 function renderPitcherSignals() {
