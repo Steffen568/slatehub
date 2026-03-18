@@ -3528,6 +3528,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
           <span class="sp-hand-badge">—</span>
         </div>
         <div class="sp-name">Kris Bubic</div>
+        <div id="spProjDisplay" style="display:none;margin-top:6px;font-family:'Barlow Condensed',sans-serif;"></div>
       </div>
       <div class="grade-wrap">
         <div class="grade-box g-C" id="spGradeBox">—</div>
@@ -6226,6 +6227,9 @@ function clearSPPanel() {
     handEl.style.background = 'rgba(255,255,255,.06)';
   }
 
+  const spProjEl = document.getElementById('spProjDisplay');
+  if (spProjEl) { spProjEl.style.display = 'none'; spProjEl.innerHTML = ''; }
+
   const todayBadge = document.getElementById('splitsTodayBadge');
   if (todayBadge) { todayBadge.style.display = 'none'; todayBadge.textContent = ''; }
 
@@ -6473,15 +6477,44 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
   loadArsenal(spId);
   loadPitcherSplits(spId);
 
-  const [{ data, error }, { data: salaryData }] = await Promise.all([
+  const [{ data, error }, { data: salaryData }, { data: projData }] = await Promise.all([
     activePitcherYear === '3yr'
       ? sb.from('pitcher_stats').select('*').eq('player_id', spId).in('season', [2023, 2024, 2025])
       : sb.from('pitcher_stats').select('*').eq('player_id', spId).eq('season', parseInt(activePitcherYear)).maybeSingle(),
     sb.from('dk_salaries')
       .select('salary, position, dk_slate')
       .eq('player_id', spId)
-      .maybeSingle()
+      .maybeSingle(),
+    sb.from('player_projections')
+      .select('proj_dk_pts, proj_floor, proj_ceiling, proj_ip, proj_ks, proj_er, win_prob')
+      .eq('player_id', spId)
+      .eq('game_date', activeDate)
+      .maybeSingle(),
   ]);
+
+  // Update projection display in hero
+  const spProjEl = document.getElementById('spProjDisplay');
+  if (spProjEl) {
+    if (projData?.proj_dk_pts != null) {
+      const pts   = projData.proj_dk_pts.toFixed(1);
+      const floor = projData.proj_floor   != null ? projData.proj_floor.toFixed(1)   : null;
+      const ceil  = projData.proj_ceiling != null ? projData.proj_ceiling.toFixed(1) : null;
+      const ip    = projData.proj_ip  != null ? projData.proj_ip.toFixed(1)  : null;
+      const ks    = projData.proj_ks  != null ? projData.proj_ks.toFixed(1)  : null;
+      const er    = projData.proj_er  != null ? projData.proj_er.toFixed(2)  : null;
+      const win   = projData.win_prob != null ? (projData.win_prob * 100).toFixed(0) + '%' : null;
+      const range = floor && ceil ? `<span style="color:var(--muted);font-size:11px;margin-left:4px;">[${floor}–${ceil}]</span>` : '';
+      const stats = [ip&&`IP ${ip}`, ks&&`K ${ks}`, er&&`ER ${er}`, win&&`W ${win}`].filter(Boolean).join('  ');
+      spProjEl.innerHTML =
+        `<span style="font-size:22px;font-weight:800;color:var(--hi);">${pts}</span>` +
+        `<span style="font-size:13px;font-weight:600;color:var(--muted);margin-left:3px;">pts</span>` +
+        range +
+        (stats ? `<div style="font-size:11px;color:var(--muted);margin-top:2px;">${stats}</div>` : '');
+      spProjEl.style.display = 'block';
+    } else {
+      spProjEl.style.display = 'none';
+    }
+  }
 
   if (!data || error) {
     console.log('No stats for pitcher', spId, spName, error);
