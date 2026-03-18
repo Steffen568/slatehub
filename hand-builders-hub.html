@@ -135,14 +135,33 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;heig
 
 /* ── SAVED LINEUPS ───────────────────────────────────────────────────────── */
 .saved-section{margin-top:8px;padding-top:7px;border-top:1px solid var(--border);}
-.saved-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:5px;}
-.saved-list{display:flex;flex-direction:column;gap:3px;max-height:100px;overflow-y:auto;}
-.saved-item{display:flex;align-items:center;gap:5px;padding:4px 7px;border-radius:4px;border:1px solid var(--border);background:var(--s2);cursor:pointer;font-size:11px;}
-.saved-item:hover{border-color:var(--border2);background:var(--s3);}
+.saved-tabs{display:flex;gap:2px;margin-bottom:6px;}
+.saved-tab{flex:1;padding:3px 0;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--muted);background:var(--s2);border:1px solid var(--border);border-radius:3px;cursor:pointer;text-align:center;transition:all .12s;}
+.saved-tab.active{color:var(--text2);background:var(--s3);border-color:var(--border2);}
+.saved-list{display:flex;flex-direction:column;gap:3px;max-height:260px;overflow-y:auto;}
+.saved-item{border-radius:4px;border:1px solid var(--border);background:var(--s2);font-size:11px;overflow:hidden;}
+.saved-item-row{display:flex;align-items:center;gap:5px;padding:4px 7px;cursor:pointer;}
+.saved-item-row:hover{background:var(--s3);}
 .saved-item-name{flex:1;font-family:'Barlow Condensed',sans-serif;font-weight:600;color:var(--text2);}
 .saved-item-pts{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;color:var(--hi);}
+.saved-item-tog{color:var(--muted);font-size:10px;cursor:pointer;padding:1px 3px;transition:transform .15s;}
+.saved-item-tog.open{transform:rotate(180deg);}
 .saved-item-del{color:var(--muted);font-size:12px;cursor:pointer;transition:color .12s;padding:1px 3px;}
 .saved-item-del:hover{color:var(--lo);}
+.saved-item-players{display:none;padding:4px 7px 6px;border-top:1px solid var(--border);background:var(--bg);}
+.saved-item-players.open{display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;}
+.sip-row{display:flex;align-items:center;gap:4px;font-size:10px;}
+.sip-pos{font-size:8px;font-weight:700;padding:1px 3px;border-radius:2px;background:var(--s3);color:var(--muted);min-width:18px;text-align:center;}
+.sip-name{color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px;}
+.sip-pts{margin-left:auto;color:var(--hi);font-size:9px;font-weight:700;}
+/* Exposure tab */
+.exp-list{display:flex;flex-direction:column;gap:2px;max-height:260px;overflow-y:auto;}
+.exp-row{display:flex;align-items:center;gap:5px;padding:3px 6px;border-radius:3px;background:var(--s2);font-size:10px;}
+.exp-pos{font-size:8px;font-weight:700;padding:1px 3px;border-radius:2px;min-width:20px;text-align:center;}
+.exp-name{flex:1;font-family:'Barlow Condensed',sans-serif;font-weight:600;color:var(--text2);}
+.exp-bar-wrap{width:50px;height:5px;background:var(--border);border-radius:3px;overflow:hidden;}
+.exp-bar-fill{height:100%;border-radius:3px;background:var(--hi);}
+.exp-pct{font-weight:700;color:var(--hi);min-width:28px;text-align:right;font-family:'Barlow Condensed',sans-serif;}
 
 /* ── SUITE TOP NAV ──────────────────────────────────────────────────────────── */
 .sh-topnav{display:flex;align-items:stretch;background:#0a0d12;border-bottom:1px solid var(--border);height:52px;flex-shrink:0;z-index:100;}
@@ -241,8 +260,16 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;heig
         <button class="bld-btn" onclick="exportCSV()">↓ DK CSV</button>
       </div>
       <div class="saved-section">
-        <div class="saved-lbl">Saved Lineups</div>
-        <div class="saved-list" id="saved-list"></div>
+        <div class="saved-tabs">
+          <div class="saved-tab active" id="tab-saved" onclick="switchSavedTab('saved')">Saved Lineups</div>
+          <div class="saved-tab" id="tab-exposure" onclick="switchSavedTab('exposure')">Exposure</div>
+        </div>
+        <div id="panel-saved">
+          <div class="saved-list" id="saved-list"></div>
+        </div>
+        <div id="panel-exposure" style="display:none;">
+          <div class="exp-list" id="exp-list"></div>
+        </div>
       </div>
     </div>
   </section>
@@ -637,7 +664,7 @@ async function loadPlayerPool(date, slate) {
       : Promise.resolve([]),
     date && date !== 'all'
       ? sb.from('player_projections')
-          .select('player_id, full_name, team, game_pk, proj_dk_pts, proj_floor, proj_ceiling, proj_ip, proj_ks, proj_er, win_prob')
+          .select('player_id, full_name, team, game_pk, proj_dk_pts, proj_floor, proj_ceiling, proj_ip, proj_ks, proj_er, win_prob, stats_level')
           .eq('game_date', date)
           .eq('is_pitcher', true)
           .then(({ data }) => data || [])
@@ -800,10 +827,11 @@ async function loadPlayerPool(date, slate) {
       proj_floor:       proj.proj_floor   ?? null,
       proj_ceiling:     proj.proj_ceiling ?? null,
       proj_hr: null, proj_r: null, proj_rbi: null, proj_sb: null,
-      proj_ip:          proj.proj_ip  ?? null,
-      proj_ks:          proj.proj_ks  ?? null,
-      proj_er:          proj.proj_er  ?? null,
-      win_prob:         proj.win_prob ?? null,
+      proj_ip:          proj.proj_ip    ?? null,
+      proj_ks:          proj.proj_ks    ?? null,
+      proj_er:          proj.proj_er    ?? null,
+      win_prob:         proj.win_prob   ?? null,
+      stats_level:      proj.stats_level ?? 'MLB',
       wrc_plus: null, woba: null, iso: null,
       sp_name: null, sp_grade: null,
       hes:              hesInfo?.score ?? null,
@@ -1141,6 +1169,11 @@ function renderPitcherChip(p, inL) {
       `${pIP!=null?'IP '+pIP:''}${pKS!=null?' K '+pKS:''}${pER!=null?' ER '+pER:''}${pWin!=null?' W '+pWin:''}</span>`
     : '';
 
+  // MiLB sample size badge
+  const milbBadge = (p.stats_level && p.stats_level !== 'MLB')
+    ? `<span style="font-size:8px;padding:1px 4px;border-radius:3px;font-weight:700;background:#78350f;color:#fcd34d;letter-spacing:.5px;">${p.stats_level}</span>`
+    : '';
+
   const oppAb = p.opp_team_abbr || '—';
   const oppTc = p.opp_team_abbr ? abbrColor(p.opp_team_abbr) : null;
   const oppTag = oppTc
@@ -1152,7 +1185,7 @@ function renderPitcherChip(p, inL) {
   return `<div class="pc${inL?' in-lineup':''}" draggable="true"
     ondragstart="dragStart(event,${p.player_id})" ondragend="dragEnd(event)"
     onclick="addToLineup(${p.player_id})">
-    <div class="pc-row1">${teamTag}${badge}
+    <div class="pc-row1">${teamTag}${badge}${milbBadge}
       <span class="pc-name">${p.name}</span>
       <span class="pc-pos">SP</span>
     </div>
@@ -1307,16 +1340,97 @@ function saveLineup() {
   renderSavedList(); showToast('Lineup saved!');
 }
 
+const POS_COLORS = {
+  SP:{ bg:'#1e3a5f', tx:'#60a5fa' }, C:{ bg:'#1a3a2a', tx:'#4ade80' },
+  '1B':{ bg:'#1a3a2a', tx:'#4ade80' }, '2B':{ bg:'#1a3a2a', tx:'#4ade80' },
+  '3B':{ bg:'#1a3a2a', tx:'#4ade80' }, SS:{ bg:'#1a3a2a', tx:'#4ade80' },
+  OF:{ bg:'#3a1f00', tx:'#fb923c' },
+};
+function posColor(pos) { return POS_COLORS[pos] || { bg:'var(--s3)', tx:'var(--muted)' }; }
+
+let _activeSavedTab = 'saved';
+
+function switchSavedTab(tab) {
+  _activeSavedTab = tab;
+  document.getElementById('tab-saved').classList.toggle('active', tab === 'saved');
+  document.getElementById('tab-exposure').classList.toggle('active', tab === 'exposure');
+  document.getElementById('panel-saved').style.display    = tab === 'saved'     ? '' : 'none';
+  document.getElementById('panel-exposure').style.display = tab === 'exposure'  ? '' : 'none';
+  if (tab === 'exposure') renderExposure();
+}
+
 function renderSavedList() {
   const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
   const list  = document.getElementById('saved-list');
   if (!saved.length) { list.innerHTML='<div style="font-size:11px;color:var(--muted);padding:4px 0;">No saved lineups.</div>'; return; }
-  list.innerHTML = saved.map((s,i)=>`
-    <div class="saved-item" onclick="loadSavedLineup(${i})">
-      <span class="saved-item-name">${s.name}</span>
-      <span class="saved-item-pts">${(s.totProj||s.totalProj||0).toFixed(1)} pts</span>
-      <span class="saved-item-del" onclick="deleteSavedLineup(event,${i})" title="Delete">×</span>
-    </div>`).join('');
+  list.innerHTML = saved.map((s, i) => {
+    const pts = (s.totProj || s.totalProj || 0).toFixed(1);
+    // Build player rows for expand panel
+    const playerRows = LINEUP_SLOTS.map(slot => {
+      const p = s.lineup?.[slot.key];
+      if (!p) return '';
+      const pc = posColor(slot.pos);
+      const ppts = p.proj_dk_pts != null ? p.proj_dk_pts.toFixed(1) : '';
+      return `<div class="sip-row">
+        <span class="sip-pos" style="background:${pc.bg};color:${pc.tx};">${slot.pos}</span>
+        <span class="sip-name">${p.name || '—'}</span>
+        ${ppts ? `<span class="sip-pts">${ppts}</span>` : ''}
+      </div>`;
+    }).join('');
+    return `
+    <div class="saved-item" id="saved-item-${i}">
+      <div class="saved-item-row" onclick="loadSavedLineup(${i})">
+        <span class="saved-item-name">${s.name}</span>
+        <span class="saved-item-pts">${pts} pts</span>
+        <span class="saved-item-tog" id="saved-tog-${i}" onclick="toggleSavedExpand(event,${i})" title="View players">▼</span>
+        <span class="saved-item-del" onclick="deleteSavedLineup(event,${i})" title="Delete">×</span>
+      </div>
+      <div class="saved-item-players" id="saved-players-${i}">${playerRows}</div>
+    </div>`;
+  }).join('');
+  // Re-render exposure if that tab is active
+  if (_activeSavedTab === 'exposure') renderExposure();
+}
+
+function toggleSavedExpand(e, i) {
+  e.stopPropagation();
+  const panel = document.getElementById(`saved-players-${i}`);
+  const tog   = document.getElementById(`saved-tog-${i}`);
+  const open  = panel.classList.toggle('open');
+  tog.classList.toggle('open', open);
+}
+
+function renderExposure() {
+  const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
+  const el    = document.getElementById('exp-list');
+  if (!saved.length) { el.innerHTML='<div style="font-size:11px;color:var(--muted);padding:4px 0;">No saved lineups to analyze.</div>'; return; }
+
+  const total = saved.length;
+  // Count appearances per player
+  const counts = {}; // player_id → {name, pos, pts, count}
+  saved.forEach(s => {
+    LINEUP_SLOTS.forEach(slot => {
+      const p = s.lineup?.[slot.key];
+      if (!p) return;
+      const id = p.player_id || p.dk_id;
+      if (!counts[id]) counts[id] = { name: p.name, pos: slot.pos, pts: p.proj_dk_pts, count: 0 };
+      counts[id].count++;
+    });
+  });
+
+  const rows = Object.values(counts).sort((a,b) => b.count - a.count || (b.pts||0) - (a.pts||0));
+  el.innerHTML = rows.map(r => {
+    const pct  = (r.count / total * 100).toFixed(0);
+    const pc   = posColor(r.pos);
+    const pcts = pct > 66 ? '#4ade80' : pct > 33 ? '#fbbf24' : 'var(--hi)';
+    return `<div class="exp-row">
+      <span class="exp-pos" style="background:${pc.bg};color:${pc.tx};">${r.pos}</span>
+      <span class="exp-name">${r.name}</span>
+      <div class="exp-bar-wrap"><div class="exp-bar-fill" style="width:${pct}%;background:${pcts};"></div></div>
+      <span class="exp-pct" style="color:${pcts};">${pct}%</span>
+      <span style="font-size:9px;color:var(--muted);">${r.count}/${total}</span>
+    </div>`;
+  }).join('');
 }
 
 function loadSavedLineup(idx) {
@@ -1334,6 +1448,7 @@ function deleteSavedLineup(e, idx) {
   saved.splice(idx,1);
   localStorage.setItem('hbh_lineups', JSON.stringify(saved));
   renderSavedList();
+  if (_activeSavedTab === 'exposure') renderExposure();
 }
 
 // ── CSV EXPORT ───────────────────────────────────────────────────────────────
