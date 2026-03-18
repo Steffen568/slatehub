@@ -263,6 +263,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;heig
         <div class="saved-tabs">
           <div class="saved-tab active" id="tab-saved" onclick="switchSavedTab('saved')">Saved Lineups</div>
           <div class="saved-tab" id="tab-exposure" onclick="switchSavedTab('exposure')">Exposure</div>
+          <div class="saved-tab" style="flex:0;padding:3px 8px;color:var(--hi);border-color:var(--hi);" onclick="exportSavedCSV()" title="Export all saved lineups to DK CSV">↓ CSV</div>
         </div>
         <div id="panel-saved">
           <div class="saved-list" id="saved-list"></div>
@@ -1459,6 +1460,24 @@ function exportCSV() {
   const a = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(new Blob([csv],{type:'text/csv'})),
     download: (document.getElementById('lineup-name').value.trim()||'lineup')+'.csv',
+  });
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+function exportSavedCSV() {
+  const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
+  if (!saved.length) { showToast('No saved lineups to export'); return; }
+  const rows = saved.map(s =>
+    LINEUP_SLOTS.map(sl => {
+      const p = s.lineup?.[sl.key];
+      const id = p?.dk_id || p?.player_id;
+      return p ? `${p.name} (${id})` : '';
+    }).join(',')
+  );
+  const csv = 'P,P,C,1B,2B,3B,SS,OF,OF,OF\n' + rows.join('\n');
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([csv], {type:'text/csv'})),
+    download: 'saved_lineups.csv',
   });
   a.click(); URL.revokeObjectURL(a.href);
 }
