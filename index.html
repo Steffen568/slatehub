@@ -3559,21 +3559,21 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     <div class="plus-trio">
       <div class="plus-card">
         <div class="plus-lbl">Stuff+</div>
-        <div class="plus-val" style="color:#a78bfa">104</div>
+        <div id="sp-stuff-plus-val" class="plus-val" style="color:#a78bfa">—</div>
         <div class="plus-sub">Pitch nastiness</div>
-        <div class="plus-bar"><div class="plus-fill" style="width:54%;background:#a78bfa"></div></div>
+        <div class="plus-bar"><div id="sp-stuff-plus-bar" class="plus-fill" style="width:50%;background:#a78bfa"></div></div>
       </div>
       <div class="plus-card">
         <div class="plus-lbl">Location+</div>
-        <div class="plus-val" style="color:#60a5fa">97</div>
+        <div id="sp-loc-plus-val" class="plus-val" style="color:#60a5fa">—</div>
         <div class="plus-sub">Command quality</div>
-        <div class="plus-bar"><div class="plus-fill" style="width:47%;background:#60a5fa"></div></div>
+        <div class="plus-bar"><div id="sp-loc-plus-bar" class="plus-fill" style="width:50%;background:#60a5fa"></div></div>
       </div>
       <div class="plus-card">
         <div class="plus-lbl">Pitching+</div>
-        <div class="plus-val" style="color:#34d399">101</div>
+        <div id="sp-pit-plus-val" class="plus-val" style="color:#34d399">—</div>
         <div class="plus-sub">Overall process</div>
-        <div class="plus-bar"><div class="plus-fill" style="width:51%;background:#34d399"></div></div>
+        <div class="plus-bar"><div id="sp-pit-plus-bar" class="plus-fill" style="width:50%;background:#34d399"></div></div>
       </div>
     </div>
   </div>
@@ -6233,6 +6233,14 @@ function clearSPPanel() {
   const spProjBreakdown = document.getElementById('spProjBreakdown');
   if (spProjBreakdown) spProjBreakdown.innerHTML = '';
 
+  // Reset plus trio to defaults
+  ['sp-stuff-plus', 'sp-loc-plus', 'sp-pit-plus'].forEach(id => {
+    const v = document.getElementById(id + '-val');
+    const b = document.getElementById(id + '-bar');
+    if (v) v.textContent = '—';
+    if (b) b.style.width = '50%';
+  });
+
   const todayBadge = document.getElementById('splitsTodayBadge');
   if (todayBadge) { todayBadge.style.display = 'none'; todayBadge.textContent = ''; }
 
@@ -6578,6 +6586,17 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
   updatePitcherStat('sc-stuff', pd.stuff_plus ? Math.round(pd.stuff_plus)        : '--');
   updatePitcherStat('sp-ip',    pd.ip         ? parseFloat(pd.ip).toFixed(1)     : '--');
   updatePitcherStat('sp-gs',    pd.gs != null ? Math.round(pd.gs) : '--');
+
+  // ── Plus trio hero cards (Stuff+ / Location+ / Pitching+)
+  const _plusVal = (id, v) => {
+    const el = document.getElementById(id + '-val');
+    if (el) el.textContent = v != null ? Math.round(v) : '—';
+    const bar = document.getElementById(id + '-bar');
+    if (bar) bar.style.width = v != null ? Math.min(Math.round(v) / 2, 100) + '%' : '50%';
+  };
+  _plusVal('sp-stuff-plus', pd.stuff_plus);
+  _plusVal('sp-loc-plus',   pd.location_plus);
+  _plusVal('sp-pit-plus',   pd.pitching_plus);
 
   // ── Small sample size indicator
   const ip = pd.ip ? parseFloat(pd.ip) : 0;
@@ -9403,13 +9422,14 @@ function renderPitcherProjBreakdown(projData) {
   const mean = p.proj_dk_pts;
 
   // ── Percentile strip ────────────────────────────────────────────────────────
-  const stripMax = Math.max(p90 * 1.15, mean * 1.6, 20);
+  const floor   = p.proj_floor   != null ? p.proj_floor   : p10;
+  const ceiling = p.proj_ceiling != null ? p.proj_ceiling : p90;
+  const stripMax = Math.max(ceiling * 1.15, mean * 1.6, 20);
   const sp = v => Math.min((v / stripMax) * 100, 99.5).toFixed(1);
   const nodes = [
-    { v: p10,  label: 'P10',  color: '#94a3b8' },
-    { v: p50,  label: 'Med',  color: '#60a5fa' },
-    { v: mean, label: 'Proj', color: '#4ade80' },
-    { v: p90,  label: 'P90',  color: '#fbbf24' },
+    { v: floor,   label: 'Floor', color: '#94a3b8' },
+    { v: mean,    label: 'Proj',  color: '#4ade80' },
+    { v: ceiling, label: 'Ceil',  color: '#fbbf24' },
   ];
 
   // ── Per-action pts breakdown ─────────────────────────────────────────────────
@@ -9430,20 +9450,20 @@ function renderPitcherProjBreakdown(projData) {
 
     <!-- Header cards -->
     <div style="display:flex;gap:6px;margin-bottom:14px;">
+      <div style="flex:1;background:rgba(148,163,184,.08);border:1px solid rgba(148,163,184,.20);border-radius:6px;padding:8px;text-align:center;">
+        <div style="font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#94a3b8;margin-bottom:2px;">Floor</div>
+        <div style="font-size:17px;font-weight:700;color:#cbd5e1;">${f1(floor)}</div>
+        <div style="font-size:8px;color:var(--muted);">bad game · DK pts</div>
+      </div>
       <div style="flex:1;background:rgba(74,222,128,.10);border:1px solid rgba(74,222,128,.22);border-radius:6px;padding:8px;text-align:center;">
         <div style="font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#4ade80;margin-bottom:2px;">Projection</div>
         <div style="font-size:17px;font-weight:700;color:#86efac;">${f1(mean)}</div>
         <div style="font-size:8px;color:var(--muted);">mean · DK pts</div>
       </div>
-      <div style="flex:1;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.18);border-radius:6px;padding:8px;text-align:center;">
-        <div style="font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#60a5fa;margin-bottom:2px;">Median</div>
-        <div style="font-size:17px;font-weight:700;color:#93c5fd;">${f1(p50)}</div>
-        <div style="font-size:8px;color:var(--muted);">P50 · DK pts</div>
-      </div>
       <div style="flex:1;background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.18);border-radius:6px;padding:8px;text-align:center;">
         <div style="font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#fbbf24;margin-bottom:2px;">Ceiling</div>
-        <div style="font-size:17px;font-weight:700;color:#fcd34d;">${f1(p90)}</div>
-        <div style="font-size:8px;color:var(--muted);">P90 · DK pts</div>
+        <div style="font-size:17px;font-weight:700;color:#fcd34d;">${f1(ceiling)}</div>
+        <div style="font-size:8px;color:var(--muted);">great game · DK pts</div>
       </div>
     </div>
 
