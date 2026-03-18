@@ -625,15 +625,27 @@ async function loadPlayerPool(date, slate) {
   bRaw.forEach(r => { if (!bStatMap[r.player_id]) bStatMap[r.player_id] = r; });
 
   // 5. Projections — full stat line for hitters + pitcher stats
-  const projRaw = allPlayerIds.length && date && date !== 'all'
-    ? await batchIn('player_projections',
-        'player_id,proj_dk_pts,proj_floor,proj_ceiling,' +
-        'proj_hr,proj_r,proj_rbi,proj_sb,' +
-        'proj_ip,proj_ks,proj_er,win_prob',
-        'player_id', allPlayerIds, q => q.eq('game_date', date))
-    : [];
+  //    Also fetch all pitcher projections for the date (is_pitcher=true) to get the authoritative
+  //    scheduled-SP id list — avoids name-mismatch issues with the games table.
+  const [projRaw, pitcherProjRaw] = await Promise.all([
+    allPlayerIds.length && date && date !== 'all'
+      ? batchIn('player_projections',
+          'player_id,proj_dk_pts,proj_floor,proj_ceiling,' +
+          'proj_hr,proj_r,proj_rbi,proj_sb,' +
+          'proj_ip,proj_ks,proj_er,win_prob',
+          'player_id', allPlayerIds, q => q.eq('game_date', date))
+      : Promise.resolve([]),
+    date && date !== 'all'
+      ? sb.from('player_projections')
+          .select('player_id')
+          .eq('game_date', date)
+          .eq('is_pitcher', true)
+          .then(({ data }) => data || [])
+      : Promise.resolve([]),
+  ]);
   const projMap = {};
   projRaw.forEach(r => { projMap[r.player_id] = r; });
+  const scheduledSpProjIds = new Set(pitcherProjRaw.map(r => r.player_id));
 
   // 6. Park factors (keyed by venue_id — the home park for each game)
   const venueIds = [...new Set(_games.map(g=>g.venue_id).filter(Boolean))];
@@ -761,20 +773,22 @@ async function loadPlayerPool(date, slate) {
     allHitters = allHitters.filter(h => h.in_lineup);
   }
 
-  // ── Filter pitchers: keep scheduled SPs + all pitchers from games with no SP data
-  const scheduledSpNames = new Set(
-    _games.flatMap(g => [g.home_sp_name, g.away_sp_name])
-      .filter(Boolean).map(n => n.toLowerCase())
-  );
-  const noSpTeamIds = new Set(
-    _games.filter(g => !g.home_sp_name && !g.away_sp_name)
-      .flatMap(g => [g.home_team_id, g.away_team_id]).filter(Boolean)
-  );
-
-  if (scheduledSpNames.size > 0) {
-    allPitchers = allPitchers.filter(p =>
-      scheduledSpNames.has((p.name || '').toLowerCase()) || noSpTeamIds.has(p.team_id)
+  // ── Filter pitchers: use player_projections is_pitcher=true as authoritative SP list.
+  //    This avoids name-mismatch issues between dk_salaries and games.home_sp_name.
+  //    Fallback: if no pitcher projections exist for the date, use name-matching.
+  if (scheduledSpProjIds.size > 0) {
+    allPitchers = allPitchers.filter(p => scheduledSpProjIds.has(p.player_id));
+  } else {
+    // Fallback: name-match against games table SP names
+    const scheduledSpNames = new Set(
+      _games.flatMap(g => [g.home_sp_name, g.away_sp_name])
+        .filter(Boolean).map(n => n.toLowerCase())
     );
+    if (scheduledSpNames.size > 0) {
+      allPitchers = allPitchers.filter(p =>
+        scheduledSpNames.has((p.name || '').toLowerCase())
+      );
+    }
   }
 
   // Deduplicate allPitchers by player_id (multiple dg_ids in dk_salaries cause duplicates)
