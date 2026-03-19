@@ -1095,36 +1095,26 @@ function renderHitterChip(p, inL) {
   const sal     = p.salary ? '$'+p.salary.toLocaleString() : '—';
   const pos     = p.positions.join('/');
 
-  // Projection
-  const proj    = p.proj_dk_pts != null ? p.proj_dk_pts.toFixed(1) : '—';
-  const floor   = p.proj_floor   != null ? p.proj_floor.toFixed(1)   : null;
-  const ceil    = p.proj_ceiling != null ? p.proj_ceiling.toFixed(1) : null;
-  const range   = floor && ceil ? `<span style="color:var(--muted);font-size:9px;"> [${floor}–${ceil}]</span>` : '';
+  // Core projection
+  const proj  = p.proj_dk_pts != null ? p.proj_dk_pts.toFixed(1) : '—';
+  const floor = p.proj_floor   != null ? p.proj_floor.toFixed(1)   : null;
+  const ceil  = p.proj_ceiling != null ? p.proj_ceiling.toFixed(1) : null;
+  const range = floor && ceil ? `<span style="color:var(--muted);font-size:9px;"> [${floor}–${ceil}]</span>` : '';
 
-  // Projected stat line
-  const pHR  = p.proj_hr  != null ? p.proj_hr.toFixed(2)  : null;
-  const pR   = p.proj_r   != null ? p.proj_r.toFixed(2)   : null;
-  const pRBI = p.proj_rbi != null ? p.proj_rbi.toFixed(2) : null;
-  const pSB  = p.proj_sb  != null && p.proj_sb >= 0.01 ? p.proj_sb.toFixed(2) : null;
-  const statLine = (pHR || pR || pRBI)
-    ? `<span class="pc-stat" style="margin-left:auto;color:var(--muted);font-size:9px;">` +
-      `${pHR!=null?'HR '+pHR:''}${pR!=null?' R '+pR:''}${pRBI!=null?' RBI '+pRBI:''}${pSB!=null?' SB '+pSB:''}</span>`
-    : '';
+  // Ownership — pushed right, color-coded
+  const ownPct   = p.proj_ownership != null ? p.proj_ownership.toFixed(1) + '%' : null;
+  const ownColor = p.proj_ownership == null ? 'var(--muted)'
+                 : p.proj_ownership >= 25   ? 'var(--lo)'
+                 : p.proj_ownership >= 12   ? 'var(--mid)'
+                 :                            'var(--hi)';
+  const ownSpan = `<span style="margin-left:auto;font-size:10px;font-weight:700;color:${ownColor};">Own ${ownPct ?? '—'}</span>`;
 
-  const wrc  = p.wrc_plus != null ? Math.round(p.wrc_plus) : '—';
-  const woba = p.woba     != null ? Number(p.woba).toFixed(3) : '—';
-  const iso  = p.iso      != null ? Number(p.iso).toFixed(3)  : '—';
-  const hes  = p.hes      != null ? p.hes.toFixed(1) : '—';
-
-  const ownPct   = p.proj_ownership != null ? p.proj_ownership.toFixed(1) + '%' : '—';
-  const ownColor = p.proj_ownership == null    ? 'color:var(--muted);'
-                 : p.proj_ownership >= 25      ? 'color:var(--lo);font-weight:700;'
-                 : p.proj_ownership >= 12      ? 'color:var(--mid);font-weight:700;'
-                 :                               'color:var(--hi);font-weight:700;';
-
+  // Matchup context
+  const hes = p.hes     != null ? p.hes.toFixed(1)         : '—';
+  const wrc = p.wrc_plus != null ? Math.round(p.wrc_plus)  : '—';
   const spLine = p.sp_name
     ? `vs <b style="color:var(--text2);">${p.sp_name}</b>${p.sp_grade ? '&nbsp;'+spGradePill(p.sp_grade) : ''}`
-    : 'vs SP: <span style="color:var(--muted);">—</span>';
+    : 'vs SP <span style="color:var(--muted);">—</span>';
 
   return `<div class="pc${inL?' in-lineup':''}" draggable="true"
     ondragstart="dragStart(event,${p.player_id})" ondragend="dragEnd(event)"
@@ -1136,18 +1126,12 @@ function renderHitterChip(p, inL) {
     <div class="pc-row2">
       <span class="pc-stat" style="color:var(--blue);font-weight:700;">${sal}</span>
       <span class="pc-stat" style="color:var(--hi);font-weight:700;">${proj} pts${range}</span>
-      <span class="pc-stat">wRC+ <span>${wrc}</span></span>
-      <span class="pc-stat">wOBA <span>${woba}</span></span>
-      <span class="pc-stat">ISO <span>${iso}</span></span>
+      ${ownSpan}
     </div>
     <div class="pc-row3">
       <span class="pc-stat">HES <span style="${hesColor(p.hes)}">${hes}</span></span>
-      <span class="pc-stat">PMS <span>${p.pms != null ? p.pms : '—'}</span></span>
-      <span class="pc-stat">Own <span style="${ownColor}">${ownPct}</span></span>
-      ${statLine}
-    </div>
-    <div class="pc-row3" style="border-top:none;padding-top:0;">
-      <span class="pc-stat" style="color:var(--muted);">${spLine}</span>
+      <span class="pc-stat">wRC+ <span>${wrc}</span></span>
+      <span class="pc-stat" style="margin-left:auto;color:var(--muted);">${spLine}</span>
     </div>
   </div>`;
 }
@@ -1160,42 +1144,33 @@ function renderPitcherChip(p, inL) {
   const g       = p.sp_grade_self;
   const gPill   = g ? `<span class="pc-grade-box ${g.cls}">${g.letter}</span>` : '';
 
-  // Projection pts + range
+  // Core projection
   const proj  = p.proj_dk_pts != null ? p.proj_dk_pts.toFixed(1) : '—';
   const floor = p.proj_floor   != null ? p.proj_floor.toFixed(1)   : null;
   const ceil  = p.proj_ceiling != null ? p.proj_ceiling.toFixed(1) : null;
   const range = floor && ceil ? `<span style="color:var(--muted);font-size:9px;"> [${floor}–${ceil}]</span>` : '';
 
-  // Pitcher true-talent stats
-  const xfip  = p.xfip         != null ? Number(p.xfip).toFixed(2) : '—';
-  const kpct  = p.k_pct        != null ? (p.k_pct > 1 ? p.k_pct.toFixed(1) : (p.k_pct*100).toFixed(1))+'%' : '—';
-  const stuff = p.stuff_plus    != null ? Math.round(p.stuff_plus) : '—';
-  const loc   = p.location_plus != null ? Math.round(p.location_plus) : '—';
-  const pit   = p.pitching_plus != null ? Math.round(p.pitching_plus) : '—';
+  // Pitcher talent stats
+  const xfip = p.xfip  != null ? Number(p.xfip).toFixed(2) : '—';
+  const kpct = p.k_pct != null ? (p.k_pct > 1 ? p.k_pct.toFixed(1) : (p.k_pct*100).toFixed(1))+'%' : '—';
 
-  // Projected stat line: IP, K, ER, Win%
-  const pIP  = p.proj_ip  != null ? p.proj_ip.toFixed(1)         : null;
-  const pKS  = p.proj_ks  != null ? p.proj_ks.toFixed(1)         : null;
-  const pER  = p.proj_er  != null ? p.proj_er.toFixed(2)         : null;
-  const pWin = p.win_prob != null ? (p.win_prob*100).toFixed(0)+'%' : null;
-  const pOwnPct   = p.proj_ownership != null ? p.proj_ownership.toFixed(1) + '%' : '—';
-  const pOwnColor = p.proj_ownership == null    ? 'color:var(--muted);'
-                  : p.proj_ownership >= 25      ? 'color:var(--lo);font-weight:700;'
-                  : p.proj_ownership >= 12      ? 'color:var(--mid);font-weight:700;'
-                  :                               'color:var(--hi);font-weight:700;';
-  const pitStatLine = (pIP || pKS || pER)
-    ? `<span class="pc-stat" style="margin-left:auto;color:var(--muted);font-size:9px;">` +
-      `${pIP!=null?'IP '+pIP:''}${pKS!=null?' K '+pKS:''}${pER!=null?' ER '+pER:''}${pWin!=null?' W '+pWin:''}</span>`
-    : '';
+  // Ownership — pushed right, color-coded
+  const ownPct   = p.proj_ownership != null ? p.proj_ownership.toFixed(1) + '%' : null;
+  const ownColor = p.proj_ownership == null ? 'var(--muted)'
+                 : p.proj_ownership >= 25   ? 'var(--lo)'
+                 : p.proj_ownership >= 12   ? 'var(--mid)'
+                 :                            'var(--hi)';
+  const ownSpan = `<span style="margin-left:auto;font-size:10px;font-weight:700;color:${ownColor};">Own ${ownPct ?? '—'}</span>`;
 
   // MiLB sample size badge
   const milbBadge = (p.stats_level && p.stats_level !== 'MLB')
     ? `<span style="font-size:8px;padding:1px 4px;border-radius:3px;font-weight:700;background:#78350f;color:#fcd34d;letter-spacing:.5px;">${p.stats_level}</span>`
     : '';
 
-  const oppAb = p.opp_team_abbr || '—';
-  const oppTc = p.opp_team_abbr ? abbrColor(p.opp_team_abbr) : null;
-  const oppTag = oppTc
+  // Opponent stack
+  const oppAb    = p.opp_team_abbr || '—';
+  const oppTc    = p.opp_team_abbr ? abbrColor(p.opp_team_abbr) : null;
+  const oppTag   = oppTc
     ? `<span class="team-tag" style="background:${oppTc.bg};color:${oppTc.tx};font-size:9px;">${oppAb}</span>`
     : `<span style="color:var(--muted);">${oppAb}</span>`;
   const stackTxt = p.opp_stack_pts != null ? p.opp_stack_pts.toFixed(1) : '—';
@@ -1207,23 +1182,17 @@ function renderPitcherChip(p, inL) {
     <div class="pc-row1">${teamTag}${badge}${milbBadge}
       <span class="pc-name">${p.name}</span>
       <span class="pc-pos">SP</span>
+      ${gPill}
     </div>
     <div class="pc-row2">
       <span class="pc-stat" style="color:var(--blue);font-weight:700;">${sal}</span>
       <span class="pc-stat" style="color:var(--hi);font-weight:700;">${proj} pts${range}</span>
-      ${gPill}
-      <span class="pc-stat">Stuff+ <span>${stuff}</span></span>
-      <span class="pc-stat">Loc+ <span>${loc}</span></span>
-      <span class="pc-stat">Pit+ <span>${pit}</span></span>
+      ${ownSpan}
     </div>
     <div class="pc-row3">
       <span class="pc-stat">xFIP <span>${xfip}</span></span>
       <span class="pc-stat">K% <span>${kpct}</span></span>
-      <span class="pc-stat">Own <span style="${pOwnColor}">${pOwnPct}</span></span>
-      ${pitStatLine}
-    </div>
-    <div class="pc-row3" style="border-top:none;padding-top:0;">
-      <span class="pc-stat" style="color:var(--muted);">vs ${oppTag} stack <span style="color:var(--mid);">${stackTxt}</span>${stackN?` <span style="color:var(--muted);">(${stackN})</span>`:''}</span>
+      <span class="pc-stat" style="margin-left:auto;color:var(--muted);">vs ${oppTag} stack <span style="color:var(--mid);">${stackTxt}</span>${stackN?` <span style="color:var(--muted);">(${stackN})</span>`:''}</span>
     </div>
   </div>`;
 }
