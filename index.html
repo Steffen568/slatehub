@@ -6429,6 +6429,15 @@ function spPickerSelect(pid, name, hand) {
   activePitcherPickedId   = pid;
   activePitcherPickedHand = hand || null;
   document.getElementById('spNoStarterMsg')?.remove();
+
+  // Persist selection to games table so projection scripts can use it
+  if (activeGame) {
+    const isHome = activePitcherTeamId === activeGame.home_team_id;
+    const update = isHome
+      ? { home_sp_id: pid, home_sp_name: name, home_sp_hand: hand || null }
+      : { away_sp_id: pid, away_sp_name: name, away_sp_hand: hand || null };
+    sb.from('games').update(update).eq('game_pk', activeGame.game_pk).then(() => {});
+  }
   document.querySelectorAll('.sp-pitcher-chip').forEach(el => {
     const onclick = el.getAttribute('onclick') || '';
     el.classList.toggle('active', onclick.startsWith(`spPickerSelect(${pid},`));
