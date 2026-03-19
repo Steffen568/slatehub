@@ -257,7 +257,11 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;heig
       <div class="builder-actions">
         <button class="bld-btn primary" onclick="saveLineup()">Save Lineup</button>
         <button class="bld-btn" onclick="clearLineup()">Clear</button>
-        <button class="bld-btn" onclick="exportSavedCSV()">↓ DK CSV</button>
+        <label class="bld-btn" style="cursor:pointer;" title="Upload your DK entries CSV — lineups will be filled in automatically">
+          ↑ DK Template
+          <input type="file" accept=".csv" style="display:none;" onchange="fillDKTemplate(event)">
+        </label>
+        <button class="bld-btn" onclick="exportSavedCSV()" title="Export saved lineups (plain format)">↓ CSV</button>
       </div>
       <div class="saved-section">
         <div class="saved-tabs">
@@ -660,12 +664,12 @@ async function loadPlayerPool(date, slate) {
       ? batchIn('player_projections',
           'player_id,proj_dk_pts,proj_floor,proj_ceiling,' +
           'proj_hr,proj_r,proj_rbi,proj_sb,' +
-          'proj_ip,proj_ks,proj_er,win_prob',
+          'proj_ip,proj_ks,proj_er,win_prob,proj_ownership',
           'player_id', allPlayerIds, q => q.eq('game_date', date))
       : Promise.resolve([]),
     date && date !== 'all'
       ? sb.from('player_projections')
-          .select('player_id, full_name, team, game_pk, proj_dk_pts, proj_floor, proj_ceiling, proj_ip, proj_ks, proj_er, win_prob, stats_level')
+          .select('player_id, full_name, team, game_pk, proj_dk_pts, proj_floor, proj_ceiling, proj_ip, proj_ks, proj_er, win_prob, stats_level, proj_ownership')
           .eq('game_date', date)
           .eq('is_pitcher', true)
           .then(({ data }) => data || [])
@@ -794,6 +798,7 @@ async function loadPlayerPool(date, slate) {
       proj_ks:          null,
       proj_er:          null,
       win_prob:         null,
+      proj_ownership:   proj?.proj_ownership ?? null,
       wrc_plus:         bs?.wrc_plus ?? null,
       woba:             bs?.woba     ?? null,
       iso:              bs?.iso      ?? null,
@@ -844,6 +849,7 @@ async function loadPlayerPool(date, slate) {
       pitching_plus:    ps?.pitching_plus ?? null,
       era:              ps?.era           ?? null,
       sp_grade_self:    ps ? computeSpGrade(ps) : null,
+      proj_ownership:   proj.proj_ownership ?? null,
     });
   });
 
@@ -1110,6 +1116,12 @@ function renderHitterChip(p, inL) {
   const iso  = p.iso      != null ? Number(p.iso).toFixed(3)  : '—';
   const hes  = p.hes      != null ? p.hes.toFixed(1) : '—';
 
+  const ownPct   = p.proj_ownership != null ? p.proj_ownership.toFixed(1) + '%' : '—';
+  const ownColor = p.proj_ownership == null    ? 'color:var(--muted);'
+                 : p.proj_ownership >= 25      ? 'color:var(--lo);font-weight:700;'
+                 : p.proj_ownership >= 12      ? 'color:var(--mid);font-weight:700;'
+                 :                               'color:var(--hi);font-weight:700;';
+
   const spLine = p.sp_name
     ? `vs <b style="color:var(--text2);">${p.sp_name}</b>${p.sp_grade ? '&nbsp;'+spGradePill(p.sp_grade) : ''}`
     : 'vs SP: <span style="color:var(--muted);">—</span>';
@@ -1131,6 +1143,7 @@ function renderHitterChip(p, inL) {
     <div class="pc-row3">
       <span class="pc-stat">HES <span style="${hesColor(p.hes)}">${hes}</span></span>
       <span class="pc-stat">PMS <span>${p.pms != null ? p.pms : '—'}</span></span>
+      <span class="pc-stat">Own <span style="${ownColor}">${ownPct}</span></span>
       ${statLine}
     </div>
     <div class="pc-row3" style="border-top:none;padding-top:0;">
@@ -1165,6 +1178,11 @@ function renderPitcherChip(p, inL) {
   const pKS  = p.proj_ks  != null ? p.proj_ks.toFixed(1)         : null;
   const pER  = p.proj_er  != null ? p.proj_er.toFixed(2)         : null;
   const pWin = p.win_prob != null ? (p.win_prob*100).toFixed(0)+'%' : null;
+  const pOwnPct   = p.proj_ownership != null ? p.proj_ownership.toFixed(1) + '%' : '—';
+  const pOwnColor = p.proj_ownership == null    ? 'color:var(--muted);'
+                  : p.proj_ownership >= 25      ? 'color:var(--lo);font-weight:700;'
+                  : p.proj_ownership >= 12      ? 'color:var(--mid);font-weight:700;'
+                  :                               'color:var(--hi);font-weight:700;';
   const pitStatLine = (pIP || pKS || pER)
     ? `<span class="pc-stat" style="margin-left:auto;color:var(--muted);font-size:9px;">` +
       `${pIP!=null?'IP '+pIP:''}${pKS!=null?' K '+pKS:''}${pER!=null?' ER '+pER:''}${pWin!=null?' W '+pWin:''}</span>`
@@ -1201,6 +1219,7 @@ function renderPitcherChip(p, inL) {
     <div class="pc-row3">
       <span class="pc-stat">xFIP <span>${xfip}</span></span>
       <span class="pc-stat">K% <span>${kpct}</span></span>
+      <span class="pc-stat">Own <span style="${pOwnColor}">${pOwnPct}</span></span>
       ${pitStatLine}
     </div>
     <div class="pc-row3" style="border-top:none;padding-top:0;">
