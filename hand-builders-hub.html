@@ -366,6 +366,16 @@ function teamColor(name)    { return TEAM_COLORS[name] || { bg:'#252d38', tx:'#8
 function abbrColor(abbr)    { return ABBR_COLORS[(abbr||'').toUpperCase()] || { bg:'#252d38', tx:'#8899b0' }; }
 function teamAbbr(fullName) { return NAME_TO_ABBR[fullName] || (fullName||'').slice(0,3).toUpperCase(); }
 
+// Normalize player name for cross-source matching (DK vs MLB API name differences)
+// Strips periods, apostrophes, Jr/Sr/II/III/IV suffixes, lowercases, collapses spaces
+function normName(n) {
+  if (!n) return '';
+  return n.toLowerCase()
+    .replace(/[.''\u2019]/g, '')
+    .replace(/\s+(jr|sr|ii|iii|iv)\s*$/, '')
+    .replace(/\s+/g, ' ').trim();
+}
+
 // Map MLB API positions → DraftKings position eligibility
 // Used only when dk_salaries has no entry for a player
 function mlbPosToDK(pos) {
@@ -717,9 +727,12 @@ async function loadPlayerPool(date, slate) {
   pRaw.forEach(r => { if (!pitcherStatMap[r.player_id]) pitcherStatMap[r.player_id] = r; });
 
   // Salary lookup by name for pitchers (dk_salaries uses DK IDs; we match by name instead)
+  // Index by both raw lowercase AND normName so minor differences (J.T. vs JT, Jr. etc.) still resolve
   const pitcherSalByName = {};
   (pitcherSalRes.data || []).forEach(r => {
-    if (r.name) pitcherSalByName[r.name.toLowerCase()] = r;
+    if (!r.name) return;
+    pitcherSalByName[r.name.toLowerCase()] = r;        // exact lowercase
+    pitcherSalByName[normName(r.name)]      = r;        // normalized fallback
   });
 
   // sp_id → team_id from games table (player_projections.player_id = games.home_sp_id/away_sp_id)
@@ -813,7 +826,7 @@ async function loadPlayerPool(date, slate) {
   pitcherProjRaw.forEach(proj => {
     const name    = proj.full_name || '?';
     const ps      = pitcherStatMap[proj.player_id];
-    const salRow  = pitcherSalByName[name.toLowerCase()];
+    const salRow  = pitcherSalByName[name.toLowerCase()] || pitcherSalByName[normName(name)];
     const teamId  = spIdToTeamId[proj.player_id] || null;
     const hesInfo = proj.game_pk ? gameHesMap[proj.game_pk] : null;
 
@@ -1443,6 +1456,14 @@ function deleteSavedLineup(e, idx) {
 // ── CSV EXPORT ───────────────────────────────────────────────────────────────
 function exportCSV() {
   if (Object.values(lineup).filter(Boolean).length < 10) { showToast('Fill all 10 slots to export'); return; }
+  // Pitchers use dk_id (name-matched from dk_salaries). If null, we don't have the DK player ID
+  // and the CSV will be rejected — warn the user rather than silently export a bad ID.
+  const missingDkId = LINEUP_SLOTS
+    .map(s => lineup[s.key])
+    .filter(p => p && p.positions?.includes('SP') && !p.dk_id);
+  if (missingDkId.length) {
+    showToast(`⚠ No DK ID for: ${missingDkId.map(p=>p.name).join(', ')} — CSV may be rejected`);
+  }
   const csv = 'P,P,C,1B,2B,3B,SS,OF,OF,OF\n' +
     LINEUP_SLOTS.map(s=>{ const p=lineup[s.key]; const id=p?.dk_id||p?.player_id; return p?`${p.name} (${id})`:''; }).join(',');
   const a = Object.assign(document.createElement('a'), {
@@ -1455,13 +1476,16 @@ function exportCSV() {
 function exportSavedCSV() {
   const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
   if (!saved.length) { showToast('No saved lineups to export'); return; }
+  const missingNames = new Set();
   const rows = saved.map(s =>
     LINEUP_SLOTS.map(sl => {
       const p = s.lineup?.[sl.key];
       const id = p?.dk_id || p?.player_id;
+      if (p && p.positions?.includes('SP') && !p.dk_id) missingNames.add(p.name);
       return p ? `${p.name} (${id})` : '';
     }).join(',')
   );
+  if (missingNames.size) showToast(`⚠ No DK ID for: ${[...missingNames].join(', ')} — CSV may be rejected`);
   const csv = 'P,P,C,1B,2B,3B,SS,OF,OF,OF\n' + rows.join('\n');
   const a = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(new Blob([csv], {type:'text/csv'})),
