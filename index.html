@@ -6306,7 +6306,7 @@ async function showPitcherPicker(teamId) {
   const [{ data: statsRows }, { data: salaryRows }, { data: projRows }] = await Promise.all([
     sb.from('pitcher_stats').select('player_id, era, k_pct, whip').in('player_id', pids).eq('season', statSeason),
     sb.from('dk_salaries').select('player_id, salary').in('player_id', pids),
-    sb.from('player_projections').select('player_id, proj_dk_pts, proj_floor, proj_ceiling').in('player_id', pids).eq('game_date', activeDate),
+    sb.from('player_projections').select('player_id, proj_dk_pts, proj_floor, proj_ceiling, stats_level, proj_ownership').in('player_id', pids).eq('game_date', activeDate),
   ]);
 
   const statsMap = {};
@@ -6325,9 +6325,11 @@ async function showPitcherPicker(teamId) {
     era:         statsMap[p.player_id]?.era          || null,
     k_pct:       statsMap[p.player_id]?.k_pct        || null,
     whip:        statsMap[p.player_id]?.whip         || null,
-    proj_dk_pts: projMap[p.player_id]?.proj_dk_pts   ?? null,
-    proj_floor:  projMap[p.player_id]?.proj_floor    ?? null,
-    proj_ceiling:projMap[p.player_id]?.proj_ceiling  ?? null,
+    proj_dk_pts:    projMap[p.player_id]?.proj_dk_pts    ?? null,
+    proj_floor:     projMap[p.player_id]?.proj_floor     ?? null,
+    proj_ceiling:   projMap[p.player_id]?.proj_ceiling   ?? null,
+    stats_level:    projMap[p.player_id]?.stats_level    ?? null,
+    proj_ownership: projMap[p.player_id]?.proj_ownership ?? null,
   }));
 
   // Sort: salary desc (starters > bullpen > no salary), then alpha
@@ -6357,6 +6359,17 @@ async function showPitcherPicker(teamId) {
     const projBadge = proj
       ? `<span style="margin-left:auto;font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:800;color:var(--hi);" title="Projected DK pts${projRange}">${proj}<span style="font-weight:400;font-size:9px;color:var(--muted);"> pts</span></span>`
       : '';
+    const milbBadge = (p.stats_level && p.stats_level !== 'MLB')
+      ? `<span style="font-size:8px;padding:1px 4px;border-radius:3px;font-weight:700;background:#78350f;color:#fcd34d;letter-spacing:.5px;" title="Projection based on ${p.stats_level} stats — discounted for competition level">${p.stats_level}</span>`
+      : '';
+    const ownPct = p.proj_ownership;
+    const ownBadge = ownPct != null
+      ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;margin-left:auto;` +
+        `color:${ownPct>=25?'#f87171':ownPct>=12?'#fbbf24':'#4ade80'};` +
+        `background:${ownPct>=25?'rgba(248,113,113,.12)':ownPct>=12?'rgba(251,191,36,.12)':'rgba(74,222,128,.12)'};` +
+        `border:1px solid ${ownPct>=25?'rgba(248,113,113,.25)':ownPct>=12?'rgba(251,191,36,.25)':'rgba(74,222,128,.25)'};" ` +
+        `title="Projected ownership: ${ownPct.toFixed(1)}%">${ownPct.toFixed(1)}%</span>`
+      : '';
     return `<div class="sp-pitcher-chip${isActive ? ' active' : ''}"
       onclick="spPickerSelect(${p.player_id},'${safeName}','${hand}')"
       title="${p.player_name}${salary ? ' · ' + salary : ''}${proj ? ' · ' + proj + ' proj pts' + projRange : ''}">
@@ -6366,9 +6379,9 @@ async function showPitcherPicker(teamId) {
           : `<span style="font-size:9px;color:var(--muted);">—</span>`}
         <span class="sp-pitcher-chip-hand" style="color:${handColor}">${hand}HP</span>
       </div>
-      <div class="sp-pitcher-chip-name" style="display:flex;align-items:baseline;gap:4px;">
+      <div class="sp-pitcher-chip-name" style="display:flex;align-items:baseline;gap:4px;flex-wrap:wrap;">
         <span>${lastName}<span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:4px;">${firstName}</span></span>
-        ${projBadge}
+        ${milbBadge}${projBadge}${ownBadge}
       </div>
       <div class="sp-pitcher-chip-stats">
         <div class="sp-pitcher-chip-stat">
@@ -6497,7 +6510,7 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
       .eq('player_id', spId)
       .maybeSingle(),
     sb.from('player_projections')
-      .select('proj_dk_pts, proj_floor, proj_ceiling, proj_ip, proj_ks, proj_er, win_prob')
+      .select('proj_dk_pts, proj_floor, proj_ceiling, proj_ip, proj_ks, proj_er, win_prob, stats_level, proj_ownership')
       .eq('player_id', spId)
       .eq('game_date', activeDate)
       .maybeSingle(),
@@ -6516,10 +6529,22 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
       const win   = projData.win_prob != null ? (projData.win_prob * 100).toFixed(0) + '%' : null;
       const range = floor && ceil ? `<span style="color:var(--muted);font-size:11px;margin-left:4px;">[${floor}–${ceil}]</span>` : '';
       const stats = [ip&&`IP ${ip}`, ks&&`K ${ks}`, er&&`ER ${er}`, win&&`W ${win}`].filter(Boolean).join('  ');
+      const lvl   = projData.stats_level;
+      const lvlBadge = (lvl && lvl !== 'MLB')
+        ? `<span style="font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700;background:#78350f;color:#fcd34d;margin-left:6px;letter-spacing:.5px;" title="Projection based on ${lvl} stats — discounted for competition level">${lvl}</span>`
+        : '';
+      const ownPctHero = projData.proj_ownership;
+      const ownBadgeHero = ownPctHero != null
+        ? `<span style="font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;margin-left:8px;` +
+          `color:${ownPctHero>=25?'#f87171':ownPctHero>=12?'#fbbf24':'#4ade80'};` +
+          `background:${ownPctHero>=25?'rgba(248,113,113,.12)':ownPctHero>=12?'rgba(251,191,36,.12)':'rgba(74,222,128,.12)'};` +
+          `border:1px solid ${ownPctHero>=25?'rgba(248,113,113,.25)':ownPctHero>=12?'rgba(251,191,36,.25)':'rgba(74,222,128,.25)'};"` +
+          ` title="Projected ownership">${ownPctHero.toFixed(1)}% own</span>`
+        : '';
       spProjEl.innerHTML =
         `<span style="font-size:22px;font-weight:800;color:var(--hi);">${pts}</span>` +
         `<span style="font-size:13px;font-weight:600;color:var(--muted);margin-left:3px;">pts</span>` +
-        range +
+        range + lvlBadge + ownBadgeHero +
         (stats ? `<div style="font-size:11px;color:var(--muted);margin-top:2px;">${stats}</div>` : '');
       spProjEl.style.display = 'block';
     } else {
@@ -7957,7 +7982,7 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
       .select('player_id, salary, position, dk_slate')
       .in('player_id', playerIds),
     sb.from('player_projections')
-      .select('player_id, proj_dk_pts, proj_floor, proj_ceiling, proj_pa, proj_1b, proj_2b, proj_3b, proj_hr, proj_bb, proj_r, proj_rbi, proj_sb')
+      .select('player_id, proj_dk_pts, proj_floor, proj_ceiling, proj_pa, proj_1b, proj_2b, proj_3b, proj_hr, proj_bb, proj_r, proj_rbi, proj_sb, proj_ownership')
       .in('player_id', playerIds)
       .eq('game_date', activeDate),
   ]);
@@ -8110,12 +8135,26 @@ async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
       proj.style.cssText = PILL_BASE + 'background:rgba(74,222,128,.10);color:#4ade80;border:1px solid rgba(74,222,128,.22);';
       pillsEl.appendChild(proj);
 
-      // Ownership placeholder pill
+      // Ownership pill
+      const ownPct = projData?.proj_ownership;
+      const ownTxt = ownPct != null ? ownPct.toFixed(1) + '%' : '—%';
+      const ownClr = ownPct == null    ? '#94a3b8'
+                   : ownPct >= 25     ? '#f87171'
+                   : ownPct >= 12     ? '#fbbf24'
+                   :                    '#4ade80';
+      const ownBg  = ownPct == null    ? 'rgba(148,163,184,.08)'
+                   : ownPct >= 25     ? 'rgba(248,113,113,.10)'
+                   : ownPct >= 12     ? 'rgba(251,191,36,.10)'
+                   :                    'rgba(74,222,128,.10)';
+      const ownBd  = ownPct == null    ? 'rgba(148,163,184,.18)'
+                   : ownPct >= 25     ? 'rgba(248,113,113,.22)'
+                   : ownPct >= 12     ? 'rgba(251,191,36,.22)'
+                   :                    'rgba(74,222,128,.22)';
       const own = document.createElement('span');
       own.className = 'br-own';
-      own.textContent = '—%';
-      own.title = 'Ownership projection coming soon';
-      own.style.cssText = PILL_BASE + 'background:rgba(148,163,184,.08);color:#94a3b8;border:1px solid rgba(148,163,184,.18);';
+      own.textContent = ownTxt;
+      own.title = ownPct != null ? `Projected ownership: ${ownTxt}` : 'Ownership projection unavailable';
+      own.style.cssText = PILL_BASE + `background:${ownBg};color:${ownClr};border:1px solid ${ownBd};`;
       pillsEl.appendChild(own);
     }
 
