@@ -1453,19 +1453,70 @@ function deleteSavedLineup(e, idx) {
   if (_activeSavedTab === 'exposure') renderExposure();
 }
 
+// ── DK TEMPLATE UPLOAD ────────────────────────────────────────────────────────
+// dkDraftgroupMap: normName → draftgroup-specific player ID (from DK entries CSV)
+// DK uses a unique numeric ID per draftgroup (e.g. 42331930) — NOT the standard
+// MLB/DK player ID stored in dk_salaries. Populated when user uploads the template.
+let dkDraftgroupMap = {};
+
+function fillDKTemplate(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  event.target.value = ''; // reset so same file can be re-uploaded
+  const reader = new FileReader();
+  reader.onload = e => {
+    const lines = e.target.result.split(/\r?\n/);
+    const map = {};
+    let found = 0;
+    for (const line of lines) {
+      // CSV columns (0-indexed): 0=EntryID ... 14=blank 15=Position 16="Name + ID" 17=Name 18=ID
+      // Split on comma but be careful — names can contain commas if quoted.
+      // Simple split is fine here since DK names don't contain commas.
+      const cols     = line.split(',');
+      const nameCol  = (cols[17] || '').replace(/^"|"$/g, '').trim();
+      const idCol    = (cols[18] || '').replace(/^"|"$/g, '').trim();
+      if (nameCol && idCol && /^\d{6,}$/.test(idCol)) {
+        map[nameCol.toLowerCase()] = idCol;   // exact lowercase
+        map[normName(nameCol)]     = idCol;   // normalized (strips Jr., periods, etc.)
+        found++;
+      }
+    }
+    if (!found) { showToast('No player IDs found — check CSV format'); return; }
+    dkDraftgroupMap = map;
+    showToast(`DK template loaded — ${found} player IDs mapped`);
+    // Re-stamp dk_id on all loaded players so chips and exports use the right ID
+    [...allHitters, ...allPitchers].forEach(p => {
+      const id = map[normName(p.name)] || map[(p.name || '').toLowerCase()];
+      if (id) p.dk_id = id;
+    });
+    // Also re-stamp players already placed in lineup slots
+    Object.values(lineup).forEach(p => {
+      if (!p) return;
+      const id = map[normName(p.name)] || map[(p.name || '').toLowerCase()];
+      if (id) p.dk_id = id;
+    });
+  };
+  reader.readAsText(file);
+}
+
 // ── CSV EXPORT ───────────────────────────────────────────────────────────────
+function dkIdFor(p) {
+  // Priority: draftgroup map (from uploaded template) > dk_id > player_id (wrong, last resort)
+  if (!p) return null;
+  return dkDraftgroupMap[normName(p.name)]
+      || dkDraftgroupMap[(p.name || '').toLowerCase()]
+      || p.dk_id
+      || p.player_id;
+}
+
 function exportCSV() {
   if (Object.values(lineup).filter(Boolean).length < 10) { showToast('Fill all 10 slots to export'); return; }
-  // Pitchers use dk_id (name-matched from dk_salaries). If null, we don't have the DK player ID
-  // and the CSV will be rejected — warn the user rather than silently export a bad ID.
-  const missingDkId = LINEUP_SLOTS
-    .map(s => lineup[s.key])
-    .filter(p => p && p.positions?.includes('SP') && !p.dk_id);
-  if (missingDkId.length) {
-    showToast(`⚠ No DK ID for: ${missingDkId.map(p=>p.name).join(', ')} — CSV may be rejected`);
+  if (!Object.keys(dkDraftgroupMap).length) {
+    showToast('⚠ Upload your DK entries CSV first so we have the correct draftgroup IDs');
+    return;
   }
   const csv = 'P,P,C,1B,2B,3B,SS,OF,OF,OF\n' +
-    LINEUP_SLOTS.map(s=>{ const p=lineup[s.key]; const id=p?.dk_id||p?.player_id; return p?`${p.name} (${id})`:''; }).join(',');
+    LINEUP_SLOTS.map(s=>{ const p=lineup[s.key]; return p?`${p.name} (${dkIdFor(p)})`:''; }).join(',');
   const a = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(new Blob([csv],{type:'text/csv'})),
     download: (document.getElementById('lineup-name').value.trim()||'lineup')+'.csv',
@@ -1476,16 +1527,16 @@ function exportCSV() {
 function exportSavedCSV() {
   const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
   if (!saved.length) { showToast('No saved lineups to export'); return; }
-  const missingNames = new Set();
+  if (!Object.keys(dkDraftgroupMap).length) {
+    showToast('⚠ Upload your DK entries CSV first so we have the correct draftgroup IDs');
+    return;
+  }
   const rows = saved.map(s =>
     LINEUP_SLOTS.map(sl => {
       const p = s.lineup?.[sl.key];
-      const id = p?.dk_id || p?.player_id;
-      if (p && p.positions?.includes('SP') && !p.dk_id) missingNames.add(p.name);
-      return p ? `${p.name} (${id})` : '';
+      return p ? `${p.name} (${dkIdFor(p)})` : '';
     }).join(',')
   );
-  if (missingNames.size) showToast(`⚠ No DK ID for: ${[...missingNames].join(', ')} — CSV may be rejected`);
   const csv = 'P,P,C,1B,2B,3B,SS,OF,OF,OF\n' + rows.join('\n');
   const a = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(new Blob([csv], {type:'text/csv'})),
