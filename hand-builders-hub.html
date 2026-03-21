@@ -4723,12 +4723,14 @@ async function loadPlayerPool(date, slate) {
   //    Also fetch all pitcher projections for the date (is_pitcher=true) to get the authoritative
   //    scheduled-SP id list — avoids name-mismatch issues with the games table.
   const [projRaw, pitcherProjRaw] = await Promise.all([
-    allPlayerIds.length && date && date !== 'all'
-      ? batchIn('player_projections',
-          'player_id,proj_dk_pts,proj_floor,proj_ceiling,' +
-          'proj_hr,proj_r,proj_rbi,proj_sb,' +
-          'proj_ip,proj_ks,proj_er,win_prob,proj_ownership',
-          'player_id', allPlayerIds, q => q.eq('game_date', date))
+    date && date !== 'all'
+      ? sb.from('player_projections')
+          .select('player_id,full_name,proj_dk_pts,proj_floor,proj_ceiling,' +
+                  'proj_hr,proj_r,proj_rbi,proj_sb,' +
+                  'proj_ip,proj_ks,proj_er,win_prob,proj_ownership')
+          .eq('game_date', date)
+          .eq('is_pitcher', false)
+          .then(({ data }) => data || [])
       : Promise.resolve([]),
     date && date !== 'all'
       ? sb.from('player_projections')
@@ -4738,8 +4740,12 @@ async function loadPlayerPool(date, slate) {
           .then(({ data }) => data || [])
       : Promise.resolve([]),
   ]);
-  const projMap = {};
-  projRaw.forEach(r => { projMap[r.player_id] = r; });
+  const projMap     = {};
+  const projNameMap = {};
+  projRaw.forEach(r => {
+    projMap[r.player_id] = r;
+    if (r.full_name) projNameMap[normName(r.full_name)] = r;
+  });
 
   // 6. Park factors (keyed by venue_id — the home park for each game)
   const venueIds = [...new Set(_games.map(g=>g.venue_id).filter(Boolean))];
@@ -4834,7 +4840,7 @@ async function loadPlayerPool(date, slate) {
     if (isPitcher) return; // pitchers built from player_projections below
 
     const lu        = lineupMap[s.player_id];
-    const proj      = projMap[s.player_id];
+    const proj      = projMap[s.player_id] || projNameMap[normName(s.name || '')];
     const bs        = bStatMap[s.player_id];
 
     const teamId  = lu?.team_id ?? abbrToTeamId[s.team] ?? null;
