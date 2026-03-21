@@ -4746,6 +4746,7 @@ async function loadPlayerPool(date, slate) {
     projMap[r.player_id] = r;
     if (r.full_name) projNameMap[normName(r.full_name)] = r;
   });
+  console.log('[PROJ] hitter projRaw count:', projRaw.length, '| sample names:', projRaw.slice(0,3).map(r=>r.full_name));
 
   // 6. Park factors (keyed by venue_id — the home park for each game)
   const venueIds = [...new Set(_games.map(g=>g.venue_id).filter(Boolean))];
