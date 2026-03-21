@@ -4725,12 +4725,13 @@ async function loadPlayerPool(date, slate) {
   const [projRaw, pitcherProjRaw] = await Promise.all([
     date && date !== 'all'
       ? sb.from('player_projections')
-          .select('player_id,full_name,proj_dk_pts,proj_floor,proj_ceiling,' +
+          .select('player_id,full_name,game_date,proj_dk_pts,proj_floor,proj_ceiling,' +
                   'proj_hr,proj_r,proj_rbi,proj_sb,' +
                   'proj_ip,proj_ks,proj_er,win_prob,proj_ownership')
-          .eq('game_date', date)
           .eq('is_pitcher', false)
-          .then(({ data }) => data || [])
+          .order('game_date', { ascending: false })
+          .limit(600)
+          .then(({ data }) => { console.log('[PROJ] dates in projRaw:', [...new Set((data||[]).map(r=>r.game_date))]); return data || []; })
       : Promise.resolve([]),
     date && date !== 'all'
       ? sb.from('player_projections')
