@@ -4843,6 +4843,7 @@ async function loadPlayerPool(date, slate) {
     const lu        = lineupMap[s.player_id];
     const proj      = projMap[s.player_id] || projNameMap[normName(s.name || '')];
     const bs        = bStatMap[s.player_id];
+    if (!proj && s.name) console.log('[PROJ MISS]', s.name, '| pid:', s.player_id, '| norm:', normName(s.name), '| nameHit:', !!projNameMap[normName(s.name)]);
 
     const teamId  = lu?.team_id ?? abbrToTeamId[s.team] ?? null;
     const gamePk  = teamId ? teamGameMap[teamId] : null;
