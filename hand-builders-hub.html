@@ -4843,7 +4843,11 @@ async function loadPlayerPool(date, slate) {
     const lu        = lineupMap[s.player_id];
     const proj      = projMap[s.player_id] || projNameMap[normName(s.name || '')];
     const bs        = bStatMap[s.player_id];
-    if (!proj && s.name) console.log('[PROJ MISS]', s.name, '| pid:', s.player_id, '| norm:', normName(s.name), '| nameHit:', !!projNameMap[normName(s.name)]);
+    if (!proj && s.name) {
+      const lastName = s.name.split(' ').slice(1).join(' ').toLowerCase();
+      const fuzzy = projRaw.find(r => r.full_name && r.full_name.toLowerCase().includes(lastName));
+      console.log('[PROJ MISS]', s.name, '| dk_pid:', s.player_id, '| projRaw match:', fuzzy ? `pid=${fuzzy.player_id} name="${fuzzy.full_name}"` : 'NOT IN PROJRAW');
+    }
 
     const teamId  = lu?.team_id ?? abbrToTeamId[s.team] ?? null;
     const gamePk  = teamId ? teamGameMap[teamId] : null;
