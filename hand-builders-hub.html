@@ -4381,6 +4381,8 @@ let excludedPlayers = new Set();   // player_ids — individually excluded
 let teamExcludes    = new Set();   // team abbrs  — all players bulk-excluded
 let sortCol         = 'proj';
 let sortDir         = -1;          // -1 = desc, 1 = asc
+let projOverrides   = {};          // player_id → manual proj override
+let expTargets      = {};          // player_id → manual max exposure % (0–100)
 
 function isExcluded(p) { return excludedPlayers.has(p.player_id) || teamExcludes.has(p.team); }
 
@@ -4391,9 +4393,10 @@ const HIT_COLS = [
   { key:'sal',   label:'Salary',  w:'62px',  on:true,  sort:'sal',   fixed:false },
   { key:'proj',  label:'Proj',    w:'80px',  on:true,  sort:'proj',  fixed:true  },
   { key:'own',   label:'Own%',    w:'52px',  on:true,  sort:'own',   fixed:false },
-  { key:'exp',   label:'Exp%',    w:'48px',  on:true,  sort:'exp',   fixed:false },
-  { key:'value', label:'Val',     w:'44px',  on:true,  sort:'value', fixed:false },
-  { key:'hes',   label:'HES',     w:'42px',  on:true,  sort:'hes',   fixed:false },
+  { key:'exp',    label:'Exp%',    w:'48px',  on:true,  sort:'exp',   fixed:false },
+  { key:'expcap', label:'MaxExp',  w:'52px',  on:true,  sort:null,    fixed:false },
+  { key:'value',  label:'Val',     w:'44px',  on:true,  sort:'value', fixed:false },
+  { key:'hes',    label:'HES',     w:'42px',  on:true,  sort:'hes',   fixed:false },
   { key:'wrc',   label:'wRC+',    w:'46px',  on:true,  sort:'wrc',   fixed:false },
   { key:'pms',   label:'PMS',     w:'40px',  on:true,  sort:'pms',   fixed:false },
   { key:'woba',  label:'wOBA',    w:'50px',  on:false, sort:'woba',  fixed:false },
@@ -4408,8 +4411,9 @@ const PIT_COLS = [
   { key:'sal',   label:'Salary',  w:'62px',  on:true,  sort:'sal',   fixed:false },
   { key:'proj',  label:'Proj',    w:'80px',  on:true,  sort:'proj',  fixed:true  },
   { key:'own',   label:'Own%',    w:'52px',  on:true,  sort:'own',   fixed:false },
-  { key:'exp',   label:'Exp%',    w:'48px',  on:true,  sort:'exp',   fixed:false },
-  { key:'value', label:'Val',     w:'44px',  on:true,  sort:'value', fixed:false },
+  { key:'exp',    label:'Exp%',    w:'48px',  on:true,  sort:'exp',   fixed:false },
+  { key:'expcap', label:'MaxExp',  w:'52px',  on:true,  sort:null,    fixed:false },
+  { key:'value',  label:'Val',     w:'44px',  on:true,  sort:'value', fixed:false },
   { key:'xfip',  label:'xFIP',    w:'50px',  on:true,  sort:'xfip',  fixed:false },
   { key:'kpct',  label:'K%',      w:'46px',  on:true,  sort:'kpct',  fixed:false },
   { key:'era',   label:'ERA',     w:'44px',  on:false, sort:'era',   fixed:false },
@@ -4728,10 +4732,9 @@ async function loadPlayerPool(date, slate) {
           .select('player_id,full_name,game_date,proj_dk_pts,proj_floor,proj_ceiling,' +
                   'proj_hr,proj_r,proj_rbi,proj_sb,' +
                   'proj_ip,proj_ks,proj_er,win_prob,proj_ownership')
+          .eq('game_date', date)
           .eq('is_pitcher', false)
-          .order('game_date', { ascending: false })
-          .limit(600)
-          .then(({ data }) => { console.log('[PROJ] dates in projRaw:', [...new Set((data||[]).map(r=>r.game_date))]); return data || []; })
+          .then(({ data }) => data || [])
       : Promise.resolve([]),
     date && date !== 'all'
       ? sb.from('player_projections')
@@ -4747,8 +4750,6 @@ async function loadPlayerPool(date, slate) {
     projMap[r.player_id] = r;
     if (r.full_name) projNameMap[normName(r.full_name)] = r;
   });
-  console.log('[PROJ] hitter projRaw count:', projRaw.length, '| sample names:', projRaw.slice(0,3).map(r=>r.full_name));
-
   // 6. Park factors (keyed by venue_id — the home park for each game)
   const venueIds = [...new Set(_games.map(g=>g.venue_id).filter(Boolean))];
   const pfRaw = venueIds.length
@@ -4844,11 +4845,6 @@ async function loadPlayerPool(date, slate) {
     const lu        = lineupMap[s.player_id];
     const proj      = projMap[s.player_id] || projNameMap[normName(s.name || '')];
     const bs        = bStatMap[s.player_id];
-    if (!proj && s.name) {
-      const lastName = s.name.split(' ').slice(1).join(' ').toLowerCase();
-      const fuzzy = projRaw.find(r => r.full_name && r.full_name.toLowerCase().includes(lastName));
-      console.log('[PROJ MISS]', s.name, '| dk_pid:', s.player_id, '| projRaw match:', fuzzy ? `pid=${fuzzy.player_id} name="${fuzzy.full_name}"` : 'NOT IN PROJRAW');
-    }
 
     const teamId  = lu?.team_id ?? abbrToTeamId[s.team] ?? null;
     const gamePk  = teamId ? teamGameMap[teamId] : null;
@@ -5202,10 +5198,10 @@ function toggleCol(key) {
 
 function sortVal(p, col) {
   switch(col) {
-    case 'proj':   return p.proj_dk_pts ?? -Infinity;
+    case 'proj':   return (projOverrides[p.player_id] ?? p.proj_dk_pts) ?? -Infinity;
     case 'sal':    return p.salary ?? -Infinity;
     case 'own':    return p.proj_ownership ?? -Infinity;
-    case 'value':  return (p.salary && p.proj_dk_pts != null) ? p.proj_dk_pts / p.salary * 1000 : -Infinity;
+    case 'value':  { const pr = projOverrides[p.player_id] ?? p.proj_dk_pts; return (p.salary && pr != null) ? pr / p.salary * 1000 : -Infinity; }
     case 'hes':    return p.hes ?? -Infinity;
     case 'wrc':    return p.wrc_plus ?? -Infinity;
     case 'pms':    return p.pms ?? -Infinity;
@@ -5221,6 +5217,38 @@ function sortVal(p, col) {
     case 'exp':    return -Infinity; // handled in renderPool
     default:       return 0;
   }
+}
+
+// ── MANUAL PROJ / EXPOSURE OVERRIDES ─────────────────────────────────────────
+function editPlayerProj(pid, td) {
+  const cur = projOverrides[pid] ?? ([...allHitters,...allPitchers].find(p=>p.player_id===pid)?.proj_dk_pts ?? '');
+  td.innerHTML = `<input type="number" step="0.1" min="0" max="99" value="${cur!==''?Number(cur).toFixed(1):''}"
+    style="width:52px;font-size:11px;background:var(--s3);color:#fbbf24;border:1px solid #fbbf24;border-radius:3px;padding:1px 4px;text-align:right;"
+    onblur="savePlayerProj(${pid},this)"
+    onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape'){delete projOverrides[${pid}];renderPool();}"
+    onclick="event.stopPropagation()">`;
+  const inp = td.querySelector('input'); inp.focus(); inp.select();
+}
+function savePlayerProj(pid, input) {
+  const val = parseFloat(input.value);
+  if (!isNaN(val) && val >= 0) projOverrides[pid] = val;
+  else delete projOverrides[pid];
+  renderPool();
+}
+function editPlayerExp(pid, td) {
+  const cur = expTargets[pid] ?? '';
+  td.innerHTML = `<input type="number" step="1" min="0" max="100" value="${cur}"
+    style="width:46px;font-size:11px;background:var(--s3);color:#a78bfa;border:1px solid #a78bfa;border-radius:3px;padding:1px 4px;text-align:right;"
+    onblur="savePlayerExp(${pid},this)"
+    onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape'){delete expTargets[${pid}];renderPool();}"
+    onclick="event.stopPropagation()">`;
+  const inp = td.querySelector('input'); inp.focus(); inp.select();
+}
+function savePlayerExp(pid, input) {
+  const val = parseInt(input.value);
+  if (!isNaN(val) && val >= 0 && val <= 100) expTargets[pid] = val;
+  else delete expTargets[pid];
+  renderPool();
 }
 
 // ── LOCK / EXCLUDE ────────────────────────────────────────────────────────────
@@ -5363,10 +5391,11 @@ function renderHitterRow(p, inL, expPct, visCols) {
   const cells = {
     bo:    `<td style="text-align:center;color:var(--muted);font-weight:700;font-size:11px;width:30px;">${p.batting_order ?? ''}</td>`,
     sal:   `<td class="pt-sal">${p.salary ? '$'+p.salary.toLocaleString() : '—'}</td>`,
-    proj:  `<td class="pt-proj">${p.proj_dk_pts != null ? p.proj_dk_pts.toFixed(1) : '—'}${range}</td>`,
+    proj:  (()=>{ const ov=projOverrides[p.player_id]; const pv=ov??p.proj_dk_pts; const style=ov!=null?'color:#fbbf24;font-weight:700;':''; return `<td class="pt-proj" onclick="event.stopPropagation();editPlayerProj(${p.player_id},this)" title="Click to override projection" style="cursor:pointer;${style}">${pv!=null?Number(pv).toFixed(1):'—'}${range}</td>`; })(),
     own:   `<td class="${ownClass(p.proj_ownership)}">${p.proj_ownership != null ? p.proj_ownership.toFixed(1)+'%' : '—'}</td>`,
     exp:   `<td style="color:${expColor};font-weight:700;font-family:'Barlow Condensed',sans-serif;">${expPct != null ? expPct.toFixed(0)+'%' : '—'}</td>`,
-    value: (()=>{ const v=(p.salary&&p.proj_dk_pts!=null)?p.proj_dk_pts/p.salary*1000:null; const c=v==null?'pt-muted':v>=4?'cf-hi':v>=3?'cf-mid':'cf-lo'; return `<td class="pt-val ${c}">${v!=null?v.toFixed(1):'—'}</td>`; })(),
+    expcap:(()=>{ const ev=expTargets[p.player_id]; return `<td onclick="event.stopPropagation();editPlayerExp(${p.player_id},this)" title="Click to set max exposure %" style="cursor:pointer;color:${ev!=null?'#a78bfa':'var(--muted)'};font-weight:${ev!=null?'700':'400'};">${ev!=null?ev+'%':'—'}</td>`; })(),
+    value: (()=>{ const pr=projOverrides[p.player_id]??p.proj_dk_pts; const v=(p.salary&&pr!=null)?pr/p.salary*1000:null; const c=v==null?'pt-muted':v>=4?'cf-hi':v>=3?'cf-mid':'cf-lo'; return `<td class="pt-val ${c}">${v!=null?v.toFixed(1):'—'}</td>`; })(),
     hes:   `<td class="${p.hes == null ? 'pt-muted' : p.hes >= 7 ? 'pt-hes-hi' : p.hes >= 5.5 ? 'pt-hes-mid' : 'pt-hes-lo'}">${p.hes != null ? p.hes.toFixed(1) : '—'}</td>`,
     wrc:   (()=>{ const v=p.wrc_plus; const c=v==null?'pt-muted':v>=120?'cf-hi':v>=95?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?Math.round(v):'—'}</td>`; })(),
     pms:   (()=>{ const v=p.pms; const c=v==null?'pt-muted':v>=7?'cf-hi':v>=5?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v??'—'}</td>`; })(),
@@ -5416,10 +5445,11 @@ function renderPitcherRow(p, inL, expPct, visCols) {
 
   const cells = {
     sal:   `<td class="pt-sal">${p.salary ? '$'+p.salary.toLocaleString() : '—'}</td>`,
-    proj:  `<td class="pt-proj">${p.proj_dk_pts != null ? p.proj_dk_pts.toFixed(1) : '—'}${range}</td>`,
+    proj:  (()=>{ const ov=projOverrides[p.player_id]; const pv=ov??p.proj_dk_pts; const style=ov!=null?'color:#fbbf24;font-weight:700;':''; return `<td class="pt-proj" onclick="event.stopPropagation();editPlayerProj(${p.player_id},this)" title="Click to override projection" style="cursor:pointer;${style}">${pv!=null?Number(pv).toFixed(1):'—'}${range}</td>`; })(),
     own:   `<td class="${ownClass(p.proj_ownership)}">${p.proj_ownership != null ? p.proj_ownership.toFixed(1)+'%' : '—'}</td>`,
     exp:   `<td style="color:${expColor};font-weight:700;font-family:'Barlow Condensed',sans-serif;">${expPct != null ? expPct.toFixed(0)+'%' : '—'}</td>`,
-    value: (()=>{ const v=(p.salary&&p.proj_dk_pts!=null)?p.proj_dk_pts/p.salary*1000:null; const c=v==null?'pt-muted':v>=4?'cf-hi':v>=3?'cf-mid':'cf-lo'; return `<td class="pt-val ${c}">${v!=null?v.toFixed(1):'—'}</td>`; })(),
+    expcap:(()=>{ const ev=expTargets[p.player_id]; return `<td onclick="event.stopPropagation();editPlayerExp(${p.player_id},this)" title="Click to set max exposure %" style="cursor:pointer;color:${ev!=null?'#a78bfa':'var(--muted)'};font-weight:${ev!=null?'700':'400'};">${ev!=null?ev+'%':'—'}</td>`; })(),
+    value: (()=>{ const pr=projOverrides[p.player_id]??p.proj_dk_pts; const v=(p.salary&&pr!=null)?pr/p.salary*1000:null; const c=v==null?'pt-muted':v>=4?'cf-hi':v>=3?'cf-mid':'cf-lo'; return `<td class="pt-val ${c}">${v!=null?v.toFixed(1):'—'}</td>`; })(),
     xfip:  (()=>{ const v=p.xfip!=null?Number(p.xfip):null; const c=v==null?'pt-muted':v<=3.50?'cf-hi':v<=4.00?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(2):'—'}</td>`; })(),
     kpct:  (()=>{ const v=p.k_pct; const pv=v!=null?(v>1?v:v*100):null; const c=v==null?'pt-muted':pv>=28?'cf-hi':pv>=22?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${fmtPct(v)}</td>`; })(),
     era:   (()=>{ const v=p.era!=null?Number(p.era):null; const c=v==null?'pt-muted':v<=3.00?'cf-hi':v<=4.00?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(2):'—'}</td>`; })(),
@@ -6029,7 +6059,7 @@ function optoBuildLP(eligPlayers, opts, pastLineups) {
     const teamKey   = optoTeamKey(p);
 
     const varDef = {
-      proj:    p.proj_dk_pts || 0,
+      proj:    projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0,
       sal_max: p.salary || 0,
       sal_min: p.salary || 0,
       total:   1,
@@ -6217,7 +6247,7 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set()) {
 
         const score = ids.reduce((s, id) => {
           const p = allElig.find(pp => pp.player_id === id);
-          return s + (p?.proj_dk_pts || 0);
+          return s + (projOverrides[id] ?? p?.proj_dk_pts ?? 0);
         }, 0);
 
         if (score > bestScore) {
@@ -6231,7 +6261,6 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set()) {
     }
   }
 
-  console.log(`[Opto] ${solves} solves → best ${bestScore > -Infinity ? bestScore.toFixed(1) : 'n/a'} pts  main:${bestLineup?._mainTeam}  sub:${bestLineup?._subTeam}`);
   return bestLineup;
 }
 
@@ -6287,8 +6316,8 @@ function generateLineups() {
   const N = optoSettings.numLineups || 1;
 
   // Validate pool
-  const eligH = allHitters.filter(h => !isExcluded(h) && (h.salary || 0) > 0 && (h.proj_dk_pts || 0) > 0);
-  const eligP = allPitchers.filter(p => !isExcluded(p) && (p.salary || 0) > 0 && (p.proj_dk_pts || 0) > 0);
+  const eligH = allHitters.filter(h => !isExcluded(h) && (h.salary || 0) > 0 && (projOverrides[h.player_id] ?? h.proj_dk_pts ?? 0) > 0);
+  const eligP = allPitchers.filter(p => !isExcluded(p) && (p.salary || 0) > 0 && (projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0) > 0);
   if (eligH.length < 8)                  { showToast('Need at least 8 eligible hitters with projections'); return; }
   if (eligP.length < 2)                  { showToast('Need at least 2 eligible pitchers with projections'); return; }
   if (typeof solver === 'undefined')     { showToast('LP solver not loaded — check internet connection'); return; }
@@ -6306,14 +6335,22 @@ function generateLineups() {
 
         // Build exposure cap: exclude players who've already hit their max appearance count
         const capExcluded = new Set();
-        if (optoSettings.exposureMax < 100 && generated.length > 0) {
-          const maxAppear = Math.max(1, Math.ceil(N * optoSettings.exposureMax / 100));
+        if (generated.length > 0) {
           const appearCount = {};
           generated.forEach(g => Object.values(g.lineup).forEach(p => {
             if (p?.player_id) appearCount[p.player_id] = (appearCount[p.player_id] || 0) + 1;
           }));
-          Object.entries(appearCount).forEach(([pid, cnt]) => {
-            if (cnt >= maxAppear) capExcluded.add(+pid);
+          // Global exposure max
+          if (optoSettings.exposureMax < 100) {
+            const globalMax = Math.max(1, Math.ceil(N * optoSettings.exposureMax / 100));
+            Object.entries(appearCount).forEach(([pid, cnt]) => {
+              if (cnt >= globalMax) capExcluded.add(+pid);
+            });
+          }
+          // Per-player exposure caps (override or tighten global)
+          Object.entries(expTargets).forEach(([pid, capPct]) => {
+            const playerMax = Math.max(1, Math.ceil(N * capPct / 100));
+            if ((appearCount[+pid] || 0) >= playerMax) capExcluded.add(+pid);
           });
         }
 
