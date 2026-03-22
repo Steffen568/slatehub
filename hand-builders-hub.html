@@ -4235,6 +4235,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <div class="opto-row"><label># Lineups</label><input class="opto-input" id="opto-num" type="number" min="1" max="150" value="1" oninput="optoSettings.numLineups=+this.value"></div>
       <div class="opto-row"><label>Min Salary</label><input class="opto-input" id="opto-minsal" type="number" step="100" value="48000" oninput="optoSettings.minSalary=+this.value"></div>
       <div class="opto-row"><label>Min Unique</label><input class="opto-input" id="opto-unique" type="number" min="0" max="8" value="3" oninput="optoSettings.minUnique=+this.value"></div>
+      <div class="opto-row"><label>Randomness %</label><input class="opto-input" id="opto-randpct" type="number" min="0" max="30" value="10" title="Adds ±N% noise to projections — produces diverse lineups quickly. 0=off (exhaustive), 5-15=recommended for 20+ lineups" oninput="optoSettings.randPct=+this.value"></div>
       <div class="opto-row"><label>Hitter Max Exp%</label><input class="opto-input" id="opto-expmax-hit" type="number" min="1" max="100" value="100" oninput="expHitterMax=+this.value"></div>
       <div class="opto-row"><label>Pitcher Max Exp%</label><input class="opto-input" id="opto-expmax-pit" type="number" min="1" max="100" value="100" oninput="expPitcherMax=+this.value"></div>
       <div class="opto-row"><label>Max/Team</label><input class="opto-input" id="opto-maxteam" type="number" min="3" max="8" value="5" oninput="optoSettings.maxPerTeam=+this.value"></div>
@@ -4466,10 +4467,11 @@ const SVG_CHECK       = `<svg width="9" height="9" viewBox="0 0 9 9" fill="none"
 const optoSettings = {
   numLineups:   1,
   minSalary:    48000,
-  minUnique:    3,
+  minUnique:    2,
   maxPerTeam:   5,
   minConfirmed: 0,
   exposureMax:  100,   // max % any player can appear across all generated lineups
+  randPct:      10,    // projection randomization % — natural diversity without heavy constraints
   stackRules: [
     {
       primarySize:   4,     // 2–6 hitters from same team
@@ -6179,10 +6181,23 @@ function optoStackWindows(rule) {
   return windows;
 }
 
+// Weighted random selection — picks from items[] using weights[]
+function weightedRandomChoice(items, weights) {
+  if (!items.length) return null;
+  const total = weights.reduce((s, w) => s + Math.max(w, 0.01), 0);
+  let r = Math.random() * total;
+  for (let i = 0; i < items.length; i++) {
+    r -= Math.max(weights[i], 0.01);
+    if (r <= 0) return items[i];
+  }
+  return items[items.length - 1];
+}
+
 // Build the LP problem object for javascript-lp-solver.
 // opts: { mainTeam, mainPlayerIds, mainSize, subTeam, subSize }
 // pastSets: pre-computed Set<player_id>[] — one per past lineup (for diversity)
-function optoBuildLP(eligPlayers, opts, pastSets) {
+// perturbedProj: optional Map<player_id, proj> — randomized projections for diversity
+function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
   const REQ = { SP: 2, C: 1, '1B': 1, '2B': 1, '3B': 1, SS: 1, OF: 3 };
 
   // Auto-cap minSalary so it's always achievable. Spring training has flat $4,500
@@ -6246,7 +6261,7 @@ function optoBuildLP(eligPlayers, opts, pastSets) {
     const { positions, isPitcher, teamKey } = playerCache.get(pid);
 
     const varDef = {
-      proj:    projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0,
+      proj:    perturbedProj?.get(pid) ?? projOverrides[pid] ?? p.proj_dk_pts ?? 0,
       sal_max: p.salary || 0,
       sal_min: p.salary || 0,
       total:   1,
@@ -6374,17 +6389,23 @@ function optoPickRule(lineupIdx, total) {
 
 // Core search: enumerate main team × BO window × sub team, solve LP for each,
 // return the highest-scoring valid lineup.
+// When randPct > 0: randomized combo order + perturbed projections → 1 solve per lineup.
+// When randPct = 0: exhaustive (capped at MAX_SOLVES) → finds global optimum.
 function optoFindBest(rule, pastLineups, capExcluded = new Set()) {
   const allElig = [
     ...allHitters.filter(h => !isExcluded(h) && !capExcluded.has(h.player_id) && (h.salary || 0) > 0),
     ...allPitchers.filter(p => !isExcluded(p) && !capExcluded.has(p.player_id) && (p.salary || 0) > 0),
   ];
 
-  // Pre-compute once — avoids rebuilding these inside every LP build + score step
-  const pastSets = pastLineups.map(saved =>
+  // Cap diversity to last 20 lineups — prevents LP infeasibility from growing unboundedly
+  const DIVERSITY_WINDOW = 20;
+  const recentPast = pastLineups.slice(-DIVERSITY_WINDOW);
+  const pastSets = recentPast.map(saved =>
     new Set(Object.values(saved.lineup || {}).filter(Boolean).map(p => p.player_id))
   );
   const eligById = new Map(allElig.map(p => [p.player_id, p]));
+
+  const randPct = optoSettings.randPct || 0;
 
   // Rank teams by sum of top-5 hitter proj pts (use normalized team key)
   const allTeams    = [...new Set(allHitters.map(h => optoTeamKey(h)).filter(Boolean))];
@@ -6395,59 +6416,83 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set()) {
   const mainPrefs = optoSettings.teamStacks.filter(ts => ts.role === 'main').map(ts => ts.team);
   const mainCandidates = mainPrefs.length > 0
     ? mainPrefs
-    : rankedTeams.slice(0, 8).filter(t =>
+    : rankedTeams.slice(0, 10).filter(t =>
         allHitters.filter(h => optoTeamKey(h) === t && !isExcluded(h)).length >= rule.primarySize
       );
 
   const windows = optoStackWindows(rule);
 
+  // Sub-team builder (shared between randomized and exhaustive paths)
+  const subPrefs = optoSettings.teamStacks.filter(ts => ts.role === 'sub').map(ts => ts.team);
+  function getSubCandidates(mainTeam) {
+    if (rule.subSize === 0) return [null];
+    if (subPrefs.length > 0) return subPrefs.filter(t => t !== mainTeam);
+    return rankedTeams
+      .filter(t => t !== mainTeam && allHitters.filter(h => optoTeamKey(h) === t && !isExcluded(h)).length >= rule.subSize)
+      .slice(0, 8);
+  }
+
+  // Shared solve helper
+  function trySolve(mainTeam, window, subTeam, perturbedProj) {
+    const teamHitters   = allHitters.filter(h => optoTeamKey(h) === mainTeam && !isExcluded(h));
+    const mainPlayerIds = window.length === 0
+      ? teamHitters.map(h => h.player_id)
+      : teamHitters.filter(h => h.batting_order != null && window.includes(h.batting_order)).map(h => h.player_id);
+    if (mainPlayerIds.length < rule.primarySize) return null;
+
+    const problem = optoBuildLP(allElig, {
+      mainTeam, mainPlayerIds, mainSize: rule.primarySize,
+      subTeam,  subSize: rule.subSize,
+    }, pastSets, perturbedProj);
+
+    const ids = optoSolve(problem);
+    if (!ids || ids.length !== 10) return null;
+
+    const score = ids.reduce((s, id) => {
+      const p = eligById.get(id);
+      return s + (projOverrides[id] ?? p?.proj_dk_pts ?? 0);
+    }, 0);
+    const assembled = optoAssembleLineup(ids, allElig);
+    assembled._score = score; assembled._mainTeam = mainTeam; assembled._subTeam = subTeam;
+    return { score, lineup: assembled };
+  }
+
   let bestScore  = -Infinity;
   let bestLineup = null;
-  let solves     = 0;
 
-  for (const mainTeam of mainCandidates) {
-    const teamHitters = allHitters.filter(h => optoTeamKey(h) === mainTeam && !isExcluded(h));
+  if (randPct > 0) {
+    // ── RANDOMIZED MODE ──────────────────────────────────────────────────────
+    // Try up to maxAttempts random (mainTeam, window, subTeam) combos with
+    // perturbed projections. Stop as soon as a feasible lineup is found.
+    const maxAttempts = Math.max(mainCandidates.length * 2, 12);
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const mainTeam = weightedRandomChoice(mainCandidates, mainCandidates.map(t => Math.max(teamScores[t] || 1, 1)));
+      if (!mainTeam) break;
+      const window   = windows[Math.floor(Math.random() * windows.length)];
+      const subPool  = getSubCandidates(mainTeam);
+      const subTeam  = subPool[Math.floor(Math.random() * subPool.length)] ?? null;
 
-    for (const window of windows) {
-      // Which hitters qualify for this stack window?
-      const mainPlayerIds = window.length === 0
-        ? teamHitters.map(h => h.player_id)
-        : teamHitters.filter(h => h.batting_order != null && window.includes(h.batting_order))
-                     .map(h => h.player_id);
+      // Perturb each player's projection by ±randPct%
+      const perturbedProj = new Map(allElig.map(p => {
+        const base = projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
+        return [p.player_id, base * (1 + (Math.random() * 2 - 1) * randPct / 100)];
+      }));
 
-      if (mainPlayerIds.length < rule.primarySize) continue;
-
-      // Sub-team candidates — use prefs if set, else top 5 teams with enough hitters
-      const subPrefs = optoSettings.teamStacks.filter(ts => ts.role === 'sub').map(ts => ts.team);
-      const subCandidates = rule.subSize === 0
-        ? [null]
-        : subPrefs.length > 0
-          ? subPrefs.filter(t => t !== mainTeam)
-          : rankedTeams
-              .filter(t => t !== mainTeam && allHitters.filter(h => optoTeamKey(h) === t && !isExcluded(h)).length >= rule.subSize)
-              .slice(0, 5);
-
-      for (const subTeam of subCandidates) {
-        const problem = optoBuildLP(allElig, {
-          mainTeam, mainPlayerIds, mainSize: rule.primarySize,
-          subTeam,  subSize: rule.subSize,
-        }, pastSets);
-
-        const ids = optoSolve(problem);
-        solves++;
-        if (!ids || ids.length !== 10) continue;
-
-        const score = ids.reduce((s, id) => {
-          const p = eligById.get(id);
-          return s + (projOverrides[id] ?? p?.proj_dk_pts ?? 0);
-        }, 0);
-
-        if (score > bestScore) {
-          bestScore  = score;
-          bestLineup = optoAssembleLineup(ids, allElig);
-          bestLineup._score    = score;
-          bestLineup._mainTeam = mainTeam;
-          bestLineup._subTeam  = subTeam;
+      const res = trySolve(mainTeam, window, subTeam, perturbedProj);
+      if (res) { bestLineup = res.lineup; break; }  // first feasible wins
+    }
+  } else {
+    // ── EXHAUSTIVE MODE ──────────────────────────────────────────────────────
+    // Try all combinations in ranked order, return the highest-scoring feasible.
+    // Cap at MAX_SOLVES to prevent browser timeout.
+    const MAX_SOLVES = 60;
+    let solves = 0;
+    outer: for (const mainTeam of mainCandidates) {
+      for (const window of windows) {
+        for (const subTeam of getSubCandidates(mainTeam)) {
+          if (solves++ >= MAX_SOLVES) break outer;
+          const res = trySolve(mainTeam, window, subTeam, null);
+          if (res && res.score > bestScore) { bestScore = res.score; bestLineup = res.lineup; }
         }
       }
     }
@@ -6516,67 +6561,75 @@ function generateLineups() {
 
   showToast(`Generating ${N} lineup${N > 1 ? 's' : ''}…`);
 
-  // Defer heavy compute so the toast renders first
-  setTimeout(() => {
-    try {
-      const existing  = JSON.parse(localStorage.getItem('hbh_lineups') || '[]');
-      const generated = [];
+  const existing    = JSON.parse(localStorage.getItem('hbh_lineups') || '[]');
+  const generated   = [];
+  const spIdSet     = new Set(allPitchers.map(p => p.player_id));
+  const appearCount = {};
+  let lineupIdx     = 0;
 
-      // Pre-compute once — spIdSet and appearCount maintained incrementally
-      const spIdSet    = new Set(allPitchers.map(p => p.player_id));
-      const appearCount = {};  // player_id → count in generated so far
+  function buildOne() {
+    const rule = optoPickRule(lineupIdx, N);
 
-      for (let i = 0; i < N; i++) {
-        const rule = optoPickRule(i, N);
-
-        // Build exposure cap from incrementally-maintained appearCount
-        const capExcluded = new Set();
-        Object.entries(appearCount).forEach(([pid, cnt]) => {
-          const isSP = spIdSet.has(+pid);
-          const cap  = isSP ? expPitcherMax : expHitterMax;
-          if (cap < 100) {
-            const globalMax = Math.max(1, Math.ceil(N * cap / 100));
-            if (cnt >= globalMax) capExcluded.add(+pid);
-          }
-        });
-        Object.entries(expTargets).forEach(([pid, capPct]) => {
-          const playerMax = Math.max(1, Math.ceil(N * capPct / 100));
-          if ((appearCount[+pid] || 0) >= playerMax) capExcluded.add(+pid);
-        });
-
-        const lineupObj = optoFindBest(rule, generated, capExcluded);
-
-        if (!lineupObj) {
-          showToast(`Generated ${generated.length} of ${N} — constraints too tight for more`);
-          break;
-        }
-
-        const totProj = Object.values(lineupObj)
-          .filter(v => v && typeof v === 'object' && v.proj_dk_pts)
-          .reduce((s, p) => s + (p.proj_dk_pts || 0), 0);
-
-        generated.push({
-          name:    `Opto ${i + 1}`,
-          totProj: +totProj.toFixed(1),
-          lineup:  lineupObj,
-          ts:      Date.now(),
-        });
-
-        // Incrementally update appearCount — avoids O(n²) full rebuild each iteration
-        Object.values(lineupObj).forEach(p => {
-          if (p?.player_id) appearCount[p.player_id] = (appearCount[p.player_id] || 0) + 1;
-        });
+    const capExcluded = new Set();
+    Object.entries(appearCount).forEach(([pid, cnt]) => {
+      const isSP = spIdSet.has(+pid);
+      const cap  = isSP ? expPitcherMax : expHitterMax;
+      if (cap < 100) {
+        const globalMax = Math.max(1, Math.ceil(N * cap / 100));
+        if (cnt >= globalMax) capExcluded.add(+pid);
       }
+    });
+    Object.entries(expTargets).forEach(([pid, capPct]) => {
+      const playerMax = Math.max(1, Math.ceil(N * capPct / 100));
+      if ((appearCount[+pid] || 0) >= playerMax) capExcluded.add(+pid);
+    });
 
-      const merged = [...existing, ...generated].slice(-20);
-      localStorage.setItem('hbh_lineups', JSON.stringify(merged));
-      renderSavedCards();
-      showToast(`${generated.length} lineup${generated.length !== 1 ? 's' : ''} generated!`);
+    const lineupObj = optoFindBest(rule, generated, capExcluded);
+    if (!lineupObj) return false;  // infeasible — stop
+
+    const totProj = Object.values(lineupObj)
+      .filter(v => v && typeof v === 'object' && v.proj_dk_pts)
+      .reduce((s, p) => s + (p.proj_dk_pts || 0), 0);
+
+    generated.push({ name: `Opto ${lineupIdx + 1}`, totProj: +totProj.toFixed(1), lineup: lineupObj, ts: Date.now() });
+    Object.values(lineupObj).forEach(p => {
+      if (p?.player_id) appearCount[p.player_id] = (appearCount[p.player_id] || 0) + 1;
+    });
+    lineupIdx++;
+    return true;
+  }
+
+  function finalize() {
+    const merged = [...existing, ...generated].slice(-150);
+    localStorage.setItem('hbh_lineups', JSON.stringify(merged));
+    renderSavedCards();
+    showToast(`${generated.length} lineup${generated.length !== 1 ? 's' : ''} generated!`);
+  }
+
+  // Chunked async: generate BATCH_SIZE lineups per tick so browser stays responsive
+  const BATCH = 10;
+  function nextChunk() {
+    try {
+      for (let b = 0; b < BATCH && lineupIdx < N; b++) {
+        if (!buildOne()) {
+          showToast(`Generated ${generated.length} of ${N} — constraints too tight for more`);
+          finalize();
+          return;
+        }
+      }
+      if (lineupIdx < N) {
+        showToast(`Generating… ${lineupIdx}/${N}`);
+        setTimeout(nextChunk, 0);
+      } else {
+        finalize();
+      }
     } catch (err) {
       console.error('[Opto]', err);
       showToast('Optimizer error — check console');
     }
-  }, 30);
+  }
+
+  setTimeout(nextChunk, 30);
 }
 
 // ── TEAM STACK PREFERENCES ────────────────────────────────────────────────────
