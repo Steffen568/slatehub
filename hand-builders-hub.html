@@ -6599,30 +6599,27 @@ function generateLineups() {
     return true;
   }
 
-  function finalize() {
+  function flushBatch(done) {
     const merged = [...existing, ...generated].slice(-150);
     localStorage.setItem('hbh_lineups', JSON.stringify(merged));
     renderSavedCards();
-    showToast(`${generated.length} lineup${generated.length !== 1 ? 's' : ''} generated!`);
+    if (done) showToast(`${generated.length} lineup${generated.length !== 1 ? 's' : ''} generated!`);
+    else       showToast(`Generating… ${lineupIdx}/${N}`);
   }
 
-  // Chunked async: generate BATCH_SIZE lineups per tick so browser stays responsive
+  // Chunked async: generate BATCH_SIZE lineups per tick, flush to UI after each batch
   const BATCH = 10;
   function nextChunk() {
     try {
       for (let b = 0; b < BATCH && lineupIdx < N; b++) {
         if (!buildOne()) {
+          flushBatch(true);
           showToast(`Generated ${generated.length} of ${N} — constraints too tight for more`);
-          finalize();
           return;
         }
       }
-      if (lineupIdx < N) {
-        showToast(`Generating… ${lineupIdx}/${N}`);
-        setTimeout(nextChunk, 0);
-      } else {
-        finalize();
-      }
+      flushBatch(lineupIdx >= N);
+      if (lineupIdx < N) setTimeout(nextChunk, 0);
     } catch (err) {
       console.error('[Opto]', err);
       showToast('Optimizer error — check console');
