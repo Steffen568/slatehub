@@ -4070,6 +4070,10 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 .exp-name-cell{display:flex;align-items:center;gap:5px;font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:600;color:var(--text2);}
 .exp-bar-wrap-wide{width:100%;height:6px;background:var(--border);border-radius:3px;overflow:hidden;}
 .exp-bar-fill{height:100%;border-radius:3px;background:var(--hi);transition:width .2s;}
+.exp-tab-bar{display:flex;gap:2px;padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.exp-tab{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;padding:3px 10px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .12s;}
+.exp-tab.active{background:var(--s3);color:var(--text2);border-color:var(--border2);}
+.stack-size-badge{font-size:9px;font-weight:700;padding:2px 5px;border-radius:3px;background:var(--s3);color:var(--muted);min-width:28px;text-align:center;white-space:nowrap;}
 
 /* ── SUITE TOP NAV ──────────────────────────────────────────────────────────── */
 .sh-topnav{display:flex;align-items:stretch;background:#0a0d12;border-bottom:1px solid var(--border);height:52px;flex-shrink:0;z-index:100;}
@@ -4205,8 +4209,14 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <div class="lineups-grid saved-list" id="saved-list"></div>
     </div>
     <div class="lineups-exposure-col">
-      <div class="exp-col-hd">Exposure</div>
+      <div class="exp-col-hd" style="padding:0;">
+        <div class="exp-tab-bar">
+          <button class="exp-tab active" id="exp-tab-players" onclick="switchExpTab('players')">Players</button>
+          <button class="exp-tab" id="exp-tab-stacks" onclick="switchExpTab('stacks')">Stacks</button>
+        </div>
+      </div>
       <div id="exp-list" style="overflow-y:auto;flex:1;"></div>
+      <div id="exp-stack-list" style="overflow-y:auto;flex:1;display:none;"></div>
     </div>
   </div>
 </section>
@@ -4405,6 +4415,7 @@ let projOverrides   = {};          // player_id → manual proj override
 let expTargets      = {};          // player_id → manual max exposure % (0–100)
 let expHitterMax    = 100;         // global hitter exposure cap %
 let expPitcherMax   = 100;         // global pitcher exposure cap %
+let stackExpCaps    = {};          // "TEAM_N" → max stack exposure % (e.g. "ARI_3" → 20)
 
 function isExcluded(p) { return excludedPlayers.has(p.player_id) || teamExcludes.has(p.team); }
 
@@ -5687,6 +5698,7 @@ function renderSavedCards() {
   if (section) section.style.display = '';
   list.innerHTML = saved.map((s, i) => renderLineupCard(s, i)).join('');
   renderExposure();
+  if (_activeExpTab === 'stacks') renderStackExposure();
   renderPool();   // refresh Exp% column whenever saved lineups change
 }
 
@@ -5852,6 +5864,97 @@ function setExpTarget(pid, val) {
   if (!isNaN(n) && n >= 1 && n <= 100) expTargets[pid] = n;
   else delete expTargets[pid];
   renderPool();
+}
+
+// ── EXPOSURE TABS ─────────────────────────────────────────────────────────────
+let _activeExpTab = 'players';
+
+function switchExpTab(tab) {
+  _activeExpTab = tab;
+  document.getElementById('exp-tab-players').classList.toggle('active', tab === 'players');
+  document.getElementById('exp-tab-stacks').classList.toggle('active',  tab === 'stacks');
+  document.getElementById('exp-list').style.display       = tab === 'players' ? '' : 'none';
+  document.getElementById('exp-stack-list').style.display = tab === 'stacks'  ? '' : 'none';
+  if (tab === 'stacks') renderStackExposure();
+}
+
+function setStackExpCap(key, val) {
+  const n = parseInt(val);
+  if (!isNaN(n) && n >= 1 && n <= 100) stackExpCaps[key] = n;
+  else delete stackExpCaps[key];
+}
+
+function renderStackExposure() {
+  const el    = document.getElementById('exp-stack-list');
+  const saved = JSON.parse(localStorage.getItem('hbh_lineups') || '[]');
+  if (!saved.length) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:12px 16px;">No saved lineups to analyze.</div>';
+    return;
+  }
+
+  const total       = saved.length;
+  const hitterSlots = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
+  const stackCounts = {}; // "TEAM_N" → { team, size, count }
+
+  saved.forEach(s => {
+    const teamCounts = {};
+    hitterSlots.forEach(key => {
+      const p = s.lineup?.[key];
+      if (!p?.team) return;
+      teamCounts[p.team] = (teamCounts[p.team] || 0) + 1;
+    });
+    Object.entries(teamCounts).forEach(([team, cnt]) => {
+      if (cnt < 2) return;
+      const key = `${team}_${cnt}`;
+      if (!stackCounts[key]) stackCounts[key] = { team, size: cnt, count: 0 };
+      stackCounts[key].count++;
+    });
+  });
+
+  const rows = Object.values(stackCounts).sort((a, b) => {
+    const aPct = a.count / total;
+    const bPct = b.count / total;
+    return bPct - aPct || a.team.localeCompare(b.team) || b.size - a.size;
+  });
+
+  if (!rows.length) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:12px 16px;">No multi-player stacks found in saved lineups.</div>';
+    return;
+  }
+
+  el.innerHTML = `
+    <table class="exp-table">
+      <thead><tr>
+        <th style="width:42px;"></th>
+        <th>Team</th>
+        <th>Exposure</th>
+        <th style="width:58px;text-align:right;">Exp%</th>
+        <th style="width:62px;text-align:center;">MaxExp</th>
+      </tr></thead>
+      <tbody>${rows.map(r => {
+        const pct     = +(r.count / total * 100).toFixed(0);
+        const barClr  = pct > 66 ? '#4ade80' : pct > 33 ? '#fbbf24' : 'var(--hi)';
+        const capKey  = `${r.team}_${r.size}`;
+        const cap     = stackExpCaps[capKey];
+        const capped  = cap != null && pct > cap;
+        const tc      = abbrColor(r.team);
+        return `<tr>
+          <td><span class="stack-size-badge">${r.size}-man</span></td>
+          <td><span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${r.team}</span></td>
+          <td><div class="exp-bar-wrap-wide"><div class="exp-bar-fill" style="width:${pct}%;background:${barClr};"></div></div></td>
+          <td style="text-align:right;font-weight:700;font-family:'Barlow Condensed',sans-serif;color:${capped?'#f87171':barClr};">
+            ${pct}%<br><span style="font-size:9px;color:var(--muted);font-weight:400;">${r.count}/${total}</span>
+          </td>
+          <td style="text-align:center;">
+            <input type="number" class="exp-cap-input" min="1" max="100" placeholder="—"
+              value="${cap != null ? cap : ''}"
+              oninput="setStackExpCap('${capKey}',this.value)"
+              style="width:48px;"
+              title="Max exposure % for ${r.size}-man ${r.team} stack">
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
 }
 
 function loadSavedLineup(idx) {
