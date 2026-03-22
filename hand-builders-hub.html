@@ -4054,6 +4054,19 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 .exp-bar-wrap{width:50px;height:5px;background:var(--border);border-radius:3px;overflow:hidden;}
 .exp-bar-fill{height:100%;border-radius:3px;background:var(--hi);}
 .exp-pct{font-weight:700;color:var(--hi);min-width:28px;text-align:right;font-family:'Barlow Condensed',sans-serif;}
+.exp-global-caps{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--s2);border-bottom:1px solid var(--border);font-size:11px;flex-wrap:wrap;}
+.exp-cap-label{font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-size:10px;}
+.exp-cap-item{display:flex;align-items:center;gap:4px;color:var(--text2);}
+.exp-cap-input{width:44px;background:var(--s3);border:1px solid var(--border);color:var(--text2);font-size:11px;padding:2px 5px;border-radius:3px;text-align:center;outline:none;}
+.exp-cap-note{margin-left:auto;font-size:10px;color:var(--muted);}
+.exp-table{width:100%;border-collapse:collapse;font-size:11px;}
+.exp-table thead th{padding:4px 8px;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--surface);}
+.exp-table tbody tr{border-bottom:1px solid var(--border);}
+.exp-table tbody tr:hover{background:var(--s2);}
+.exp-table td{padding:4px 8px;vertical-align:middle;}
+.exp-name-cell{display:flex;align-items:center;gap:5px;font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:600;color:var(--text2);}
+.exp-bar-wrap-wide{width:100%;height:6px;background:var(--border);border-radius:3px;overflow:hidden;}
+.exp-bar-fill{height:100%;border-radius:3px;background:var(--hi);transition:width .2s;}
 
 /* ── SUITE TOP NAV ──────────────────────────────────────────────────────────── */
 .sh-topnav{display:flex;align-items:stretch;background:#0a0d12;border-bottom:1px solid var(--border);height:52px;flex-shrink:0;z-index:100;}
@@ -4191,8 +4204,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
   <div id="panel-saved">
     <div class="lineups-grid saved-list" id="saved-list"></div>
   </div>
-  <div id="panel-exposure" style="display:none;padding:12px 16px;">
-    <div class="exp-list" id="exp-list"></div>
+  <div id="panel-exposure" style="display:none;">
+    <div id="exp-list" style="max-height:340px;overflow-y:auto;"></div>
   </div>
 </section>
 
@@ -4387,6 +4400,8 @@ let sortDir         = -1;          // -1 = desc, 1 = asc
 let pvhOff          = true;        // true = hide hitters facing lineup's SP
 let projOverrides   = {};          // player_id → manual proj override
 let expTargets      = {};          // player_id → manual max exposure % (0–100)
+let expHitterMax    = 100;         // global hitter exposure cap %
+let expPitcherMax   = 100;         // global pitcher exposure cap %
 
 function isExcluded(p) { return excludedPlayers.has(p.player_id) || teamExcludes.has(p.team); }
 
@@ -5669,6 +5684,7 @@ function renderSavedCards() {
   if (section) section.style.display = '';
   list.innerHTML = saved.map((s, i) => renderLineupCard(s, i)).join('');
   if (_activeSavedTab === 'exposure') renderExposure();
+  renderPool();   // refresh Exp% column whenever saved lineups change
 }
 
 function clearAllLineups() {
@@ -5773,34 +5789,78 @@ function renderLineupCard(s, i) {
 function renderExposure() {
   const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
   const el    = document.getElementById('exp-list');
-  if (!saved.length) { el.innerHTML='<div style="font-size:11px;color:var(--muted);padding:4px 0;">No saved lineups to analyze.</div>'; return; }
+  if (!saved.length) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:12px 16px;">No saved lineups to analyze.</div>';
+    return;
+  }
 
   const total = saved.length;
-  // Count appearances per player
-  const counts = {}; // player_id → {name, pos, pts, count}
+  const counts = {}; // id → {id, name, pos, team, count, isSP}
   saved.forEach(s => {
     LINEUP_SLOTS.forEach(slot => {
       const p = s.lineup?.[slot.key];
       if (!p) return;
       const id = p.player_id || p.dk_id;
-      if (!counts[id]) counts[id] = { name: p.name, pos: slot.pos, pts: p.proj_dk_pts, count: 0 };
+      if (!counts[id]) counts[id] = { id, name: p.name, pos: slot.pos, team: p.team || '', count: 0, isSP: slot.pos === 'SP' };
       counts[id].count++;
     });
   });
 
-  const rows = Object.values(counts).sort((a,b) => b.count - a.count || (b.pts||0) - (a.pts||0));
-  el.innerHTML = rows.map(r => {
-    const pct  = (r.count / total * 100).toFixed(0);
-    const pc   = posColor(r.pos);
-    const pcts = pct > 66 ? '#4ade80' : pct > 33 ? '#fbbf24' : 'var(--hi)';
-    return `<div class="exp-row">
-      <span class="exp-pos" style="background:${pc.bg};color:${pc.tx};">${r.pos}</span>
-      <span class="exp-name">${r.name}</span>
-      <div class="exp-bar-wrap"><div class="exp-bar-fill" style="width:${pct}%;background:${pcts};"></div></div>
-      <span class="exp-pct" style="color:${pcts};">${pct}%</span>
-      <span style="font-size:9px;color:var(--muted);">${r.count}/${total}</span>
-    </div>`;
-  }).join('');
+  const rows = Object.values(counts).sort((a,b) => b.count - a.count);
+
+  el.innerHTML = `
+    <div class="exp-global-caps">
+      <span class="exp-cap-label">Global Caps</span>
+      <label class="exp-cap-item">Hitters
+        <input type="number" class="exp-cap-input" min="1" max="100" value="${expHitterMax}"
+          oninput="expHitterMax=Math.min(100,Math.max(1,+this.value||100))">%
+      </label>
+      <label class="exp-cap-item">Pitchers
+        <input type="number" class="exp-cap-input" min="1" max="100" value="${expPitcherMax}"
+          oninput="expPitcherMax=Math.min(100,Math.max(1,+this.value||100))">%
+      </label>
+      <span class="exp-cap-note">${total} lineup${total!==1?'s':''}</span>
+    </div>
+    <table class="exp-table">
+      <thead><tr>
+        <th style="width:34px;"></th>
+        <th>Player</th>
+        <th>Exposure</th>
+        <th style="width:58px;text-align:right;">Exp%</th>
+        <th style="width:62px;text-align:center;">MaxExp</th>
+      </tr></thead>
+      <tbody>${rows.map(r => {
+        const pct    = +(r.count / total * 100).toFixed(0);
+        const pc     = posColor(r.pos);
+        const barClr = pct > 66 ? '#4ade80' : pct > 33 ? '#fbbf24' : 'var(--hi)';
+        const cap    = expTargets[r.id];
+        const capped = cap != null && pct > cap;
+        const tc     = r.team ? abbrColor(r.team) : null;
+        const teamTag = tc ? `<span class="team-tag" style="background:${tc.bg};color:${tc.tx};font-size:9px;">${r.team}</span>` : '';
+        return `<tr>
+          <td><span class="exp-pos" style="background:${pc.bg};color:${pc.tx};">${r.pos}</span></td>
+          <td><div class="exp-name-cell">${teamTag}<span>${r.name}</span></div></td>
+          <td><div class="exp-bar-wrap-wide"><div class="exp-bar-fill" style="width:${pct}%;background:${barClr};"></div></div></td>
+          <td style="text-align:right;font-weight:700;font-family:'Barlow Condensed',sans-serif;color:${capped?'#f87171':barClr};">
+            ${pct}%<br><span style="font-size:9px;color:var(--muted);font-weight:400;">${r.count}/${total}</span>
+          </td>
+          <td style="text-align:center;">
+            <input type="number" class="exp-cap-input" min="1" max="100" placeholder="—"
+              value="${cap != null ? cap : ''}"
+              oninput="setExpTarget(${r.id},this.value)"
+              style="width:48px;"
+              title="Max exposure % for this player">
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+}
+
+function setExpTarget(pid, val) {
+  const n = parseInt(val);
+  if (!isNaN(n) && n >= 1 && n <= 100) expTargets[pid] = n;
+  else delete expTargets[pid];
+  renderPool();
 }
 
 function loadSavedLineup(idx) {
@@ -6369,13 +6429,16 @@ function generateLineups() {
           generated.forEach(g => Object.values(g.lineup).forEach(p => {
             if (p?.player_id) appearCount[p.player_id] = (appearCount[p.player_id] || 0) + 1;
           }));
-          // Global exposure max
-          if (optoSettings.exposureMax < 100) {
-            const globalMax = Math.max(1, Math.ceil(N * optoSettings.exposureMax / 100));
-            Object.entries(appearCount).forEach(([pid, cnt]) => {
+          // Global exposure caps — separate for hitters and pitchers
+          const spIdSet = new Set(allPitchers.map(p => p.player_id));
+          Object.entries(appearCount).forEach(([pid, cnt]) => {
+            const isSP = spIdSet.has(+pid);
+            const cap  = isSP ? expPitcherMax : expHitterMax;
+            if (cap < 100) {
+              const globalMax = Math.max(1, Math.ceil(N * cap / 100));
               if (cnt >= globalMax) capExcluded.add(+pid);
-            });
-          }
+            }
+          });
           // Per-player exposure caps (override or tighten global)
           Object.entries(expTargets).forEach(([pid, capPct]) => {
             const playerMax = Math.max(1, Math.ceil(N * capPct / 100));
