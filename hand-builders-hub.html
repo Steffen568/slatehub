@@ -3806,8 +3806,10 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 .pool-filters{display:flex;gap:5px;align-items:center;flex-wrap:wrap;}
 .pos-filter{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;padding:3px 8px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .12s;letter-spacing:.5px;}
 .pos-filter.active{background:var(--s3);color:var(--text);border-color:var(--border2);}
-.pool-search{margin-left:auto;background:var(--s2);border:1px solid var(--border);color:var(--text2);font-family:'Barlow',sans-serif;font-size:12px;padding:3px 8px;border-radius:4px;outline:none;width:130px;}
+.pool-search{background:var(--s2);border:1px solid var(--border);color:var(--text2);font-family:'Barlow',sans-serif;font-size:12px;padding:3px 8px;border-radius:4px;outline:none;width:130px;}
 .pool-search::placeholder{color:var(--muted);}
+.pvh-toggle{margin-left:auto;font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;padding:3px 8px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;letter-spacing:.5px;transition:all .12s;}
+.pvh-toggle.active{background:#b91c1c22;color:#f87171;border-color:#b91c1c66;}
 .pool-count{font-size:10px;color:var(--muted);padding:3px 10px 0;flex-shrink:0;}
 .pool-list{flex:1;overflow-y:auto;overflow-x:auto;}
 
@@ -4119,6 +4121,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
         <button class="pos-filter" data-pos="SS" onclick="setPositionFilter('SS')">SS</button>
         <button class="pos-filter" data-pos="OF" onclick="setPositionFilter('OF')">OF</button>
         <input class="pool-search" id="pool-search" type="text" placeholder="Search player…" oninput="renderPool()">
+        <button class="pvh-toggle active" id="pvh-btn" onclick="togglePvh()" title="Pitchers vs Hitters — hide hitters facing your lineup's SP">PvH Off</button>
       </div>
     </div>
     <div class="team-excl-row" id="team-excl-row" style="display:none;">
@@ -4381,6 +4384,7 @@ let excludedPlayers = new Set();   // player_ids — individually excluded
 let teamExcludes    = new Set();   // team abbrs  — all players bulk-excluded
 let sortCol         = 'proj';
 let sortDir         = -1;          // -1 = desc, 1 = asc
+let pvhOff          = true;        // true = hide hitters facing lineup's SP
 let projOverrides   = {};          // player_id → manual proj override
 let expTargets      = {};          // player_id → manual max exposure % (0–100)
 
@@ -5277,6 +5281,29 @@ function toggleTeamExclude(abbr) {
 }
 
 // ── RENDER POOL ───────────────────────────────────────────────────────────────
+function togglePvh() {
+  pvhOff = !pvhOff;
+  const btn = document.getElementById('pvh-btn');
+  if (btn) {
+    btn.textContent = pvhOff ? 'PvH Off' : 'PvH On';
+    btn.classList.toggle('active', pvhOff);
+  }
+  renderPool();
+}
+
+function getPvhExcludedTeamIds() {
+  const excluded = new Set();
+  for (const key of ['sp1', 'sp2']) {
+    const sp = lineup[key];
+    if (!sp || !sp.game_pk) continue;
+    const game = _games.find(g => g.game_pk === sp.game_pk);
+    if (!game) continue;
+    const oppTeamId = sp.team_id === game.home_team_id ? game.away_team_id : game.home_team_id;
+    if (oppTeamId) excluded.add(oppTeamId);
+  }
+  return excluded;
+}
+
 function renderPool() {
   const isHit      = activeTab === 'hitters';
   const pool       = isHit ? allHitters : allPitchers;
@@ -5286,10 +5313,12 @@ function renderPool() {
   const inLineupIds = new Set(Object.values(lineup).filter(Boolean).map(p=>p.player_id));
   const expMap     = getExposureMap();
 
+  const pvhExcluded = (isHit && pvhOff) ? getPvhExcludedTeamIds() : new Set();
   let filtered = pool.filter(p => {
     if (activeTeamIds.size > 0 && p.team_id != null && !activeTeamIds.has(p.team_id)) return false;
     if (activePos !== 'ALL' && !p.positions.includes(activePos)) return false;
     if (search && !p.name.toLowerCase().includes(search)) return false;
+    if (pvhExcluded.size > 0 && p.team_id != null && pvhExcluded.has(p.team_id)) return false;
     return true;
   });
 
