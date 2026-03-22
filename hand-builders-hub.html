@@ -3789,14 +3789,17 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 .hbh-body{display:flex;flex-shrink:0;height:calc(100vh - 110px);overflow:hidden;}
 
 /* ── LINEUPS SECTION (below main layout) ─────────────────────────────────── */
-.lineups-section{flex-shrink:0;border-top:2px solid var(--border2);background:var(--bg);}
-.lineups-section-hd{display:flex;align-items:center;gap:10px;padding:10px 16px 8px;border-bottom:1px solid var(--border);flex-wrap:wrap;}
+.lineups-section{flex-shrink:0;border-top:2px solid var(--border2);background:var(--bg);display:flex;flex-direction:column;}
+.lineups-section-hd{display:flex;align-items:center;gap:10px;padding:10px 16px 8px;border-bottom:1px solid var(--border);flex-wrap:wrap;flex-shrink:0;}
 .lineups-section-title{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:14px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text);}
-.lineups-section-hd .saved-tabs{flex:0;margin:0;}
+.lineups-body{display:flex;flex:1;overflow:hidden;min-height:200px;}
+.lineups-saved-col{flex:0 0 68%;overflow-y:auto;overflow-x:auto;border-right:1px solid var(--border);}
+.lineups-exposure-col{flex:0 0 32%;display:flex;flex-direction:column;overflow:hidden;}
+.exp-col-hd{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);padding:6px 12px;border-bottom:1px solid var(--border);flex-shrink:0;}
 .lineups-grid{display:flex;flex-wrap:wrap;gap:10px;padding:10px 16px;align-content:flex-start;}
 
 /* ── PLAYER POOL ─────────────────────────────────────────────────────────── */
-.pool-panel{display:flex;flex-direction:column;width:68%;border-right:1px solid var(--border);overflow:hidden;}
+.pool-panel{display:flex;flex-direction:column;width:68%;overflow:hidden;}
 .pool-header{flex-shrink:0;padding:7px 10px;background:var(--surface);border-bottom:1px solid var(--border);}
 .pool-tabs{display:flex;gap:4px;margin-bottom:7px;}
 .pool-tab{font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:4px 12px;border-radius:4px;border:1px solid var(--border2);background:transparent;color:var(--muted);cursor:pointer;transition:all .12s;}
@@ -4192,20 +4195,19 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 <section class="lineups-section" id="lineups-section" style="display:none;">
   <div class="lineups-section-hd">
     <span class="lineups-section-title">Saved Lineups</span>
-    <div class="saved-tabs">
-      <div class="saved-tab active" id="tab-saved" onclick="switchSavedTab('saved')">Lineups</div>
-      <div class="saved-tab" id="tab-exposure" onclick="switchSavedTab('exposure')">Exposure</div>
-    </div>
     <div style="margin-left:auto;display:flex;gap:6px;">
       <button class="bld-btn" onclick="exportSavedCSV()" title="Export all saved lineups to DK CSV">↓ CSV</button>
       <button class="bld-btn danger" onclick="clearAllLineups()">Clear All</button>
     </div>
   </div>
-  <div id="panel-saved">
-    <div class="lineups-grid saved-list" id="saved-list"></div>
-  </div>
-  <div id="panel-exposure" style="display:none;">
-    <div id="exp-list" style="max-height:340px;overflow-y:auto;"></div>
+  <div class="lineups-body">
+    <div class="lineups-saved-col">
+      <div class="lineups-grid saved-list" id="saved-list"></div>
+    </div>
+    <div class="lineups-exposure-col">
+      <div class="exp-col-hd">Exposure</div>
+      <div id="exp-list" style="overflow-y:auto;flex:1;"></div>
+    </div>
   </div>
 </section>
 
@@ -4223,7 +4225,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <div class="opto-row"><label># Lineups</label><input class="opto-input" id="opto-num" type="number" min="1" max="150" value="1" oninput="optoSettings.numLineups=+this.value"></div>
       <div class="opto-row"><label>Min Salary</label><input class="opto-input" id="opto-minsal" type="number" step="100" value="48000" oninput="optoSettings.minSalary=+this.value"></div>
       <div class="opto-row"><label>Min Unique</label><input class="opto-input" id="opto-unique" type="number" min="0" max="8" value="3" oninput="optoSettings.minUnique=+this.value"></div>
-      <div class="opto-row"><label>Max Exposure %</label><input class="opto-input" id="opto-expmax" type="number" min="1" max="100" value="100" oninput="optoSettings.exposureMax=+this.value"></div>
+      <div class="opto-row"><label>Hitter Max Exp%</label><input class="opto-input" id="opto-expmax-hit" type="number" min="1" max="100" value="100" oninput="expHitterMax=+this.value"></div>
+      <div class="opto-row"><label>Pitcher Max Exp%</label><input class="opto-input" id="opto-expmax-pit" type="number" min="1" max="100" value="100" oninput="expPitcherMax=+this.value"></div>
       <div class="opto-row"><label>Max/Team</label><input class="opto-input" id="opto-maxteam" type="number" min="3" max="8" value="5" oninput="optoSettings.maxPerTeam=+this.value"></div>
       <div class="opto-row"><label>Min Conf</label><input class="opto-input" id="opto-conf" type="number" min="0" max="10" value="0" oninput="optoSettings.minConfirmed=+this.value"></div>
     </div>
@@ -5683,7 +5686,7 @@ function renderSavedCards() {
   }
   if (section) section.style.display = '';
   list.innerHTML = saved.map((s, i) => renderLineupCard(s, i)).join('');
-  if (_activeSavedTab === 'exposure') renderExposure();
+  renderExposure();
   renderPool();   // refresh Exp% column whenever saved lineups change
 }
 
@@ -5809,18 +5812,6 @@ function renderExposure() {
   const rows = Object.values(counts).sort((a,b) => b.count - a.count);
 
   el.innerHTML = `
-    <div class="exp-global-caps">
-      <span class="exp-cap-label">Global Caps</span>
-      <label class="exp-cap-item">Hitters
-        <input type="number" class="exp-cap-input" min="1" max="100" value="${expHitterMax}"
-          oninput="expHitterMax=Math.min(100,Math.max(1,+this.value||100))">%
-      </label>
-      <label class="exp-cap-item">Pitchers
-        <input type="number" class="exp-cap-input" min="1" max="100" value="${expPitcherMax}"
-          oninput="expPitcherMax=Math.min(100,Math.max(1,+this.value||100))">%
-      </label>
-      <span class="exp-cap-note">${total} lineup${total!==1?'s':''}</span>
-    </div>
     <table class="exp-table">
       <thead><tr>
         <th style="width:34px;"></th>
@@ -5878,7 +5869,6 @@ function deleteSavedLineup(e, idx) {
   saved.splice(idx,1);
   localStorage.setItem('hbh_lineups', JSON.stringify(saved));
   renderSavedCards();
-  if (_activeSavedTab === 'exposure') renderExposure();
 }
 
 // ── BULK TEAM EXCLUDE ─────────────────────────────────────────────────────────
