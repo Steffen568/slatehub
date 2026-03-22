@@ -6462,24 +6462,35 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set()) {
 
   if (randPct > 0) {
     // ── RANDOMIZED MODE ──────────────────────────────────────────────────────
-    // Try up to maxAttempts random (mainTeam, window, subTeam) combos with
-    // perturbed projections. Stop as soon as a feasible lineup is found.
-    const maxAttempts = Math.max(mainCandidates.length * 2, 12);
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const mainTeam = weightedRandomChoice(mainCandidates, mainCandidates.map(t => Math.max(teamScores[t] || 1, 1)));
-      if (!mainTeam) break;
-      const window   = windows[Math.floor(Math.random() * windows.length)];
-      const subPool  = getSubCandidates(mainTeam);
-      const subTeam  = subPool[Math.floor(Math.random() * subPool.length)] ?? null;
+    // Shuffle teams so each lineup naturally starts from a different lead team.
+    // Try several random (window, subTeam) combos per team — stop on first feasible.
+    const shuffledMain = [...mainCandidates].sort(() => Math.random() - 0.5);
 
-      // Perturb each player's projection by ±randPct%
-      const perturbedProj = new Map(allElig.map(p => {
-        const base = projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
-        return [p.player_id, base * (1 + (Math.random() * 2 - 1) * randPct / 100)];
-      }));
+    const makePerturbedProj = () => new Map(allElig.map(p => {
+      const base = projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
+      return [p.player_id, base * (1 + (Math.random() * 2 - 1) * randPct / 100)];
+    }));
 
-      const res = trySolve(mainTeam, window, subTeam, perturbedProj);
-      if (res) { bestLineup = res.lineup; break; }  // first feasible wins
+    outer:
+    for (const mainTeam of shuffledMain) {
+      const subPool = getSubCandidates(mainTeam);
+      // Try up to 4 random window/sub combos per team before moving on
+      for (let t = 0; t < 4; t++) {
+        const window  = windows[Math.floor(Math.random() * windows.length)];
+        const subTeam = subPool[Math.floor(Math.random() * subPool.length)] ?? null;
+        const res = trySolve(mainTeam, window, subTeam, makePerturbedProj());
+        if (res) { bestLineup = res.lineup; break outer; }
+      }
+    }
+
+    // Fallback: no-stack solve — should almost always work even with tight constraints
+    if (!bestLineup) {
+      const prob = optoBuildLP(allElig, { mainTeam: null, mainPlayerIds: [], mainSize: 0, subTeam: null, subSize: 0 }, pastSets, makePerturbedProj());
+      const ids  = optoSolve(prob);
+      if (ids && ids.length === 10) {
+        bestLineup = optoAssembleLineup(ids, allElig);
+        bestLineup._score = ids.reduce((s, id) => s + (eligById.get(id)?.proj_dk_pts ?? 0), 0);
+      }
     }
   } else {
     // ── EXHAUSTIVE MODE ──────────────────────────────────────────────────────
