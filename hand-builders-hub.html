@@ -6181,8 +6181,8 @@ function optoStackWindows(rule) {
 
 // Build the LP problem object for javascript-lp-solver.
 // opts: { mainTeam, mainPlayerIds, mainSize, subTeam, subSize }
-// pastLineups: array of already-generated lineup objects (for diversity)
-function optoBuildLP(eligPlayers, opts, pastLineups) {
+// pastSets: pre-computed Set<player_id>[] — one per past lineup (for diversity)
+function optoBuildLP(eligPlayers, opts, pastSets) {
   const REQ = { SP: 2, C: 1, '1B': 1, '2B': 1, '3B': 1, SS: 1, OF: 3 };
 
   // Auto-cap minSalary so it's always achievable. Spring training has flat $4,500
@@ -6223,12 +6223,19 @@ function optoBuildLP(eligPlayers, opts, pastLineups) {
   }
 
   // Diversity constraints — each past lineup contributes one constraint
-  pastLineups.forEach((saved, idx) => {
-    const pids = Object.values(saved.lineup || {}).filter(Boolean).map(p => p.player_id);
-    if (pids.length > 0) {
+  pastSets.forEach((pidSet, idx) => {
+    if (pidSet.size > 0) {
       problem.constraints[`dv_${idx}`] = { max: 10 - (optoSettings.minUnique || 3) };
     }
   });
+
+  // Pre-cache per-player computed values to avoid redundant calls inside the loop
+  const playerCache = new Map(eligPlayers.map(p => {
+    const positions = optoGetPositions(p);
+    const isPitcher = positions.some(pos => ['SP','RP','P'].includes(pos));
+    const teamKey   = optoTeamKey(p);
+    return [p.player_id, { positions, isPitcher, teamKey }];
+  }));
 
   // Build one binary variable per eligible player
   const mainSet = new Set(opts.mainPlayerIds || []);
@@ -6236,9 +6243,7 @@ function optoBuildLP(eligPlayers, opts, pastLineups) {
   for (const p of eligPlayers) {
     const pid      = p.player_id;
     const key      = `p${pid}`;
-    const positions = optoGetPositions(p);
-    const isPitcher = optoIsPitcher(p);
-    const teamKey   = optoTeamKey(p);
+    const { positions, isPitcher, teamKey } = playerCache.get(pid);
 
     const varDef = {
       proj:    projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0,
@@ -6274,10 +6279,9 @@ function optoBuildLP(eligPlayers, opts, pastLineups) {
       varDef[`lk_${key}`] = 1;
     }
 
-    // Diversity — count presence in each past lineup
-    pastLineups.forEach((saved, idx) => {
-      const pids2 = Object.values(saved.lineup || {}).filter(Boolean).map(pp => pp.player_id);
-      if (pids2.includes(pid)) varDef[`dv_${idx}`] = 1;
+    // Diversity — O(1) Set lookup per past lineup (pastSets pre-computed outside solve loop)
+    pastSets.forEach((pidSet, idx) => {
+      if (pidSet.has(pid)) varDef[`dv_${idx}`] = 1;
     });
 
     // Binary bound (max 1 per player)
@@ -6376,6 +6380,12 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set()) {
     ...allPitchers.filter(p => !isExcluded(p) && !capExcluded.has(p.player_id) && (p.salary || 0) > 0),
   ];
 
+  // Pre-compute once — avoids rebuilding these inside every LP build + score step
+  const pastSets = pastLineups.map(saved =>
+    new Set(Object.values(saved.lineup || {}).filter(Boolean).map(p => p.player_id))
+  );
+  const eligById = new Map(allElig.map(p => [p.player_id, p]));
+
   // Rank teams by sum of top-5 hitter proj pts (use normalized team key)
   const allTeams    = [...new Set(allHitters.map(h => optoTeamKey(h)).filter(Boolean))];
   const teamScores  = Object.fromEntries(allTeams.map(t => [t, optoTeamScore(t)]));
@@ -6421,14 +6431,14 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set()) {
         const problem = optoBuildLP(allElig, {
           mainTeam, mainPlayerIds, mainSize: rule.primarySize,
           subTeam,  subSize: rule.subSize,
-        }, pastLineups);
+        }, pastSets);
 
         const ids = optoSolve(problem);
         solves++;
         if (!ids || ids.length !== 10) continue;
 
         const score = ids.reduce((s, id) => {
-          const p = allElig.find(pp => pp.player_id === id);
+          const p = eligById.get(id);
           return s + (projOverrides[id] ?? p?.proj_dk_pts ?? 0);
         }, 0);
 
@@ -6470,7 +6480,7 @@ function optoDebug() {
 
   // Test 1: basic LP with no stack constraints
   console.group('[OptoDebug] Test 1 — basic LP (no stack)');
-  const basicProb = optoBuildLP(allElig, { mainTeam: null, mainPlayerIds: [], mainSize: 0, subTeam: null, subSize: 0 }, []);
+  const basicProb = optoBuildLP(allElig, { mainTeam: null, mainPlayerIds: [], mainSize: 0, subTeam: null, subSize: 0 }, []);  // pastSets=[]
   console.log('Variables:', Object.keys(basicProb.variables).length);
   console.log('Constraints:', Object.keys(basicProb.constraints));
   const r1 = solver.Solve(basicProb);
@@ -6488,7 +6498,7 @@ function optoDebug() {
   const topTeam = [...new Set(allHitters.map(h=>h.team).filter(Boolean))].sort((a,b)=>optoTeamScore(b)-optoTeamScore(a))[0];
   const topTeamHitters = allHitters.filter(h => h.team === topTeam && !isExcluded(h));
   console.group(`[OptoDebug] Test 2 — 4-man stack (${topTeam}, any BO)`);
-  const stackProb = optoBuildLP(allElig, { mainTeam: topTeam, mainPlayerIds: topTeamHitters.map(h=>h.player_id), mainSize: 4, subTeam: null, subSize: 0 }, []);
+  const stackProb = optoBuildLP(allElig, { mainTeam: topTeam, mainPlayerIds: topTeamHitters.map(h=>h.player_id), mainSize: 4, subTeam: null, subSize: 0 }, []);  // pastSets=[]
   const r2 = solver.Solve(stackProb);
   console.log('Feasible:', r2.feasible, '| Score:', r2.result?.toFixed(1));
   console.groupEnd();
@@ -6512,32 +6522,27 @@ function generateLineups() {
       const existing  = JSON.parse(localStorage.getItem('hbh_lineups') || '[]');
       const generated = [];
 
+      // Pre-compute once — spIdSet and appearCount maintained incrementally
+      const spIdSet    = new Set(allPitchers.map(p => p.player_id));
+      const appearCount = {};  // player_id → count in generated so far
+
       for (let i = 0; i < N; i++) {
         const rule = optoPickRule(i, N);
 
-        // Build exposure cap: exclude players who've already hit their max appearance count
+        // Build exposure cap from incrementally-maintained appearCount
         const capExcluded = new Set();
-        if (generated.length > 0) {
-          const appearCount = {};
-          generated.forEach(g => Object.values(g.lineup).forEach(p => {
-            if (p?.player_id) appearCount[p.player_id] = (appearCount[p.player_id] || 0) + 1;
-          }));
-          // Global exposure caps — separate for hitters and pitchers
-          const spIdSet = new Set(allPitchers.map(p => p.player_id));
-          Object.entries(appearCount).forEach(([pid, cnt]) => {
-            const isSP = spIdSet.has(+pid);
-            const cap  = isSP ? expPitcherMax : expHitterMax;
-            if (cap < 100) {
-              const globalMax = Math.max(1, Math.ceil(N * cap / 100));
-              if (cnt >= globalMax) capExcluded.add(+pid);
-            }
-          });
-          // Per-player exposure caps (override or tighten global)
-          Object.entries(expTargets).forEach(([pid, capPct]) => {
-            const playerMax = Math.max(1, Math.ceil(N * capPct / 100));
-            if ((appearCount[+pid] || 0) >= playerMax) capExcluded.add(+pid);
-          });
-        }
+        Object.entries(appearCount).forEach(([pid, cnt]) => {
+          const isSP = spIdSet.has(+pid);
+          const cap  = isSP ? expPitcherMax : expHitterMax;
+          if (cap < 100) {
+            const globalMax = Math.max(1, Math.ceil(N * cap / 100));
+            if (cnt >= globalMax) capExcluded.add(+pid);
+          }
+        });
+        Object.entries(expTargets).forEach(([pid, capPct]) => {
+          const playerMax = Math.max(1, Math.ceil(N * capPct / 100));
+          if ((appearCount[+pid] || 0) >= playerMax) capExcluded.add(+pid);
+        });
 
         const lineupObj = optoFindBest(rule, generated, capExcluded);
 
@@ -6555,6 +6560,11 @@ function generateLineups() {
           totProj: +totProj.toFixed(1),
           lineup:  lineupObj,
           ts:      Date.now(),
+        });
+
+        // Incrementally update appearCount — avoids O(n²) full rebuild each iteration
+        Object.values(lineupObj).forEach(p => {
+          if (p?.player_id) appearCount[p.player_id] = (appearCount[p.player_id] || 0) + 1;
         });
       }
 
