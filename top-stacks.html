@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SlateHub — Top Stacks</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400;500;600;700;800&family=Barlow:wght@300;400;500;600;700&family=Barlow+Semi+Condensed:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ── RESET & VARIABLES ────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--panel:#161a24;--panel2:#1e2230;--border:#252d3a;--border2:#2e3750;
+  --text:#e2e8f0;--muted:#64748b;--muted2:#8899b0;
+  --hi:#4ade80;--mid:#fbbf24;--lo:#f87171;--blue:#60a5fa;--purple:#c084fc;--orange:#fb923c;
+  --green-dim:#1a3d28;--amber-dim:#3d3010;--red-dim:#3d1515;
+  --radius:8px;--radius-sm:5px;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;font-size:14px;line-height:1.4;}
+a{color:inherit;text-decoration:none;}
+input[type=number]{-moz-appearance:textfield;}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;}
+
+/* ── NAV ──────────────────────────────────────────────────────────────── */
+.sh-topnav{display:flex;align-items:center;gap:6px;padding:0 16px;height:44px;background:#0c0f16;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;}
+.sh-topnav-logo{font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;letter-spacing:1px;color:#fff;padding-right:8px;border-right:1px solid var(--border2);margin-right:4px;}
+.sh-topnav-logo em{font-style:normal;color:var(--hi);}
+.sh-tab{font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:600;padding:5px 12px;border-radius:var(--radius-sm);letter-spacing:.4px;transition:background .15s,color .15s;color:var(--muted);}
+.sh-tab:hover{background:var(--panel2);color:var(--text);}
+.sh-tab.active{color:#fff;}
+.sh-green.active,.sh-green:hover{background:#1a3a2a;color:var(--hi);}
+.sh-blue.active,.sh-blue:hover{background:#1a2a3a;color:var(--blue);}
+.sh-orange.active,.sh-orange:hover{background:#2e1e0e;color:var(--orange);}
+.sh-purple.active,.sh-purple:hover{background:#251530;color:var(--purple);}
+.sh-tab.sh-soon{opacity:.45;pointer-events:none;}
+.sh-tab.active{opacity:1;pointer-events:auto;}
+
+/* ── FILTER BAR ──────────────────────────────────────────────────────── */
+.filter-bar{display:flex;align-items:center;gap:10px;padding:10px 20px;background:#0c0f16;border-bottom:1px solid var(--border);flex-wrap:wrap;}
+.filter-group{display:flex;align-items:center;gap:6px;}
+.filter-label{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;}
+.filter-sep{width:1px;height:20px;background:var(--border2);margin:0 4px;}
+
+.date-btn{font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:600;padding:4px 10px;border-radius:var(--radius-sm);border:1px solid var(--border2);background:var(--panel2);color:var(--muted2);cursor:pointer;transition:all .15s;}
+.date-btn:hover,.date-btn.active{background:var(--border2);color:var(--text);}
+
+.seg-group{display:flex;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--border2);}
+.seg-btn{font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:600;padding:4px 10px;background:var(--panel2);color:var(--muted);cursor:pointer;transition:all .15s;border:none;letter-spacing:.3px;}
+.seg-btn:hover{background:var(--border2);color:var(--text);}
+.seg-btn.active{background:var(--border2);color:#fff;}
+.seg-btn.gpp-active{background:#1a2a3a;color:var(--blue);}
+.seg-btn.cash-active{background:#1a3a2a;color:var(--hi);}
+
+.mode-toggle{display:flex;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--border2);}
+.mode-btn{font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;padding:4px 12px;background:var(--panel2);color:var(--muted);cursor:pointer;transition:all .15s;border:none;letter-spacing:.5px;}
+.mode-btn.active-gpp{background:#1a2a3d;color:var(--blue);}
+.mode-btn.active-cash{background:var(--green-dim);color:var(--hi);}
+
+.sort-select{font-family:'Barlow Condensed',sans-serif;font-size:12px;padding:4px 8px;background:var(--panel2);border:1px solid var(--border2);border-radius:var(--radius-sm);color:var(--text);cursor:pointer;}
+
+/* ── MAIN CONTENT ─────────────────────────────────────────────────────── */
+.main-wrap{max-width:1280px;margin:0 auto;padding:16px 20px;}
+.stacks-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
+.stacks-title{font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:800;letter-spacing:.5px;}
+.stacks-title span{color:var(--orange);}
+.stacks-count{font-size:12px;color:var(--muted);font-family:'Barlow Condensed',sans-serif;}
+
+/* ── LOADING ──────────────────────────────────────────────────────────── */
+.loading-state{text-align:center;padding:60px 20px;color:var(--muted);font-family:'Barlow Condensed',sans-serif;font-size:16px;}
+.loading-state .spinner{width:32px;height:32px;border:3px solid var(--border2);border-top-color:var(--orange);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 16px;}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── STACK CARD ──────────────────────────────────────────────────────── */
+.stacks-grid{display:flex;flex-direction:column;gap:8px;}
+
+.stack-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;transition:border-color .15s;}
+.stack-card:hover{border-color:var(--border2);}
+.stack-card.expanded{border-color:var(--orange);border-width:1px;}
+
+.stack-header{display:grid;grid-template-columns:44px 180px 120px 80px 90px 90px 70px 70px 70px 70px 100px;gap:0;align-items:center;padding:0;cursor:pointer;min-height:56px;user-select:none;}
+.stack-header:hover .sh-team-block{opacity:.9;}
+
+/* Rank badge */
+.sh-rank{display:flex;align-items:center;justify-content:center;font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:800;color:var(--muted);padding:0 10px;}
+
+/* Team block */
+.sh-team-block{display:flex;align-items:center;gap:8px;padding:10px 12px;}
+.sh-team-pill{font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:800;padding:4px 8px;border-radius:var(--radius-sm);letter-spacing:.5px;min-width:42px;text-align:center;}
+.sh-team-info{display:flex;flex-direction:column;gap:1px;}
+.sh-team-name{font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;color:var(--text);}
+.sh-team-game{font-size:11px;color:var(--muted);}
+
+/* SP opponent */
+.sh-sp-block{padding:8px 10px;}
+.sh-sp-name{font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:600;color:var(--text);}
+.sh-sp-meta{font-size:11px;color:var(--muted);display:flex;gap:6px;margin-top:2px;}
+.sh-hand-badge{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;}
+.rhp{background:#1a2a3a;color:var(--blue);}
+.lhp{background:#1a3d28;color:var(--hi);}
+
+/* Metric cells */
+.sh-cell{padding:8px 10px;text-align:center;}
+.sh-cell-val{font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:700;}
+.sh-cell-lbl{font-size:10px;color:var(--muted);letter-spacing:.3px;margin-top:1px;font-family:'Barlow Condensed',sans-serif;}
+
+/* Stack Score */
+.sh-score-cell{padding:8px 12px;display:flex;align-items:center;justify-content:center;}
+.sh-score-ring{width:52px;height:52px;position:relative;display:flex;align-items:center;justify-content:center;}
+.sh-score-ring svg{position:absolute;top:0;left:0;transform:rotate(-90deg);}
+.sh-score-num{font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;position:relative;z-index:1;}
+
+/* Expand chevron */
+.sh-chevron{padding:0 12px;color:var(--muted);font-size:12px;transition:transform .2s;}
+.expanded .sh-chevron{transform:rotate(180deg);}
+
+/* ── EXPANDED CONTENT ──────────────────────────────────────────────────── */
+.stack-body{display:none;border-top:1px solid var(--border);}
+.stack-card.expanded .stack-body{display:grid;grid-template-columns:1fr 280px;}
+
+/* Player table */
+.stack-players{padding:12px 16px;}
+.stack-players-title{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.6px;text-transform:uppercase;margin-bottom:8px;}
+.players-table{width:100%;border-collapse:collapse;}
+.players-table th{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.4px;text-transform:uppercase;padding:4px 8px;text-align:left;border-bottom:1px solid var(--border);}
+.players-table th.r{text-align:right;}
+.players-table th.c{text-align:center;}
+.players-table td{padding:6px 8px;border-bottom:1px solid var(--border);font-size:13px;}
+.players-table tr:last-child td{border-bottom:none;}
+.players-table tr.best-window{background:rgba(251,146,60,.06);}
+
+.bo-dot{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:var(--panel2);font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;color:var(--muted2);}
+.bo-dot.in-window{background:#2e1e0e;color:var(--orange);}
+.pms-badge{display:inline-block;font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;padding:1px 6px;border-radius:3px;}
+.pms-hi{background:var(--green-dim);color:var(--hi);}
+.pms-mid{background:var(--amber-dim);color:var(--mid);}
+.pms-lo{background:var(--red-dim);color:var(--lo);}
+.proj-val{font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;color:var(--text);}
+.own-val{font-family:'Barlow Condensed',sans-serif;font-size:12px;color:var(--muted2);}
+.salary-val{font-family:'Barlow Condensed',sans-serif;font-size:12px;color:var(--muted2);}
+
+/* Window recommendation */
+.window-rec{display:flex;align-items:center;gap:8px;margin-top:10px;padding:8px 10px;background:var(--panel2);border-radius:var(--radius-sm);border:1px solid #2e1e0e;}
+.window-rec-label{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;color:var(--orange);letter-spacing:.5px;text-transform:uppercase;white-space:nowrap;}
+.window-dots{display:flex;gap:4px;}
+.window-rec-names{font-size:11px;color:var(--muted2);flex:1;}
+
+/* Bringback panel */
+.bringback-panel{border-left:1px solid var(--border);padding:12px 14px;background:#0f1520;}
+.bb-title{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.6px;text-transform:uppercase;margin-bottom:10px;}
+.bb-section{margin-bottom:12px;}
+.bb-section-label{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.3px;margin-bottom:6px;}
+
+.bb-player{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);}
+.bb-player:last-child{border-bottom:none;}
+.bb-bo{font-family:'Barlow Condensed',sans-serif;font-size:11px;color:var(--muted);width:16px;text-align:center;}
+.bb-name{flex:1;font-size:12px;font-weight:500;}
+.bb-proj{font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;color:var(--text);}
+.bb-own{font-family:'Barlow Condensed',sans-serif;font-size:11px;color:var(--muted2);}
+.bb-pms{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;padding:1px 5px;border-radius:3px;}
+
+/* Score breakdown bar */
+.score-breakdown{margin-top:12px;padding-top:10px;border-top:1px solid var(--border);}
+.sb-title{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px;}
+.sb-row{display:flex;align-items:center;gap:6px;margin-bottom:4px;}
+.sb-label{font-family:'Barlow Condensed',sans-serif;font-size:10px;color:var(--muted2);width:60px;}
+.sb-bar-wrap{flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden;}
+.sb-bar{height:100%;border-radius:2px;transition:width .4s;}
+.sb-val{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;color:var(--muted2);width:28px;text-align:right;}
+
+/* ── ENV STRIP ─────────────────────────────────────────────────────────── */
+.env-strip{display:flex;gap:6px;align-items:center;padding:6px 16px;background:#0d1018;border-top:1px solid var(--border);}
+.env-pill{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--panel2);color:var(--muted2);}
+.env-pill.good{background:var(--green-dim);color:var(--hi);}
+.env-pill.mid{background:var(--amber-dim);color:var(--mid);}
+.env-pill.bad{background:var(--red-dim);color:var(--lo);}
+
+/* ── EMPTY / ERROR ─────────────────────────────────────────────────────── */
+.empty-state{text-align:center;padding:60px 20px;color:var(--muted);font-family:'Barlow Condensed',sans-serif;font-size:15px;}
+
+/* ── RESPONSIVE ─────────────────────────────────────────────────────────── */
+@media(max-width:900px){
+  .stack-header{grid-template-columns:36px 160px 100px 70px 80px 80px 60px 1fr 60px;}
+  .sh-cell:nth-child(7),.sh-cell:nth-child(8){display:none;}
+  .stack-card.expanded .stack-body{grid-template-columns:1fr;}
+  .bringback-panel{border-left:none;border-top:1px solid var(--border);}
+}
+</style>
+</head>
+<body>
+
+<nav class="sh-topnav">
+  <div class="sh-topnav-logo">Slate<em>Hub</em></div>
+  <a class="sh-tab sh-green" href="index.html">SlateHub</a>
+  <a class="sh-tab sh-blue" href="hand-builders-hub.html">Lineup Hub</a>
+  <a class="sh-tab sh-orange active" href="top-stacks.html">Top Stacks</a>
+  <a class="sh-tab sh-purple sh-soon" href="#">Top Pitchers</a>
+</nav>
+
+<div class="filter-bar">
+  <!-- Date -->
+  <div class="filter-group">
+    <span class="filter-label">Date</span>
+    <div id="date-strip" style="display:flex;gap:4px;"></div>
+  </div>
+  <div class="filter-sep"></div>
+
+  <!-- Contest mode -->
+  <div class="filter-group">
+    <span class="filter-label">Mode</span>
+    <div class="mode-toggle">
+      <button class="mode-btn active-gpp" id="mode-gpp" onclick="setMode('gpp')">GPP</button>
+      <button class="mode-btn" id="mode-cash" onclick="setMode('cash')">Cash</button>
+    </div>
+  </div>
+  <div class="filter-sep"></div>
+
+  <!-- Stack size -->
+  <div class="filter-group">
+    <span class="filter-label">Stack</span>
+    <div class="seg-group">
+      <button class="seg-btn active" id="sz-both" onclick="setSize('both')">All</button>
+      <button class="seg-btn" id="sz-4" onclick="setSize('4')">4-Man</button>
+      <button class="seg-btn" id="sz-5" onclick="setSize('5')">5-Man</button>
+    </div>
+  </div>
+  <div class="filter-sep"></div>
+
+  <!-- Sort -->
+  <div class="filter-group">
+    <span class="filter-label">Sort</span>
+    <select class="sort-select" id="sort-select" onchange="setSort(this.value)">
+      <option value="score">Stack Score</option>
+      <option value="implied">Implied Total</option>
+      <option value="proj">Avg Projection</option>
+      <option value="pms">Avg PMS</option>
+      <option value="hes">HES</option>
+      <option value="ownership">Ownership ↑</option>
+    </select>
+  </div>
+</div>
+
+<div class="main-wrap">
+  <div class="stacks-header">
+    <div class="stacks-title">Top <span>Stacks</span></div>
+    <div class="stacks-count" id="stacks-count"></div>
+  </div>
+  <div id="stacks-container">
+    <div class="loading-state">
+      <div class="spinner"></div>
+      Loading stacks…
+    </div>
+  </div>
+</div>
+
+<script>
+// ── SUPABASE ────────────────────────────────────────────────────────────────
+const { createClient } = supabase;
+const sb = createClient(
+  'https://rzgmnjfxlthxpoecyvnv.supabase.co',
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ6Z21uamZ4bHRoeHBvZWN5dm52Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTMwMjUsImV4cCI6MjA4ODIyOTAyNX0.WCAkPKJCH5KM4E15QVOYr7BR6aW2M4dmu6WzsGnYlio'
+);
+
+const SEASON = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
+
+// ── TEAM COLORS ─────────────────────────────────────────────────────────────
+const ABBR_COLORS = {
+  'ARI':{ bg:'#a71930', tx:'#e3d4ad' }, 'ATL':{ bg:'#ce1141', tx:'#fff' },
+  'BAL':{ bg:'#df4601', tx:'#fff' },    'BOS':{ bg:'#bd3039', tx:'#fff' },
+  'CHC':{ bg:'#0e3386', tx:'#cc3433' },'CWS':{ bg:'#27251f', tx:'#c4ced4' },
+  'CIN':{ bg:'#c6011f', tx:'#fff' },   'CLE':{ bg:'#e31937', tx:'#fff' },
+  'COL':{ bg:'#33006f', tx:'#c4ced4' },'DET':{ bg:'#0c2340', tx:'#fa4616' },
+  'HOU':{ bg:'#002d62', tx:'#eb6e1f' },'KC': { bg:'#004687', tx:'#bd9b60' },
+  'LAA':{ bg:'#ba0021', tx:'#fff' },   'LAD':{ bg:'#005a9c', tx:'#fff' },
+  'MIA':{ bg:'#00a3e0', tx:'#ff6600' },'MIL':{ bg:'#12284b', tx:'#ffc52f' },
+  'MIN':{ bg:'#002b5c', tx:'#d31145' },'NYM':{ bg:'#002d72', tx:'#ff5910' },
+  'NYY':{ bg:'#003087', tx:'#fff' },   'OAK':{ bg:'#003831', tx:'#efb21e' },
+  'PHI':{ bg:'#e81828', tx:'#fff' },   'PIT':{ bg:'#27251f', tx:'#fdb827' },
+  'SD': { bg:'#2f241d', tx:'#ffc425' },'SF': { bg:'#fd5a1e', tx:'#27251f' },
+  'SEA':{ bg:'#0c2c56', tx:'#7ab2c8' },'STL':{ bg:'#c41e3a', tx:'#0c2340' },
+  'TB': { bg:'#092c5c', tx:'#8fbce6' },'TEX':{ bg:'#003278', tx:'#c0111f' },
+  'TOR':{ bg:'#134a8e', tx:'#1d7cf2' },'WSH':{ bg:'#ab0003', tx:'#fff' },
+};
+function abbrColor(abbr) { return ABBR_COLORS[(abbr||'').toUpperCase()] || { bg:'#252d38', tx:'#8899b0' }; }
+
+// ── STATE ───────────────────────────────────────────────────────────────────
+let _date    = todayStr();
+let _mode    = 'gpp';    // gpp | cash
+let _size    = 'both';   // both | 4 | 5
+let _sort    = 'score';
+let _stacks  = [];       // computed stack objects
+let _expandedId = null;
+
+// ── DATE HELPERS ────────────────────────────────────────────────────────────
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function fmtDate(str) {
+  const [y,m,d] = str.split('-');
+  const names = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${names[+m]} ${+d}`;
+}
+function addDays(str, n) {
+  const d = new Date(str + 'T12:00:00');
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split('T')[0];
+}
+
+function renderDatePicker() {
+  const strip = document.getElementById('date-strip');
+  const dates = [-2,-1,0,1,2].map(n => addDays(todayStr(), n));
+  strip.innerHTML = dates.map(d => `
+    <button class="date-btn${d === _date ? ' active' : ''}" onclick="selectDate('${d}')">${fmtDate(d)}${d===todayStr()?' (Today)':''}</button>
+  `).join('');
+}
+
+async function selectDate(d) {
+  _date = d;
+  renderDatePicker();
+  await loadAll();
+}
+
+// ── FILTER HANDLERS ─────────────────────────────────────────────────────────
+function setMode(m) {
+  _mode = m;
+  document.getElementById('mode-gpp').className  = 'mode-btn' + (m==='gpp'  ? ' active-gpp'  : '');
+  document.getElementById('mode-cash').className = 'mode-btn' + (m==='cash' ? ' active-cash' : '');
+  renderStacks();
+}
+function setSize(s) {
+  _size = s;
+  ['both','4','5'].forEach(v => document.getElementById('sz-'+v).classList.toggle('active', v===s));
+  renderStacks();
+}
+function setSort(s) { _sort = s; renderStacks(); }
+
+// ── DATA LOADING ─────────────────────────────────────────────────────────────
+async function loadAll() {
+  document.getElementById('stacks-container').innerHTML = `
+    <div class="loading-state"><div class="spinner"></div>Loading stacks…</div>`;
+  document.getElementById('stacks-count').textContent = '';
+
+  try {
+    // Load games first to get game_pks and venue_ids
+    const gamesRes = await sb.from('games').select(
+      'game_pk,game_date,home_team_id,away_team_id,home_team,away_team,home_sp_id,home_sp_name,away_sp_id,away_sp_name,venue_id,status'
+    ).eq('game_date', _date);
+    const games = gamesRes.data || [];
+    if (!games.length) {
+      document.getElementById('stacks-container').innerHTML = `<div class="empty-state">No games found for ${fmtDate(_date)}.</div>`;
+      return;
+    }
+
+    const gamePks   = games.map(g => g.game_pk);
+    const venueIds  = [...new Set(games.map(g => g.venue_id).filter(Boolean))];
+    const spIds     = [...new Set([
+      ...games.map(g => g.home_sp_id), ...games.map(g => g.away_sp_id)
+    ].filter(Boolean))];
+
+    // Parallel fetch all data
+    const [oddsRes, lineupsRes, projRes, weatherRes, parkRes, spStatsRes, splitsRes, salaryRes, bStatsRes] = await Promise.all([
+      sb.from('game_odds').select('game_pk,home_implied,away_implied,game_total,home_ml,away_ml').eq('game_date', _date),
+      sb.from('lineups').select('game_pk,player_id,player_name,team_id,batting_order,position')
+        .eq('game_date', _date).gte('batting_order', 1).lte('batting_order', 9),
+      sb.from('player_projections').select('player_id,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,stats_level')
+        .eq('game_date', _date),
+      sb.from('weather').select('game_pk,temp,wind_speed,wind_direction').in('game_pk', gamePks),
+      venueIds.length
+        ? sb.from('park_factors').select('venue_id,park_factor,hr_factor').in('venue_id', venueIds)
+        : { data: [] },
+      spIds.length
+        ? sb.from('pitcher_stats').select('player_id,era,fip,whip,k_pct,bb_pct,stuff_plus,swstr_pct,hard_hit_pct,barrel_pct,ip,season,full_name')
+            .eq('season', SEASON).in('player_id', spIds)
+        : { data: [] },
+      sb.from('batter_splits').select('player_id,split,woba,iso,wrc_plus,k_pct,bb_pct').eq('season', SEASON),
+      sb.from('dk_salaries').select('player_id,salary,position,team'),
+      sb.from('batter_stats').select('player_id,woba,iso,barrel_pct,hard_hit_pct,xwoba,wrc_plus').eq('season', SEASON),
+    ]);
+
+    // Build lookup maps
+    const oddsMap   = {};
+    (oddsRes.data  || []).forEach(o => oddsMap[o.game_pk] = o);
+    const projMap   = {};
+    (projRes.data  || []).forEach(p => projMap[p.player_id] = p);
+    const weatherMap = {};
+    (weatherRes.data || []).forEach(w => weatherMap[w.game_pk] = w);
+    const parkMap   = {};
+    (parkRes.data  || []).forEach(p => parkMap[p.venue_id] = p);
+    const spMap     = {};
+    (spStatsRes.data || []).forEach(p => spMap[p.player_id] = p);
+    const splitsMap = {}; // player_id → { R: row, L: row }
+    (splitsRes.data || []).forEach(r => {
+      if (!splitsMap[r.player_id]) splitsMap[r.player_id] = {};
+      splitsMap[r.player_id][r.split] = r;
+    });
+    const salaryMap = {};
+    (salaryRes.data || []).forEach(r => { if (!salaryMap[r.player_id]) salaryMap[r.player_id] = r; });
+    const bStatsMap = {};
+    (bStatsRes.data || []).forEach(r => bStatsMap[r.player_id] = r);
+
+    // Group lineups by game_pk and team_id
+    const lineupsByGame = {}; // game_pk → { team_id → [players] }
+    (lineupsRes.data || []).forEach(p => {
+      if (!lineupsByGame[p.game_pk]) lineupsByGame[p.game_pk] = {};
+      if (!lineupsByGame[p.game_pk][p.team_id]) lineupsByGame[p.game_pk][p.team_id] = [];
+      lineupsByGame[p.game_pk][p.team_id].push(p);
+    });
+
+    // Compute stacks for each team in each game
+    const rawStacks = [];
+    for (const game of games) {
+      const odds    = oddsMap[game.game_pk] || {};
+      const weather = weatherMap[game.game_pk];
+      const park    = parkMap[game.venue_id];
+      const gameLineups = lineupsByGame[game.game_pk] || {};
+
+      for (const side of ['home','away']) {
+        const isHome       = side === 'home';
+        const teamAbbr     = isHome ? game.home_team  : game.away_team;
+        const teamId       = isHome ? game.home_team_id : game.away_team_id;
+        const opAbbr       = isHome ? game.away_team  : game.home_team;
+        const opTeamId     = isHome ? game.away_team_id : game.home_team_id;
+        const spId         = isHome ? game.home_sp_id : game.away_sp_id;
+        const spName       = isHome ? game.home_sp_name : game.away_sp_name;
+        const opSpId       = isHome ? game.away_sp_id : game.home_sp_id;
+        const opSpName     = isHome ? game.away_sp_name : game.home_sp_name;
+        const impliedTotal = isHome ? (odds.home_implied || 0) : (odds.away_implied || 0);
+        const opImplied    = isHome ? (odds.away_implied || 0) : (odds.home_implied || 0);
+        const spStats      = spMap[spId]   || null;
+        const opSpStats    = spMap[opSpId] || null;
+        const opSpThrows   = opSpStats?.throws || guessHand(opSpName);
+
+        // Get hitters in batting order
+        const teamLineup = (gameLineups[teamId] || [])
+          .sort((a,b) => (a.batting_order||9) - (b.batting_order||9));
+
+        // If no lineups loaded, skip (or use salary pool)
+        if (!teamLineup.length) continue;
+
+        // Build enriched hitter objects
+        const hitters = teamLineup.map(lp => {
+          const proj   = projMap[lp.player_id] || {};
+          const splits = splitsMap[lp.player_id] || {};
+          const stats  = bStatsMap[lp.player_id] || {};
+          const salary = salaryMap[lp.player_id];
+          const opHand = opSpThrows; // hitter faces opposing SP
+          const splitRow = splits[opHand] || null;
+          const pms    = computeHitterPMS(lp, opSpThrows, opSpStats, splitRow, stats, proj);
+          return {
+            player_id    : lp.player_id,
+            name         : lp.player_name,
+            batting_order: lp.batting_order,
+            position     : lp.position,
+            proj_dk_pts  : proj.proj_dk_pts || 0,
+            proj_ceiling : proj.proj_ceiling || 0,
+            proj_ownership: proj.proj_ownership || 0,
+            salary       : salary?.salary || 0,
+            pms,
+            splitWoba    : splitRow?.woba || null,
+            iso          : stats.iso || splitRow?.iso || 0,
+          };
+        });
+
+        // Find best 4-man and 5-man windows
+        const best4 = findBestWindow(hitters, 4);
+        const best5 = findBestWindow(hitters, 5);
+
+        // Stack-level aggregates (top 5 by proj)
+        const top5 = [...hitters].sort((a,b) => b.proj_dk_pts - a.proj_dk_pts).slice(0,5);
+        const avgProjFP   = top5.length ? top5.reduce((s,h) => s + h.proj_dk_pts, 0) / top5.length : 0;
+        const avgPMS      = top5.length ? top5.reduce((s,h) => s + h.pms, 0) / top5.length : 5;
+        const avgOwnership= top5.length ? top5.reduce((s,h) => s + h.proj_ownership, 0) / top5.length : 20;
+        const stackCeiling= (best5 || best4 || top5).reduce((s,h) => s + (h.proj_ceiling||0), 0);
+
+        // HES for this game/team environment
+        const hes = computeHES(weather, park?.park_factor, park?.hr_factor, impliedTotal);
+
+        // Bring-back candidates from opposing team (sorted by proj)
+        const opLineup = (gameLineups[opTeamId] || []).sort((a,b) => (a.batting_order||9)-(b.batting_order||9));
+        const bringBack = opLineup.map(lp => {
+          const proj = projMap[lp.player_id] || {};
+          const splits = splitsMap[lp.player_id] || {};
+          const stats = bStatsMap[lp.player_id] || {};
+          const spThrows = spStats?.throws || guessHand(spName);
+          const splitRow = splits[spThrows] || null;
+          const pms = computeHitterPMS(lp, spThrows, spStats, splitRow, stats, proj);
+          return {
+            player_id: lp.player_id, name: lp.player_name,
+            batting_order: lp.batting_order, salary: (salaryMap[lp.player_id]?.salary || 0),
+            proj_dk_pts: proj.proj_dk_pts || 0, proj_ownership: proj.proj_ownership || 0, pms,
+          };
+        }).sort((a,b) => b.proj_dk_pts - a.proj_dk_pts).slice(0,4);
+
+        rawStacks.push({
+          id           : `${game.game_pk}_${side}`,
+          gamePk       : game.game_pk,
+          teamAbbr,
+          teamId,
+          opAbbr,
+          opTeamId,
+          isHome,
+          spName,
+          spStats,
+          opSpId,
+          opSpName,
+          opSpStats,
+          opSpThrows,
+          impliedTotal,
+          opImplied,
+          gameTotal    : odds.game_total || 0,
+          venueId      : game.venue_id,
+          weather,
+          parkFactor   : park?.park_factor || 100,
+          hrFactor     : park?.hr_factor   || 100,
+          hitters,
+          top5,
+          avgProjFP,
+          avgPMS,
+          avgOwnership,
+          stackCeiling,
+          hes,
+          best4,
+          best5,
+          bringBack,
+        });
+      }
+    }
+
+    // Compute stack scores (need slate max for normalization)
+    const slateMaxProj = Math.max(1, ...rawStacks.map(s => s.avgProjFP));
+    rawStacks.forEach(s => {
+      s.stackScore = computeStackScore(s, _mode, slateMaxProj);
+      s.scoreBreak = computeScoreBreakdown(s, _mode, slateMaxProj);
+    });
+
+    _stacks = rawStacks;
+    renderStacks();
+
+  } catch(err) {
+    console.error(err);
+    document.getElementById('stacks-container').innerHTML = `<div class="empty-state">Error loading data: ${err.message}</div>`;
+  }
+}
+
+// ── SCORE COMPUTATION ────────────────────────────────────────────────────────
+
+function guessHand(spName) {
+  // Fallback when pitcher_stats not available
+  return 'R'; // majority of pitchers are RHP
+}
+
+function computeHES(weather, parkFactor = 100, hrFactor = 100, impliedTotal = 0) {
+  let score = 0;
+  // Park factor component (0–3)
+  score += Math.max(0, Math.min(3, ((parkFactor - 85) / 35) * 3));
+
+  // Wind + temp (0–3 + 0–2)
+  if (weather) {
+    const { temp = 70, wind_speed = 0, wind_direction = '' } = weather;
+    const dir = (wind_direction || '').toLowerCase();
+    const isDome = dir.includes('dome') || dir.includes('indoor') || dir.includes('covered') || dir.includes('roof');
+    const isOut  = !isDome && (dir.includes('out') || (dir.includes(' to ') && !dir.includes('from')));
+    const isIn   = !isDome && (dir.includes('in from') || dir.includes('from cf') || dir.includes('from lf') || dir.includes('from rf'));
+
+    if (isDome)       score += 1.5;
+    else if (isOut)   score += Math.min(3, (wind_speed / 12) * 3);
+    else if (isIn)    score += Math.max(0, 1.5 - (wind_speed / 12) * 1.5);
+    else              score += Math.max(0.3, 1.5 - (wind_speed / 25));
+
+    // Temperature
+    if (temp >= 80)       score += 2;
+    else if (temp >= 70)  score += 1.5;
+    else if (temp >= 60)  score += 1.0;
+    else if (temp >= 50)  score += 0.5;
+  } else {
+    score += 1.5; // unknown weather — neutral
+  }
+
+  // Implied total bonus (0–2)
+  if      (impliedTotal >= 6.0) score += 2.0;
+  else if (impliedTotal >= 5.5) score += 1.5;
+  else if (impliedTotal >= 5.0) score += 1.0;
+  else if (impliedTotal >= 4.5) score += 0.5;
+
+  return Math.min(10, Math.max(0, +score.toFixed(1)));
+}
+
+function computeHitterPMS(hitter, opSpThrows, opSpStats, splitRow, bStats, projData) {
+  let score = 0;
+
+  // 1. Platoon wOBA split vs SP hand (0–3.5)
+  const woba = splitRow?.woba;
+  if (woba != null) {
+    if      (woba >= 0.410) score += 3.5;
+    else if (woba >= 0.380) score += 3.0;
+    else if (woba >= 0.350) score += 2.5;
+    else if (woba >= 0.330) score += 2.0;
+    else if (woba >= 0.310) score += 1.5;
+    else if (woba >= 0.290) score += 1.0;
+    else                    score += 0.5;
+  } else score += 2.0; // neutral
+
+  // 2. Opposing SP weakness – inverted quality (0–2.5)
+  if (opSpStats) {
+    const era   = opSpStats.era   ?? 4.2;
+    const stuff = opSpStats.stuff_plus ?? 100;
+    const eraScore   = Math.min(1.25, Math.max(0, (era - 2.5) / 4.0 * 1.25));
+    const stuffScore = Math.min(1.25, Math.max(0, (115 - stuff) / 30 * 1.25));
+    score += eraScore + stuffScore;
+  } else score += 1.25;
+
+  // 3. Contact / power profile (0–2.0)
+  const barrel = bStats?.barrel_pct ?? 8;
+  const iso    = bStats?.iso ?? splitRow?.iso ?? 0.15;
+  score += Math.min(1.0, barrel / 15) + Math.min(1.0, iso / 0.25);
+
+  // 4. Batting order PA bonus (0–1.0)
+  const bo = hitter.batting_order || 5;
+  score += bo <= 2 ? 1.0 : bo <= 4 ? 0.8 : bo <= 6 ? 0.5 : 0.2;
+
+  return +Math.min(10, Math.max(0, score)).toFixed(1);
+}
+
+function computeStackScore(stack, mode = 'gpp', slateMaxProj = 15) {
+  const w = mode === 'gpp'
+    ? { implied:30, proj:20, pms:20, hes:15, leverage:10, park:5 }
+    : { implied:25, proj:25, pms:25, hes:15, leverage:5,  park:5 };
+
+  const impliedScore  = Math.min(100, (stack.impliedTotal / 7.5) * 100);
+  const projScore     = Math.min(100, (stack.avgProjFP / slateMaxProj) * 100);
+  const pmsScore      = Math.min(100, (stack.avgPMS / 10) * 100);
+  const hesScore      = Math.min(100, (stack.hes / 10) * 100);
+  const parkScore     = Math.min(100, Math.max(0, ((stack.parkFactor - 85) / 35) * 100));
+  const leverageScore = Math.min(100, Math.max(0, 100 - Math.max(0, stack.avgOwnership - 15) * 3));
+
+  const raw = (
+    impliedScore  * w.implied  +
+    projScore     * w.proj     +
+    pmsScore      * w.pms      +
+    hesScore      * w.hes      +
+    leverageScore * w.leverage +
+    parkScore     * w.park
+  ) / 100;
+
+  return Math.min(99, Math.max(1, Math.round(raw)));
+}
+
+function computeScoreBreakdown(stack, mode, slateMaxProj) {
+  const w = mode === 'gpp'
+    ? { implied:30, proj:20, pms:20, hes:15, leverage:10, park:5 }
+    : { implied:25, proj:25, pms:25, hes:15, leverage:5,  park:5 };
+  return {
+    implied  : Math.round((Math.min(100,(stack.impliedTotal/7.5)*100)/100)*w.implied),
+    proj     : Math.round((Math.min(100,(stack.avgProjFP/slateMaxProj)*100)/100)*w.proj),
+    pms      : Math.round((Math.min(100,(stack.avgPMS/10)*100)/100)*w.pms),
+    hes      : Math.round((Math.min(100,(stack.hes/10)*100)/100)*w.hes),
+    leverage : Math.round((Math.min(100,Math.max(0,100-Math.max(0,stack.avgOwnership-15)*3))/100)*w.leverage),
+    park     : Math.round((Math.min(100,Math.max(0,((stack.parkFactor-85)/35)*100))/100)*w.park),
+    total    : stack.stackScore,
+  };
+}
+
+function findBestWindow(hitters, size) {
+  if (hitters.length < size) return null;
+  const sorted = [...hitters].sort((a,b) => (a.batting_order||9) - (b.batting_order||9));
+  let best = null, bestScore = -1;
+  for (let i = 0; i <= sorted.length - size; i++) {
+    const window = sorted.slice(i, i + size);
+    const orders = window.map(h => h.batting_order || 0);
+    const span   = Math.max(...orders) - Math.min(...orders);
+    if (span > size + 1) continue; // too scattered
+    const projSum = window.reduce((s,h) => s + (h.proj_dk_pts || 0), 0);
+    if (projSum > bestScore) { bestScore = projSum; best = window; }
+  }
+  return best;
+}
+
+// ── RENDERING ────────────────────────────────────────────────────────────────
+
+function getFilteredSorted() {
+  let list = [..._stacks];
+
+  // Recompute scores if mode changed
+  const slateMaxProj = Math.max(1, ...list.map(s => s.avgProjFP));
+  list.forEach(s => {
+    s.stackScore = computeStackScore(s, _mode, slateMaxProj);
+    s.scoreBreak = computeScoreBreakdown(s, _mode, slateMaxProj);
+  });
+
+  // Size filter — show 4-man or 5-man window based on selection
+  if (_size === '4') list = list.filter(s => s.best4 !== null);
+  if (_size === '5') list = list.filter(s => s.best5 !== null);
+
+  // Sort
+  const sortKey = {
+    score    : s => -s.stackScore,
+    implied  : s => -s.impliedTotal,
+    proj     : s => -s.avgProjFP,
+    pms      : s => -s.avgPMS,
+    hes      : s => -s.hes,
+    ownership: s => s.avgOwnership,
+  }[_sort] || (s => -s.stackScore);
+  list.sort((a,b) => sortKey(a) - sortKey(b));
+
+  return list;
+}
+
+function renderStacks() {
+  const list = getFilteredSorted();
+  const container = document.getElementById('stacks-container');
+  document.getElementById('stacks-count').textContent = `${list.length} stack${list.length!==1?'s':''} on ${fmtDate(_date)}`;
+
+  if (!list.length) {
+    container.innerHTML = '<div class="empty-state">No stacks match the current filters.</div>';
+    return;
+  }
+
+  container.innerHTML = `<div class="stacks-grid">${list.map((s,i) => renderCard(s,i)).join('')}</div>`;
+}
+
+function scoreColor(score) {
+  if (score >= 75) return '#4ade80';
+  if (score >= 55) return '#fbbf24';
+  return '#f87171';
+}
+function scoreBg(score) {
+  if (score >= 75) return 'var(--green-dim)';
+  if (score >= 55) return 'var(--amber-dim)';
+  return 'var(--red-dim)';
+}
+function pmsClass(pms) { return pms >= 7 ? 'pms-hi' : pms >= 5 ? 'pms-mid' : 'pms-lo'; }
+function hesLabel(hes) { return hes >= 7.5 ? 'Elite' : hes >= 6 ? 'Good' : hes >= 4.5 ? 'OK' : 'Tough'; }
+function hesClass(hes) { return hes >= 7.5 ? 'good' : hes >= 6 ? 'mid' : 'bad'; }
+function windLabel(weather) {
+  if (!weather) return '—';
+  const { wind_speed = 0, wind_direction = '' } = weather;
+  const dir = (wind_direction || '').toLowerCase();
+  if (dir.includes('dome') || dir.includes('indoor')) return '🏟 Dome';
+  if (!wind_speed) return 'Calm';
+  return `${Math.round(wind_speed)} mph ${wind_direction}`;
+}
+function windClass(weather) {
+  if (!weather) return '';
+  const dir = (weather.wind_direction||'').toLowerCase();
+  if (dir.includes('dome') || dir.includes('indoor')) return '';
+  const isOut = dir.includes('out') || (dir.includes(' to ') && !dir.includes('from'));
+  const isIn  = dir.includes('in from');
+  if (isOut && (weather.wind_speed||0) >= 10) return 'good';
+  if (isIn  && (weather.wind_speed||0) >= 10) return 'bad';
+  return 'mid';
+}
+function impliedClass(val) { return val >= 5.5 ? 'good' : val >= 4.5 ? 'mid' : 'bad'; }
+function scoreRingSVG(score) {
+  const clr = scoreColor(score);
+  const r = 22, circ = 2 * Math.PI * r;
+  const dash = (score / 100) * circ;
+  return `<svg width="52" height="52" viewBox="0 0 52 52">
+    <circle cx="26" cy="26" r="${r}" fill="none" stroke="#252d3a" stroke-width="4"/>
+    <circle cx="26" cy="26" r="${r}" fill="none" stroke="${clr}" stroke-width="4"
+      stroke-dasharray="${dash.toFixed(1)} ${circ.toFixed(1)}" stroke-linecap="round"/>
+  </svg>`;
+}
+
+function renderCard(stack, rank) {
+  const tc  = abbrColor(stack.teamAbbr);
+  const opp = abbrColor(stack.opAbbr);
+  const sc  = stack.stackScore;
+  const clr = scoreColor(sc);
+  const isExpanded = _expandedId === stack.id;
+
+  const spERA   = stack.opSpStats?.era   != null ? stack.opSpStats.era.toFixed(2) : '—';
+  const spStuff = stack.opSpStats?.stuff_plus != null ? stack.opSpStats.stuff_plus : '—';
+  const spHand  = stack.opSpThrows || 'R';
+  const spSalary = ''; // could add dk salary for SP if needed
+
+  return `
+<div class="stack-card${isExpanded?' expanded':''}" id="card-${stack.id}">
+  <div class="stack-header" onclick="toggleCard('${stack.id}')">
+
+    <!-- Rank -->
+    <div class="sh-rank" style="color:${rank<3?clr:'var(--muted)'};">#${rank+1}</div>
+
+    <!-- Team -->
+    <div class="sh-team-block">
+      <div class="sh-team-pill" style="background:${tc.bg};color:${tc.tx};">${stack.teamAbbr}</div>
+      <div class="sh-team-info">
+        <div class="sh-team-name">${stack.isHome ? 'vs' : '@'} <span style="color:${opp.tx};background:${opp.bg};padding:1px 5px;border-radius:3px;font-size:11px;">${stack.opAbbr}</span></div>
+        <div class="sh-team-game">${stack.hitters.length} hitters loaded</div>
+      </div>
+    </div>
+
+    <!-- Opposing SP -->
+    <div class="sh-sp-block">
+      <div class="sh-sp-name">${stack.opSpName || 'TBD'}</div>
+      <div class="sh-sp-meta">
+        <span class="sh-hand-badge ${spHand==='L'?'lhp':'rhp'}">${spHand}HP</span>
+        <span>ERA ${spERA}</span>
+        ${spStuff !== '—' ? `<span>Stf+ ${spStuff}</span>` : ''}
+      </div>
+    </div>
+
+    <!-- Implied Total -->
+    <div class="sh-cell">
+      <div class="sh-cell-val" style="color:${stack.impliedTotal>=5.5?'var(--hi)':stack.impliedTotal>=4.5?'var(--mid)':'var(--lo)'}">${stack.impliedTotal ? stack.impliedTotal.toFixed(1) : '—'}</div>
+      <div class="sh-cell-lbl">Implied</div>
+    </div>
+
+    <!-- Avg Proj FP -->
+    <div class="sh-cell">
+      <div class="sh-cell-val">${stack.avgProjFP ? stack.avgProjFP.toFixed(1) : '—'}</div>
+      <div class="sh-cell-lbl">Avg Proj</div>
+    </div>
+
+    <!-- Avg PMS -->
+    <div class="sh-cell">
+      <div class="sh-cell-val" style="color:${stack.avgPMS>=7?'var(--hi)':stack.avgPMS>=5?'var(--mid)':'var(--lo)'}">${stack.avgPMS ? stack.avgPMS.toFixed(1) : '—'}</div>
+      <div class="sh-cell-lbl">PMS</div>
+    </div>
+
+    <!-- HES -->
+    <div class="sh-cell">
+      <div class="sh-cell-val" style="color:${stack.hes>=7?'var(--hi)':stack.hes>=5?'var(--mid)':'var(--lo)'}">${stack.hes ? stack.hes.toFixed(1) : '—'}</div>
+      <div class="sh-cell-lbl">HES</div>
+    </div>
+
+    <!-- Ownership -->
+    <div class="sh-cell">
+      <div class="sh-cell-val" style="color:${stack.avgOwnership<=20?'var(--hi)':stack.avgOwnership<=30?'var(--mid)':'var(--lo)'}">${stack.avgOwnership ? stack.avgOwnership.toFixed(0)+'%' : '—'}</div>
+      <div class="sh-cell-lbl">Own%</div>
+    </div>
+
+    <!-- Stack Score ring -->
+    <div class="sh-score-cell">
+      <div class="sh-score-ring">
+        ${scoreRingSVG(sc)}
+        <div class="sh-score-num" style="color:${clr}">${sc}</div>
+      </div>
+    </div>
+
+    <!-- Chevron -->
+    <div class="sh-chevron">▼</div>
+  </div>
+
+  <!-- Env strip -->
+  <div class="env-strip">
+    <span class="env-pill ${impliedClass(stack.impliedTotal)}">O/U ${stack.gameTotal || '?'}</span>
+    <span class="env-pill ${windClass(stack.weather)}">${windLabel(stack.weather)}</span>
+    ${stack.weather?.temp ? `<span class="env-pill ${stack.weather.temp>=70?'good':stack.weather.temp>=55?'mid':'bad'}">${Math.round(stack.weather.temp)}°F</span>` : ''}
+    <span class="env-pill ${hesClass(stack.hes)}">HES ${hesLabel(stack.hes)}</span>
+    <span class="env-pill" style="background:var(--panel2);">Park ${stack.parkFactor ?? '—'}</span>
+  </div>
+
+  <!-- Expanded body -->
+  <div class="stack-body">
+    ${renderPlayerTable(stack)}
+    ${renderBringBack(stack)}
+  </div>
+</div>`;
+}
+
+function renderPlayerTable(stack) {
+  const windowPlayers = new Set(
+    (_size==='4' ? stack.best4 : _size==='5' ? stack.best5 : (stack.best5 || stack.best4) || [])
+    .map(h => h.player_id)
+  );
+
+  const rows = stack.hitters.map(h => {
+    const inWin = windowPlayers.has(h.player_id);
+    const sal   = h.salary ? `$${(h.salary/1000).toFixed(1)}K` : '—';
+    const proj  = h.proj_dk_pts ? h.proj_dk_pts.toFixed(1) : '—';
+    const own   = h.proj_ownership ? h.proj_ownership.toFixed(0)+'%' : '—';
+    return `<tr class="${inWin?'best-window':''}">
+      <td><div class="bo-dot ${inWin?'in-window':''}">${h.batting_order}</div></td>
+      <td style="font-weight:${inWin?600:400};max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${h.name}</td>
+      <td style="color:var(--muted2);font-size:11px;">${h.position||'—'}</td>
+      <td class="r"><span class="salary-val">${sal}</span></td>
+      <td class="r"><span class="proj-val">${proj}</span></td>
+      <td class="c"><span class="pms-badge ${pmsClass(h.pms)}">${h.pms.toFixed(1)}</span></td>
+      <td class="r"><span class="own-val">${own}</span></td>
+      <td class="r" style="font-size:11px;color:var(--muted2);">${h.splitWoba ? h.splitWoba.toFixed(3) : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  // Best window recommendation
+  const recWindow = _size==='4' ? stack.best4 : _size==='5' ? stack.best5 : (stack.best5 || stack.best4);
+  const winRec = recWindow ? `
+    <div class="window-rec">
+      <span class="window-rec-label">${recWindow.length}-Man Window</span>
+      <div class="window-dots">
+        ${recWindow.map(h => `<div class="bo-dot in-window">${h.batting_order}</div>`).join('')}
+      </div>
+      <span class="window-rec-names">${recWindow.map(h => h.name.split(' ').pop()).join(' · ')}</span>
+      <span style="font-family:'Barlow Condensed',sans-serif;font-size:12px;color:var(--orange);font-weight:700;">${recWindow.reduce((s,h)=>s+(h.proj_dk_pts||0),0).toFixed(1)} proj</span>
+    </div>` : '';
+
+  return `<div class="stack-players">
+    <div class="stack-players-title">Batting Order — ${stack.teamAbbr} vs ${stack.opSpName||'TBD'}</div>
+    <table class="players-table">
+      <thead><tr>
+        <th style="width:28px;">#</th>
+        <th>Player</th><th>Pos</th>
+        <th class="r">Salary</th>
+        <th class="r">Proj</th>
+        <th class="c">PMS</th>
+        <th class="r">Own%</th>
+        <th class="r">Split wOBA</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${winRec}
+  </div>`;
+}
+
+function renderBringBack(stack) {
+  const bbRows = stack.bringBack.length
+    ? stack.bringBack.map(h => {
+        const proj = h.proj_dk_pts ? h.proj_dk_pts.toFixed(1) : '—';
+        const own  = h.proj_ownership ? h.proj_ownership.toFixed(0)+'%' : '—';
+        const sal  = h.salary ? `$${(h.salary/1000).toFixed(1)}K` : '—';
+        return `<div class="bb-player">
+          <div class="bb-bo">${h.batting_order}</div>
+          <div class="bb-name">${h.name}</div>
+          <div style="font-size:11px;color:var(--muted2);">${sal}</div>
+          <div class="bb-proj">${proj}</div>
+          <div class="bb-own">${own}</div>
+          <div class="bb-pms ${pmsClass(h.pms)}">${h.pms.toFixed(1)}</div>
+        </div>`;
+      }).join('')
+    : '<div style="font-size:11px;color:var(--muted);padding:4px 0;">No lineup data for opponent.</div>';
+
+  const opp = abbrColor(stack.opAbbr);
+  const breakdown = stack.scoreBreak;
+  const breakRows = [
+    ['Implied',  breakdown.implied,  30],
+    ['Proj FP',  breakdown.proj,     25],
+    ['PMS',      breakdown.pms,      20],
+    ['HES',      breakdown.hes,      15],
+    ['Leverage', breakdown.leverage, 10],
+    ['Park',     breakdown.park,      5],
+  ].map(([lbl, val, max]) => `
+    <div class="sb-row">
+      <span class="sb-label">${lbl}</span>
+      <div class="sb-bar-wrap"><div class="sb-bar" style="width:${Math.round((val/max)*100)}%;background:${scoreColor(Math.round((val/max)*100))};"></div></div>
+      <span class="sb-val">${val}/${max}</span>
+    </div>`).join('');
+
+  return `<div class="bringback-panel">
+    <div class="bb-title">Bring-Back — <span style="background:${opp.bg};color:${opp.tx};padding:1px 6px;border-radius:3px;font-size:11px;">${stack.opAbbr}</span> vs ${stack.spName||'TBD'}</div>
+    <div class="bb-section">
+      <div class="bb-section-label" style="color:var(--muted2);font-size:10px;margin-bottom:4px;">Top targets from opposing lineup (sorted by proj)</div>
+      ${bbRows}
+    </div>
+    <div class="score-breakdown">
+      <div class="sb-title">Score Breakdown (${_mode.toUpperCase()})</div>
+      ${breakRows}
+    </div>
+  </div>`;
+}
+
+function toggleCard(id) {
+  _expandedId = _expandedId === id ? null : id;
+  renderStacks();
+  if (_expandedId) {
+    const el = document.getElementById(`card-${id}`);
+    if (el) el.scrollIntoView({ behavior:'smooth', block:'nearest' });
+  }
+}
+
+// ── INIT ────────────────────────────────────────────────────────────────────
+renderDatePicker();
+loadAll();
+</script>
+</body>
+</html>
