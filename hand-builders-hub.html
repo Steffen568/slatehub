@@ -5988,10 +5988,12 @@ function renderStackExposure() {
       teamCounts[p.team] = (teamCounts[p.team] || 0) + 1;
     });
     Object.entries(teamCounts).forEach(([team, cnt]) => {
-      if (cnt < 2) return;
-      const key = `${team}_${cnt}`;
-      if (!stackCounts[key]) stackCounts[key] = { team, size: cnt, count: 0 };
-      stackCounts[key].count++;
+      // Cumulative: a 4-man stack counts toward 4-man, 3-man, and 2-man rows
+      for (let s = 2; s <= cnt; s++) {
+        const key = `${team}_${s}`;
+        if (!stackCounts[key]) stackCounts[key] = { team, size: s, count: 0 };
+        stackCounts[key].count++;
+      }
     });
   });
 
@@ -6500,7 +6502,8 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set(), stackAppearCou
     const parts = key.split('_');
     const size  = +parts[parts.length - 1];
     const team  = parts.slice(0, -1).join('_');
-    if (size === rule.primarySize) {
+    // Cascade: a 3-man cap also blocks 4-man and 5-man stacks of that team
+    if (size <= rule.primarySize) {
       const maxCount = Math.max(1, Math.ceil(totalN * capPct / 100));
       if ((stackAppearCount[key] || 0) >= maxCount) cappedStackTeams.add(team);
     }
@@ -6713,7 +6716,8 @@ function generateLineups() {
     const teamCounts = {};
     hitterSlotKeys.forEach(k => { const p = lineupObj[k]; if (p?.team) teamCounts[p.team] = (teamCounts[p.team] || 0) + 1; });
     Object.entries(teamCounts).forEach(([team, cnt]) => {
-      if (cnt >= 2) { const k = `${team}_${cnt}`; stackAppearCount[k] = (stackAppearCount[k] || 0) + 1; }
+      // Cumulative: a 4-man stack counts toward 4-man, 3-man, and 2-man caps
+      for (let s = 2; s <= cnt; s++) { const k = `${team}_${s}`; stackAppearCount[k] = (stackAppearCount[k] || 0) + 1; }
     });
     lineupIdx++;
     return true;
