@@ -4070,6 +4070,12 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 .exp-name-cell{display:flex;align-items:center;gap:5px;font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:600;color:var(--text2);}
 .exp-bar-wrap-wide{width:100%;height:6px;background:var(--border);border-radius:3px;overflow:hidden;}
 .exp-bar-fill{height:100%;border-radius:3px;background:var(--hi);transition:width .2s;}
+.build-tabs-bar{display:flex;gap:4px;padding:6px 10px;border-bottom:1px solid var(--border);overflow-x:auto;flex-shrink:0;align-items:center;min-height:36px;}
+.build-tab{display:flex;align-items:center;gap:5px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:var(--s2);color:var(--muted);font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;transition:all .12s;flex-shrink:0;}
+.build-tab.active{background:var(--s3);color:var(--text2);border-color:var(--border2);}
+.build-tab-name{outline:none;background:transparent;border:none;color:inherit;font:inherit;cursor:text;min-width:50px;max-width:100px;}
+.build-tab-close{font-size:13px;line-height:1;color:var(--muted);cursor:pointer;padding:0 1px;}
+.build-tab-close:hover{color:#f87171;}
 .exp-tab-bar{display:flex;gap:2px;padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0;}
 .exp-tab{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;padding:3px 10px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .12s;}
 .exp-tab.active{background:var(--s3);color:var(--text2);border-color:var(--border2);}
@@ -4200,10 +4206,11 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
   <div class="lineups-section-hd">
     <span class="lineups-section-title">Saved Lineups</span>
     <div style="margin-left:auto;display:flex;gap:6px;">
-      <button class="bld-btn" onclick="exportSavedCSV()" title="Export all saved lineups to DK CSV">↓ CSV</button>
-      <button class="bld-btn danger" onclick="clearAllLineups()">Clear All</button>
+      <button class="bld-btn" onclick="exportSavedCSV()" title="Export active build to DK CSV">↓ CSV</button>
+      <button class="bld-btn danger" onclick="clearActiveBuild()">Clear Build</button>
     </div>
   </div>
+  <div class="build-tabs-bar" id="build-tabs-bar"></div>
   <div class="lineups-body">
     <div class="lineups-saved-col">
       <div class="lineups-grid saved-list" id="saved-list"></div>
@@ -4416,6 +4423,7 @@ let projOverrides   = {};          // player_id → manual proj override
 let expTargets      = {};          // player_id → manual max exposure % (0–100)
 let expHitterMax    = 100;         // global hitter exposure cap %
 let expPitcherMax   = 100;         // global pitcher exposure cap %
+let activeBuildId = null;     // ID of currently displayed build
 let stackExpCaps    = {};          // "TEAM_N" → max stack exposure % (e.g. "ARI_3" → 20)
 
 function isExcluded(p) { return excludedPlayers.has(p.player_id) || teamExcludes.has(p.team); }
@@ -5168,9 +5176,83 @@ function setPositionFilter(pos) {
   renderPool();
 }
 
+// ── BUILD STORAGE HELPERS ─────────────────────────────────────────────────────
+function getBuilds()          { return JSON.parse(localStorage.getItem('hbh_builds') || '[]'); }
+function saveBuilds(bs)       { localStorage.setItem('hbh_builds', JSON.stringify(bs)); }
+function getActiveBuild()     { const bs = getBuilds(); return bs.find(b => b.id === activeBuildId) || bs[bs.length - 1] || null; }
+function getActiveLineups()   { return getActiveBuild()?.lineups || []; }
+function updateActiveBuild(lineups) {
+  const bs  = getBuilds();
+  const idx = bs.findIndex(b => b.id === activeBuildId);
+  if (idx >= 0) { bs[idx].lineups = lineups; saveBuilds(bs); }
+}
+
+function renderBuildTabs() {
+  const bs  = getBuilds();
+  const bar = document.getElementById('build-tabs-bar');
+  if (!bar) return;
+  if (!bs.length) { bar.innerHTML = ''; return; }
+  bar.innerHTML = bs.map(b => {
+    const active = b.id === activeBuildId ? ' active' : '';
+    return `<div class="build-tab${active}" onclick="switchBuild('${b.id}')">
+      <input class="build-tab-name" value="${b.name.replace(/"/g,'&quot;')}"
+        onclick="event.stopPropagation()"
+        onblur="renameBuild('${b.id}',this.value)"
+        onkeydown="if(event.key==='Enter')this.blur()">
+      <span style="font-size:9px;color:var(--muted);">${b.lineups.length}</span>
+      <span class="build-tab-close" onclick="event.stopPropagation();deleteBuild('${b.id}')" title="Delete build">×</span>
+    </div>`;
+  }).join('');
+}
+
+function switchBuild(id) {
+  activeBuildId = id;
+  renderBuildTabs();
+  renderSavedCards();
+}
+
+function renameBuild(id, name) {
+  const bs = getBuilds();
+  const b  = bs.find(b => b.id === id);
+  if (b && name.trim()) { b.name = name.trim(); saveBuilds(bs); renderBuildTabs(); }
+}
+
+function deleteBuild(id) {
+  if (!confirm('Delete this build and all its lineups?')) return;
+  const bs = getBuilds().filter(b => b.id !== id);
+  saveBuilds(bs);
+  activeBuildId = bs[bs.length - 1]?.id || null;
+  renderBuildTabs();
+  renderSavedCards();
+}
+
+function clearActiveBuild() {
+  if (!confirm('Clear all lineups in this build?')) return;
+  updateActiveBuild([]);
+  renderBuildTabs();
+  renderSavedCards();
+}
+
+// Migrate legacy hbh_lineups → hbh_builds on first load
+(function migrateBuilds() {
+  const old = localStorage.getItem('hbh_lineups');
+  if (old && !localStorage.getItem('hbh_builds')) {
+    const lineups = JSON.parse(old);
+    if (lineups.length) {
+      const b = { id: 'build_0', name: 'Build 1', ts: Date.now(), lineups };
+      localStorage.setItem('hbh_builds', JSON.stringify([b]));
+      activeBuildId = 'build_0';
+    }
+    localStorage.removeItem('hbh_lineups');
+  } else {
+    const bs = getBuilds();
+    if (bs.length) activeBuildId = bs[bs.length - 1].id;
+  }
+})();
+
 // ── EXPOSURE MAP ──────────────────────────────────────────────────────────────
 function getExposureMap() {
-  const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
+  const saved = getActiveLineups();
   const total = saved.length;
   if (!total) return {};
   const map = {};
@@ -5663,10 +5745,16 @@ function saveLineup() {
   if (Object.values(lineup).filter(Boolean).length < 10) { showToast('Fill all 10 slots before saving'); return; }
   const name    = document.getElementById('lineup-name').value.trim() || 'Lineup '+new Date().toLocaleTimeString();
   const totProj = Object.values(lineup).filter(Boolean).reduce((s,p)=>s+(p.proj_dk_pts||0),0);
-  const saved   = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
-  saved.unshift({name, totProj, lineup:{...lineup}, ts:Date.now()});
-  localStorage.setItem('hbh_lineups', JSON.stringify(saved.slice(0,20)));
-  renderSavedCards(); showToast('Lineup saved!');
+  // Ensure there's an active build (create "Manual" build if none)
+  let bs = getBuilds();
+  if (!activeBuildId || !bs.find(b => b.id === activeBuildId)) {
+    const nb = { id: 'build_' + Date.now(), name: 'Manual', ts: Date.now(), lineups: [] };
+    bs.push(nb); saveBuilds(bs); activeBuildId = nb.id;
+  }
+  const lines = getActiveLineups();
+  lines.unshift({name, totProj, lineup:{...lineup}, ts:Date.now()});
+  updateActiveBuild(lines.slice(0, 150));
+  renderBuildTabs(); renderSavedCards(); showToast('Lineup saved!');
 }
 
 const POS_COLORS = {
@@ -5689,26 +5777,20 @@ function switchSavedTab(tab) {
 }
 
 function renderSavedCards() {
-  const saved   = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
+  const saved   = getActiveLineups();
   const list    = document.getElementById('saved-list');
   const section = document.getElementById('lineups-section');
-  if (!saved.length) {
-    if (section) section.style.display = 'none';
-    if (list) list.innerHTML = '';
-    return;
-  }
-  if (section) section.style.display = '';
+  const hasBuilds = getBuilds().length > 0;
+  if (section) section.style.display = hasBuilds ? '' : 'none';
+  renderBuildTabs();
+  if (!list) return;
   list.innerHTML = saved.map((s, i) => renderLineupCard(s, i)).join('');
   renderExposure();
   if (_activeExpTab === 'stacks') renderStackExposure();
   renderPool();   // refresh Exp% column whenever saved lineups change
 }
 
-function clearAllLineups() {
-  if (!confirm('Delete all saved lineups?')) return;
-  localStorage.removeItem('hbh_lineups');
-  renderSavedCards();
-}
+function clearAllLineups() { clearActiveBuild(); }
 
 function renderLineupCard(s, i) {
   const pts     = (s.totProj || s.totalProj || 0).toFixed(1);
@@ -5804,7 +5886,7 @@ function renderLineupCard(s, i) {
 }
 
 function renderExposure() {
-  const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
+  const saved = getActiveLineups();
   const el    = document.getElementById('exp-list');
   if (!saved.length) {
     el.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:12px 16px;">No saved lineups to analyze.</div>';
@@ -5888,7 +5970,7 @@ function setStackExpCap(key, val) {
 
 function renderStackExposure() {
   const el    = document.getElementById('exp-stack-list');
-  const saved = JSON.parse(localStorage.getItem('hbh_lineups') || '[]');
+  const saved = getActiveLineups();
   if (!saved.length) {
     el.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:12px 16px;">No saved lineups to analyze.</div>';
     return;
@@ -5960,7 +6042,7 @@ function renderStackExposure() {
 }
 
 function loadSavedLineup(idx) {
-  const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
+  const saved = getActiveLineups();
   if (!saved[idx]) return;
   lineup = {...saved[idx].lineup};
   document.getElementById('lineup-name').value = saved[idx].name;
@@ -5970,9 +6052,9 @@ function loadSavedLineup(idx) {
 
 function deleteSavedLineup(e, idx) {
   e.stopPropagation();
-  const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
-  saved.splice(idx,1);
-  localStorage.setItem('hbh_lineups', JSON.stringify(saved));
+  const saved = getActiveLineups();
+  saved.splice(idx, 1);
+  updateActiveBuild(saved);
   renderSavedCards();
 }
 
@@ -6391,7 +6473,7 @@ function optoPickRule(lineupIdx, total) {
 // return the highest-scoring valid lineup.
 // When randPct > 0: randomized combo order + perturbed projections → 1 solve per lineup.
 // When randPct = 0: exhaustive (capped at MAX_SOLVES) → finds global optimum.
-function optoFindBest(rule, pastLineups, capExcluded = new Set()) {
+function optoFindBest(rule, pastLineups, capExcluded = new Set(), stackAppearCount = {}, totalN = 1) {
   const allElig = [
     ...allHitters.filter(h => !isExcluded(h) && !capExcluded.has(h.player_id) && (h.salary || 0) > 0),
     ...allPitchers.filter(p => !isExcluded(p) && !capExcluded.has(p.player_id) && (p.salary || 0) > 0),
@@ -6412,13 +6494,26 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set()) {
   const teamScores  = Object.fromEntries(allTeams.map(t => [t, optoTeamScore(t)]));
   const rankedTeams = [...allTeams].sort((a, b) => teamScores[b] - teamScores[a]);
 
-  // Main team candidates — use team stack prefs if set, else top 8
+  // Build set of teams at their stack exposure cap for this stack size
+  const cappedStackTeams = new Set();
+  Object.entries(stackExpCaps).forEach(([key, capPct]) => {
+    const parts = key.split('_');
+    const size  = +parts[parts.length - 1];
+    const team  = parts.slice(0, -1).join('_');
+    if (size === rule.primarySize) {
+      const maxCount = Math.max(1, Math.ceil(totalN * capPct / 100));
+      if ((stackAppearCount[key] || 0) >= maxCount) cappedStackTeams.add(team);
+    }
+  });
+
+  // Main team candidates — use team stack prefs if set, else top 10 (excluding capped teams)
   const mainPrefs = optoSettings.teamStacks.filter(ts => ts.role === 'main').map(ts => ts.team);
-  const mainCandidates = mainPrefs.length > 0
+  const mainCandidates = (mainPrefs.length > 0
     ? mainPrefs
     : rankedTeams.slice(0, 10).filter(t =>
         allHitters.filter(h => optoTeamKey(h) === t && !isExcluded(h)).length >= rule.primarySize
-      );
+      )
+  ).filter(t => !cappedStackTeams.has(t));
 
   const windows = optoStackWindows(rule);
 
@@ -6572,11 +6667,19 @@ function generateLineups() {
 
   showToast(`Generating ${N} lineup${N > 1 ? 's' : ''}…`);
 
-  const existing    = JSON.parse(localStorage.getItem('hbh_lineups') || '[]');
-  const generated   = [];
-  const spIdSet     = new Set(allPitchers.map(p => p.player_id));
-  const appearCount = {};
-  let lineupIdx     = 0;
+  // Create a new build for this generate run
+  const newBuild = { id: 'build_' + Date.now(), name: 'Build ' + (getBuilds().length + 1), ts: Date.now(), lineups: [] };
+  const allBuilds = getBuilds();
+  allBuilds.push(newBuild);
+  saveBuilds(allBuilds);
+  activeBuildId = newBuild.id;
+
+  const generated        = [];
+  const spIdSet          = new Set(allPitchers.map(p => p.player_id));
+  const appearCount      = {};
+  const stackAppearCount = {};   // "TEAM_N" → count in generated
+  const hitterSlotKeys   = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
+  let lineupIdx          = 0;
 
   function buildOne() {
     const rule = optoPickRule(lineupIdx, N);
@@ -6595,7 +6698,7 @@ function generateLineups() {
       if ((appearCount[+pid] || 0) >= playerMax) capExcluded.add(+pid);
     });
 
-    const lineupObj = optoFindBest(rule, generated, capExcluded);
+    const lineupObj = optoFindBest(rule, generated, capExcluded, stackAppearCount, N);
     if (!lineupObj) return false;  // infeasible — stop
 
     const totProj = Object.values(lineupObj)
@@ -6606,13 +6709,18 @@ function generateLineups() {
     Object.values(lineupObj).forEach(p => {
       if (p?.player_id) appearCount[p.player_id] = (appearCount[p.player_id] || 0) + 1;
     });
+    // Track stack appearances for stackExpCaps enforcement
+    const teamCounts = {};
+    hitterSlotKeys.forEach(k => { const p = lineupObj[k]; if (p?.team) teamCounts[p.team] = (teamCounts[p.team] || 0) + 1; });
+    Object.entries(teamCounts).forEach(([team, cnt]) => {
+      if (cnt >= 2) { const k = `${team}_${cnt}`; stackAppearCount[k] = (stackAppearCount[k] || 0) + 1; }
+    });
     lineupIdx++;
     return true;
   }
 
   function flushBatch(done) {
-    const merged = [...existing, ...generated].slice(-150);
-    localStorage.setItem('hbh_lineups', JSON.stringify(merged));
+    updateActiveBuild(generated.slice(-150));
     renderSavedCards();
     if (done) showToast(`${generated.length} lineup${generated.length !== 1 ? 's' : ''} generated!`);
     else       showToast(`Generating… ${lineupIdx}/${N}`);
@@ -6773,7 +6881,7 @@ function exportCSV() {
 }
 
 function exportSavedCSV() {
-  const saved = JSON.parse(localStorage.getItem('hbh_lineups')||'[]');
+  const saved = getActiveLineups();
   if (!saved.length) { showToast('No saved lineups to export'); return; }
   if (!Object.keys(dkDraftgroupMap).length) {
     showToast('⚠ Upload your DK entries CSV first so we have the correct draftgroup IDs');
