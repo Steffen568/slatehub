@@ -247,11 +247,27 @@ for dgid in all_dg_ids:
                 slate_label = f'sd_{dgid}_{game_date_str}' if game_date_str else f'sd_{dgid}'
             dg_meta[dgid]['slate_label'] = slate_label
 
+            # Showdown: each player appears TWICE (CPT at 1.5× salary, FLEX at base salary).
+            # position='SP'/'OF'/etc for BOTH — not 'CPT'. Distinguish by rosterSlotId or salary.
+            # Keep only FLEX (lower salary) entry per playerDkId.
+            flex_draftable_ids = set()
+            by_player = {}
+            for p in draftables:
+                pid  = p.get('playerDkId')
+                sal  = p.get('salary', 0)
+                did  = p.get('draftableId')
+                if pid not in by_player or sal < by_player[pid][0]:
+                    by_player[pid] = (sal, did)
+            flex_draftable_ids = {did for (sal, did) in by_player.values()}
+            cpt_skipped = len(draftables) - len(flex_draftable_ids)
+        else:
+            flex_draftable_ids = None
+            cpt_skipped = 0
+
         count = 0
         name_hit = 0
         dk_fallback = 0
         no_match = 0
-        cpt_skipped = 0
 
         for p in draftables:
             dk_player_id = p.get('playerDkId')
@@ -263,10 +279,8 @@ for dgid in all_dg_ids:
             salary       = p.get('salary', 0)
             team         = p.get('teamAbbreviation', '')
 
-            # Showdown: skip CPT rows — we only store FLEX salary (CPT is always 1.5× FLEX)
-            # CPT rows have position='CPT' in the CSV and in the API response
-            if is_showdown and (csv_pos == 'CPT' or api_pos == 'CPT'):
-                cpt_skipped += 1
+            # Showdown: skip CPT entries — only keep the FLEX (lower salary) draftable per player
+            if is_showdown and draftable_id not in flex_draftable_ids:
                 continue
 
             position = csv_pos or api_pos
