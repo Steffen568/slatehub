@@ -7209,10 +7209,10 @@ function updateTotals_SD() {
 // ── SD PLAYER POOL ────────────────────────────────────────────────────────────
 
 function renderSDPool() {
-  const container = document.getElementById('player-pool');
+  const container = document.getElementById('pool-list');
   if (!container) return;
   const search = (document.getElementById('pool-search')?.value || '').toLowerCase();
-  let all = [...allHitters, ...allPitchers].filter(p => (p.salary||0) > 0 && (p.proj_dk_pts||0) > 0);
+  let all = [...allHitters, ...allPitchers].filter(p => (p.salary||0) > 0);
   if (search) all = all.filter(p => (p.name||'').toLowerCase().includes(search) || (p.team||'').toLowerCase().includes(search));
   // Captains tab (hitters key) → sort by proj; Utility tab (pitchers key) → sort by value (proj/salary)
   if (activeTab === 'pitchers') {
