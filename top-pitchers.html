@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SlateHub — Top Pitchers</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400;500;600;700;800&family=Barlow:wght@300;400;500;600;700&family=Barlow+Semi+Condensed:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--panel:#161a24;--panel2:#1e2230;--border:#252d3a;--border2:#2e3750;
+  --text:#e2e8f0;--muted:#64748b;--muted2:#8899b0;
+  --hi:#4ade80;--mid:#fbbf24;--lo:#f87171;--blue:#60a5fa;--purple:#c084fc;--orange:#fb923c;
+  --green-dim:#1a3d28;--amber-dim:#3d3010;--red-dim:#3d1515;
+  --radius:8px;--radius-sm:5px;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;font-size:14px;line-height:1.4;}
+a{color:inherit;text-decoration:none;}
+
+/* NAV */
+.sh-topnav{display:flex;align-items:center;gap:6px;padding:0 16px;height:44px;background:#0c0f16;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;}
+.sh-topnav-logo{font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;letter-spacing:1px;color:#fff;padding-right:8px;border-right:1px solid var(--border2);margin-right:4px;}
+.sh-topnav-logo em{font-style:normal;color:var(--hi);}
+.sh-tab{font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:600;padding:5px 12px;border-radius:var(--radius-sm);letter-spacing:.4px;transition:background .15s,color .15s;color:var(--muted);}
+.sh-tab:hover{background:var(--panel2);color:var(--text);}
+.sh-tab.active{color:#fff;opacity:1;pointer-events:auto;}
+.sh-green.active,.sh-green:hover{background:#1a3a2a;color:var(--hi);}
+.sh-blue.active,.sh-blue:hover{background:#1a2a3a;color:var(--blue);}
+.sh-orange.active,.sh-orange:hover{background:#2e1e0e;color:var(--orange);}
+.sh-purple.active,.sh-purple:hover{background:#251530;color:var(--purple);}
+.sh-tab.sh-soon{opacity:.45;pointer-events:none;}
+
+/* FILTER BAR */
+.filter-bar{display:flex;align-items:center;gap:10px;padding:10px 20px;background:#0c0f16;border-bottom:1px solid var(--border);flex-wrap:wrap;}
+.filter-group{display:flex;align-items:center;gap:6px;}
+.filter-label{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;}
+.filter-sep{width:1px;height:20px;background:var(--border2);margin:0 4px;}
+.date-btn{font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:600;padding:4px 10px;border-radius:var(--radius-sm);border:1px solid var(--border2);background:var(--panel2);color:var(--muted2);cursor:pointer;transition:all .15s;}
+.date-btn:hover,.date-btn.active{background:var(--border2);color:var(--text);}
+.mode-toggle{display:flex;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--border2);}
+.mode-btn{font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;padding:4px 12px;background:var(--panel2);color:var(--muted);cursor:pointer;transition:all .15s;border:none;letter-spacing:.5px;}
+.mode-btn.active-gpp{background:#1a2a3d;color:var(--blue);}
+.mode-btn.active-cash{background:var(--green-dim);color:var(--hi);}
+.sort-select{font-family:'Barlow Condensed',sans-serif;font-size:12px;padding:4px 8px;background:var(--panel2);border:1px solid var(--border2);border-radius:var(--radius-sm);color:var(--text);cursor:pointer;}
+
+/* MAIN */
+.main-wrap{max-width:1280px;margin:0 auto;padding:16px 20px;}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
+.page-title{font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:800;letter-spacing:.5px;}
+.page-title span{color:var(--purple);}
+.page-count{font-size:12px;color:var(--muted);font-family:'Barlow Condensed',sans-serif;}
+
+/* LOADING / EMPTY */
+.loading-state{text-align:center;padding:60px 20px;color:var(--muted);font-family:'Barlow Condensed',sans-serif;font-size:16px;}
+.loading-state .spinner{width:32px;height:32px;border:3px solid var(--border2);border-top-color:var(--purple);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 16px;}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty-state{text-align:center;padding:60px 20px;color:var(--muted);font-family:'Barlow Condensed',sans-serif;font-size:15px;}
+
+/* PITCHER CARD */
+.pitchers-grid{display:flex;flex-direction:column;gap:8px;}
+.pitcher-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;transition:border-color .15s;}
+.pitcher-card:hover{border-color:var(--border2);}
+.pitcher-card.expanded{border-color:var(--purple);}
+
+.pitcher-header{display:grid;grid-template-columns:44px 1fr 82px 80px 70px 70px 70px 70px 90px 44px;gap:0;align-items:center;cursor:pointer;min-height:58px;user-select:none;}
+
+/* Rank */
+.ph-rank{display:flex;align-items:center;justify-content:center;font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:800;color:var(--muted);padding:0 10px;}
+
+/* Identity */
+.ph-identity{display:flex;align-items:center;gap:10px;padding:10px 12px;}
+.ph-team-pill{font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:800;padding:4px 8px;border-radius:var(--radius-sm);letter-spacing:.5px;min-width:42px;text-align:center;flex-shrink:0;}
+.ph-info{display:flex;flex-direction:column;gap:2px;}
+.ph-name{font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:700;color:var(--text);}
+.ph-meta{font-size:11px;color:var(--muted);display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+.ph-hand-badge{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;}
+.rhp{background:#1a2a3a;color:var(--blue);}
+.lhp{background:#1a3d28;color:var(--hi);}
+
+/* Metric cells */
+.ph-cell{padding:8px 10px;text-align:center;}
+.ph-cell-val{font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:700;}
+.ph-cell-lbl{font-size:10px;color:var(--muted);letter-spacing:.3px;margin-top:1px;font-family:'Barlow Condensed',sans-serif;}
+
+/* Score ring */
+.ph-score-cell{padding:8px 12px;display:flex;align-items:center;justify-content:center;}
+.ph-score-ring{width:52px;height:52px;position:relative;display:flex;align-items:center;justify-content:center;}
+.ph-score-ring svg{position:absolute;top:0;left:0;transform:rotate(-90deg);}
+.ph-score-num{font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;position:relative;z-index:1;}
+
+/* Chevron */
+.ph-chevron{padding:0 12px;color:var(--muted);font-size:12px;transition:transform .2s;display:flex;align-items:center;justify-content:center;}
+.expanded .ph-chevron{transform:rotate(180deg);}
+
+/* ENV STRIP */
+.env-strip{display:flex;gap:6px;align-items:center;padding:5px 14px;background:#0d1018;border-top:1px solid var(--border);flex-wrap:wrap;}
+.env-pill{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--panel2);color:var(--muted2);}
+.env-pill.good{background:var(--green-dim);color:var(--hi);}
+.env-pill.mid{background:var(--amber-dim);color:var(--mid);}
+.env-pill.bad{background:var(--red-dim);color:var(--lo);}
+
+/* EXPANDED BODY */
+.pitcher-body{display:none;border-top:1px solid var(--border);}
+.pitcher-card.expanded .pitcher-body{display:grid;grid-template-columns:1fr 300px;}
+
+/* Left panel */
+.pitcher-detail{padding:14px 16px;}
+.detail-section{margin-bottom:16px;}
+.detail-section:last-child{margin-bottom:0;}
+.detail-title{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.6px;text-transform:uppercase;margin-bottom:10px;}
+
+/* Projection breakdown */
+.proj-breakdown{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;}
+.proj-comp{background:var(--panel2);border-radius:var(--radius-sm);padding:8px 6px;text-align:center;}
+.proj-comp-val{font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:700;}
+.proj-comp-lbl{font-size:10px;color:var(--muted);margin-top:2px;font-family:'Barlow Condensed',sans-serif;}
+
+/* Floor/ceiling bar */
+.fc-bar-wrap{position:relative;height:22px;background:var(--panel2);border-radius:var(--radius-sm);overflow:hidden;margin-top:6px;}
+.fc-bar-fill{position:absolute;top:0;height:100%;background:linear-gradient(90deg,rgba(26,61,40,.8),rgba(192,132,252,.6));border-radius:var(--radius-sm);}
+.fc-bar-proj{position:absolute;top:0;height:100%;width:2px;background:var(--purple);}
+.fc-bar-label{position:absolute;top:50%;transform:translateY(-50%);font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;}
+
+/* Arsenal table */
+.arsenal-table{width:100%;border-collapse:collapse;}
+.arsenal-table th{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.4px;text-transform:uppercase;padding:4px 8px;text-align:left;border-bottom:1px solid var(--border);}
+.arsenal-table th.r{text-align:right;}
+.arsenal-table td{padding:5px 8px;border-bottom:1px solid var(--border);font-size:12px;}
+.arsenal-table tr:last-child td{border-bottom:none;}
+.pitch-badge{display:inline-block;font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;padding:1px 6px;border-radius:3px;background:var(--panel2);color:var(--muted2);}
+.whiff-bar{display:inline-block;height:4px;background:var(--purple);border-radius:2px;vertical-align:middle;}
+
+/* Right sidebar */
+.pitcher-sidebar{border-left:1px solid var(--border);padding:14px 14px;background:#0f1520;}
+.sidebar-section{margin-bottom:14px;}
+.sidebar-section:last-child{margin-bottom:0;}
+.sidebar-title{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.6px;text-transform:uppercase;margin-bottom:8px;}
+
+.stat-row{display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);}
+.stat-row:last-child{border-bottom:none;}
+.stat-lbl{font-size:12px;color:var(--muted2);}
+.stat-val{font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700;}
+
+.opp-hitter{display:flex;align-items:center;gap:7px;padding:4px 0;border-bottom:1px solid var(--border);}
+.opp-hitter:last-child{border-bottom:none;}
+.opp-bo{font-family:'Barlow Condensed',sans-serif;font-size:11px;color:var(--muted);width:16px;text-align:center;}
+.opp-name{flex:1;font-size:12px;}
+.opp-woba{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;width:38px;text-align:right;}
+.opp-proj{font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;color:var(--text);width:30px;text-align:right;}
+
+/* Score breakdown */
+.score-breakdown{padding-top:10px;border-top:1px solid var(--border);}
+.sb-title{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px;}
+.sb-row{display:flex;align-items:center;gap:6px;margin-bottom:4px;}
+.sb-label{font-family:'Barlow Condensed',sans-serif;font-size:10px;color:var(--muted2);width:68px;}
+.sb-bar-wrap{flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden;}
+.sb-bar{height:100%;border-radius:2px;transition:width .4s;}
+.sb-val{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;color:var(--muted2);width:28px;text-align:right;}
+
+@media(max-width:900px){
+  .pitcher-header{grid-template-columns:36px 1fr 70px 70px 60px 80px 44px;}
+  .ph-cell:nth-child(5),.ph-cell:nth-child(6),.ph-cell:nth-child(8){display:none;}
+  .pitcher-card.expanded .pitcher-body{grid-template-columns:1fr;}
+  .pitcher-sidebar{border-left:none;border-top:1px solid var(--border);}
+}
+</style>
+</head>
+<body>
+
+<nav class="sh-topnav">
+  <div class="sh-topnav-logo">Slate<em>Hub</em></div>
+  <a class="sh-tab sh-green" href="index.html">SlateHub</a>
+  <a class="sh-tab sh-blue" href="hand-builders-hub.html">Lineup Hub</a>
+  <a class="sh-tab sh-orange" href="top-stacks.html">Top Stacks</a>
+  <a class="sh-tab sh-purple active" href="top-pitchers.html">Top Pitchers</a>
+</nav>
+
+<div class="filter-bar">
+  <div class="filter-group">
+    <span class="filter-label">Date</span>
+    <div id="date-strip" style="display:flex;gap:4px;"></div>
+  </div>
+  <div class="filter-sep"></div>
+  <div class="filter-group">
+    <span class="filter-label">Mode</span>
+    <div class="mode-toggle">
+      <button class="mode-btn active-gpp" id="mode-gpp" onclick="setMode('gpp')">GPP</button>
+      <button class="mode-btn" id="mode-cash" onclick="setMode('cash')">Cash</button>
+    </div>
+  </div>
+  <div class="filter-sep"></div>
+  <div class="filter-group">
+    <span class="filter-label">Sort</span>
+    <select class="sort-select" id="sort-select" onchange="setSort(this.value)">
+      <option value="score">Pitcher Score</option>
+      <option value="proj">Proj FP</option>
+      <option value="ks">Proj Ks</option>
+      <option value="value">Value (FP/$)</option>
+      <option value="salary">Salary ↑</option>
+      <option value="ownership">Ownership ↑</option>
+    </select>
+  </div>
+</div>
+
+<div class="main-wrap">
+  <div class="page-header">
+    <div class="page-title">Top <span>Pitchers</span></div>
+    <div class="page-count" id="pitcher-count"></div>
+  </div>
+  <div id="pitchers-container">
+    <div class="loading-state"><div class="spinner"></div>Loading pitchers…</div>
+  </div>
+</div>
+
+<script>
+const { createClient } = supabase;
+const sb = createClient(
+  'https://rzgmnjfxlthxpoecyvnv.supabase.co',
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ6Z21uamZ4bHRoeHBvZWN5dm52Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTMwMjUsImV4cCI6MjA4ODIyOTAyNX0.WCAkPKJCH5KM4E15QVOYr7BR6aW2M4dmu6WzsGnYlio'
+);
+const SEASON = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
+
+const ABBR_COLORS = {
+  'ARI':{bg:'#a71930',tx:'#e3d4ad'},'ATL':{bg:'#ce1141',tx:'#fff'},
+  'BAL':{bg:'#df4601',tx:'#fff'},   'BOS':{bg:'#bd3039',tx:'#fff'},
+  'CHC':{bg:'#0e3386',tx:'#cc3433'},'CWS':{bg:'#27251f',tx:'#c4ced4'},
+  'CIN':{bg:'#c6011f',tx:'#fff'},   'CLE':{bg:'#e31937',tx:'#fff'},
+  'COL':{bg:'#33006f',tx:'#c4ced4'},'DET':{bg:'#0c2340',tx:'#fa4616'},
+  'HOU':{bg:'#002d62',tx:'#eb6e1f'},'KC': {bg:'#004687',tx:'#bd9b60'},
+  'LAA':{bg:'#ba0021',tx:'#fff'},   'LAD':{bg:'#005a9c',tx:'#fff'},
+  'MIA':{bg:'#00a3e0',tx:'#ff6600'},'MIL':{bg:'#12284b',tx:'#ffc52f'},
+  'MIN':{bg:'#002b5c',tx:'#d31145'},'NYM':{bg:'#002d72',tx:'#ff5910'},
+  'NYY':{bg:'#003087',tx:'#fff'},   'OAK':{bg:'#003831',tx:'#efb21e'},
+  'PHI':{bg:'#e81828',tx:'#fff'},   'PIT':{bg:'#27251f',tx:'#fdb827'},
+  'SD': {bg:'#2f241d',tx:'#ffc425'},'SF': {bg:'#fd5a1e',tx:'#27251f'},
+  'SEA':{bg:'#0c2c56',tx:'#7ab2c8'},'STL':{bg:'#c41e3a',tx:'#0c2340'},
+  'TB': {bg:'#092c5c',tx:'#8fbce6'},'TEX':{bg:'#003278',tx:'#c0111f'},
+  'TOR':{bg:'#134a8e',tx:'#1d7cf2'},'WSH':{bg:'#ab0003',tx:'#fff'},
+};
+function abbrColor(a){ return ABBR_COLORS[(a||'').toUpperCase()]||{bg:'#252d38',tx:'#8899b0'}; }
+
+let _date = todayStr();
+let _mode = 'gpp';
+let _sort = 'score';
+let _pitchers = [];
+let _expandedId = null;
+
+function todayStr(){
+  const d=new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function fmtDate(s){
+  const [y,m,d]=s.split('-');
+  return `${['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m]} ${+d}`;
+}
+function addDays(s,n){
+  const d=new Date(s+'T12:00:00'); d.setDate(d.getDate()+n);
+  return d.toISOString().split('T')[0];
+}
+function renderDatePicker(){
+  const strip=document.getElementById('date-strip');
+  strip.innerHTML=[-2,-1,0,1,2].map(n=>addDays(todayStr(),n)).map(d=>
+    `<button class="date-btn${d===_date?' active':''}" onclick="selectDate('${d}')">${fmtDate(d)}${d===todayStr()?' (Today)':''}</button>`
+  ).join('');
+}
+async function selectDate(d){ _date=d; renderDatePicker(); await loadAll(); }
+
+function setMode(m){
+  _mode=m;
+  document.getElementById('mode-gpp').className='mode-btn'+(m==='gpp'?' active-gpp':'');
+  document.getElementById('mode-cash').className='mode-btn'+(m==='cash'?' active-cash':'');
+  renderPitchers();
+}
+function setSort(s){ _sort=s; renderPitchers(); }
+
+async function batchIn(table, ids, idCol, selectCols, extraFilters){
+  const rows=[];
+  for(let i=0;i<ids.length;i+=100){
+    let q=sb.from(table).select(selectCols).in(idCol,ids.slice(i,i+100)).limit(5000);
+    if(extraFilters) for(const [k,v] of Object.entries(extraFilters)) q=q.eq(k,v);
+    const {data}=await q;
+    if(data) rows.push(...data);
+  }
+  return rows;
+}
+
+function mlToWinProb(ml){
+  if(!ml) return 0.5;
+  return ml<0 ? Math.abs(ml)/(Math.abs(ml)+100) : 100/(ml+100);
+}
+
+// ── SCORE COMPUTATION ────────────────────────────────────────────────────────
+
+function computePitcherScore(p, mode){
+  const w = mode==='gpp'
+    ? {proj:30, k:20, win:15, lineup:20, leverage:10, park:5}
+    : {proj:35, k:15, win:15, lineup:20, leverage:5,  park:10};
+
+  // 1. Proj FP — scale 8→28 to 0→100
+  const projS = Math.min(100, Math.max(0, ((p.proj_dk_pts-8)/20)*100));
+
+  // 2. K Upside — proj_ks 2→10, boosted by Stuff+ deviation from 100
+  const stuffAdj = p.stuff_plus ? (p.stuff_plus-100)/20 : 0;
+  const kBase = Math.min(100, Math.max(0, ((p.proj_ks-2)/8)*100));
+  const kS = Math.min(100, Math.max(0, kBase*(1+stuffAdj*0.30)));
+
+  // 3. Win probability
+  const winS = Math.min(100, Math.max(0,(p.win_prob||0.35)*100));
+
+  // 4. Opposing lineup quality (higher = easier for SP)
+  // 4a. Avg wOBA vs SP hand: 0.290=elite(100) → 0.390=brutal(0)
+  const wobaS = p.oppLineupWoba!=null
+    ? Math.min(100, Math.max(0, ((0.390-p.oppLineupWoba)/0.100)*100))
+    : 50;
+  // 4b. Lineup K susceptibility boosted by SP SwStr%
+  let kSuscS = 50;
+  if(p.oppLineupKPct!=null){
+    kSuscS = Math.min(100, Math.max(0, ((p.oppLineupKPct-0.10)/0.25)*100));
+    const swBoost = p.swstr_pct ? (p.swstr_pct-0.10)/0.06 : 0;
+    kSuscS = Math.min(100, Math.max(0, kSuscS*(1+swBoost*0.20)));
+  }
+  // 4c. Top-4 danger: proj FP 16=tough(0) → 5=easy(100)
+  const top4S = p.oppTop4AvgProj!=null
+    ? Math.min(100, Math.max(0, ((16-p.oppTop4AvgProj)/11)*100))
+    : 50;
+  const lineupS = wobaS*0.50 + kSuscS*0.25 + top4S*0.25;
+
+  // 5. Leverage
+  const levS = Math.min(100, Math.max(0, 100-Math.max(0,(p.proj_ownership||20)-15)*3));
+
+  // 6. Park + env (pitcher perspective: cold/wind-in = good)
+  const pfS = Math.min(100, Math.max(0, ((115-p.parkFactor)/30)*100));
+  const envS = computeEnvScore(p.weather);
+  const parkS = (pfS+envS)/2;
+
+  const raw=(projS*w.proj+kS*w.k+winS*w.win+lineupS*w.lineup+levS*w.leverage+parkS*w.park)/100;
+  return Math.min(99, Math.max(1, Math.round(raw)));
+}
+
+function computeEnvScore(w){
+  if(!w) return 50;
+  const {temp=70, wind_speed=0, wind_direction=''} = w;
+  const dir=(wind_direction||'').toLowerCase();
+  let s=50;
+  if(temp<=50) s+=20; else if(temp<=60) s+=10; else if(temp>=80) s-=15; else if(temp>=70) s-=5;
+  const isDome=dir.includes('dome')||dir.includes('indoor')||dir.includes('covered');
+  const isIn=dir.includes('in from')||dir.includes('from cf')||dir.includes('from lf')||dir.includes('from rf');
+  const isOut=dir.includes('out')||(dir.includes(' to ')&&!dir.includes('from'));
+  if(isDome) s+=5;
+  else if(isIn&&wind_speed>=8)  s+=Math.min(25,wind_speed*1.5);
+  else if(isOut&&wind_speed>=8) s-=Math.min(25,wind_speed*1.5);
+  return Math.min(100,Math.max(0,s));
+}
+
+function computeScoreBreakdown(p, mode){
+  const w = mode==='gpp'
+    ? {proj:30, k:20, win:15, lineup:20, leverage:10, park:5}
+    : {proj:35, k:15, win:15, lineup:20, leverage:5,  park:10};
+
+  const stuffAdj = p.stuff_plus ? (p.stuff_plus-100)/20 : 0;
+  const kBase = Math.min(100, Math.max(0, ((p.proj_ks-2)/8)*100));
+  const kS = Math.min(100, Math.max(0, kBase*(1+stuffAdj*0.30)));
+
+  const wobaS = p.oppLineupWoba!=null ? Math.min(100,Math.max(0,((0.390-p.oppLineupWoba)/0.100)*100)) : 50;
+  let kSuscS=50;
+  if(p.oppLineupKPct!=null){
+    kSuscS=Math.min(100,Math.max(0,((p.oppLineupKPct-0.10)/0.25)*100));
+    const swBoost=p.swstr_pct?(p.swstr_pct-0.10)/0.06:0;
+    kSuscS=Math.min(100,Math.max(0,kSuscS*(1+swBoost*0.20)));
+  }
+  const top4S=p.oppTop4AvgProj!=null?Math.min(100,Math.max(0,((16-p.oppTop4AvgProj)/11)*100)):50;
+  const lineupS=wobaS*0.50+kSuscS*0.25+top4S*0.25;
+  const levS=Math.min(100,Math.max(0,100-Math.max(0,(p.proj_ownership||20)-15)*3));
+  const pfS=Math.min(100,Math.max(0,((115-p.parkFactor)/30)*100));
+  const envS=computeEnvScore(p.weather);
+  const parkS=(pfS+envS)/2;
+
+  return {
+    proj    : Math.round((Math.min(100,Math.max(0,((p.proj_dk_pts-8)/20)*100))/100)*w.proj),
+    k       : Math.round((kS/100)*w.k),
+    win     : Math.round((Math.min(100,Math.max(0,(p.win_prob||0.35)*100))/100)*w.win),
+    lineup  : Math.round((lineupS/100)*w.lineup),
+    leverage: Math.round((levS/100)*w.leverage),
+    park    : Math.round((parkS/100)*w.park),
+  };
+}
+
+// ── DATA LOADING ─────────────────────────────────────────────────────────────
+
+async function loadAll(){
+  document.getElementById('pitchers-container').innerHTML=
+    `<div class="loading-state"><div class="spinner"></div>Loading pitchers…</div>`;
+  document.getElementById('pitcher-count').textContent='';
+
+  try{
+    const {data:games} = await sb.from('games')
+      .select('game_pk,game_date,home_team_id,away_team_id,home_team,away_team,home_sp_id,home_sp_name,away_sp_id,away_sp_name,venue_id,status')
+      .eq('game_date',_date).limit(20);
+
+    if(!games||!games.length){
+      document.getElementById('pitchers-container').innerHTML=
+        `<div class="empty-state">No games found for ${fmtDate(_date)}.</div>`;
+      return;
+    }
+
+    const gamePks  = games.map(g=>g.game_pk);
+    const venueIds = [...new Set(games.map(g=>g.venue_id).filter(Boolean))];
+    const spIds    = [...new Set([...games.map(g=>g.home_sp_id),...games.map(g=>g.away_sp_id)].filter(Boolean))];
+
+    const [oddsRes,lineupsRes,projRes,weatherRes,parkRes,spStatsRes,arsenalRows,salaryRes,splitsRes] = await Promise.all([
+      sb.from('game_odds').select('game_pk,home_implied,away_implied,game_total,home_ml,away_ml').eq('game_date',_date),
+      sb.from('lineups').select('game_pk,player_id,player_name,team_id,batting_order,position')
+        .eq('game_date',_date).gte('batting_order',1).lte('batting_order',9),
+      sb.from('player_projections')
+        .select('player_id,full_name,team,proj_dk_pts,proj_floor,proj_ceiling,proj_ip,proj_ks,proj_er,proj_h_allowed,proj_bb_allowed,win_prob,proj_ownership,is_pitcher')
+        .eq('game_date',_date).limit(5000),
+      sb.from('weather').select('game_pk,temp,wind_speed,wind_direction').in('game_pk',gamePks),
+      venueIds.length
+        ? sb.from('park_factors').select('venue_id,park_factor,hr_factor').in('venue_id',venueIds)
+        : Promise.resolve({data:[]}),
+      spIds.length
+        ? sb.from('pitcher_stats')
+            .select('player_id,full_name,season,era,fip,xfip,siera,k_pct,bb_pct,swstr_pct,csw_pct,hard_hit_pct,barrel_pct,stuff_plus,pitching_plus,velo,arm_angle,ip,gs,throws')
+            .eq('season',SEASON).in('player_id',spIds)
+        : Promise.resolve({data:[]}),
+      spIds.length
+        ? batchIn('pitch_arsenal',spIds,'player_id',
+            'player_id,pitch_type,pitch_name,usage_pct,whiff_pct,velo,rv100,xwoba,stuff_plus,season',
+            {season:SEASON})
+        : Promise.resolve([]),
+      sb.from('dk_salaries').select('player_id,name,salary,position,team').limit(5000),
+      sb.from('batter_splits').select('player_id,split,woba,k_pct,iso').eq('season',SEASON).limit(5000),
+    ]);
+
+    // Build lookup maps
+    const oddsMap    = Object.fromEntries((oddsRes.data||[]).map(o=>[o.game_pk,o]));
+    const weatherMap = Object.fromEntries((weatherRes.data||[]).map(w=>[w.game_pk,w]));
+    const parkMap    = Object.fromEntries((parkRes.data||[]).map(p=>[p.venue_id,p]));
+    const spStatsMap = Object.fromEntries((spStatsRes.data||[]).map(p=>[p.player_id,p]));
+    const projMap    = Object.fromEntries((projRes.data||[]).map(p=>[p.player_id,p]));
+    const salaryMap  = {};
+    (salaryRes.data||[]).forEach(r=>{ if(!salaryMap[r.player_id]) salaryMap[r.player_id]=r; });
+    const splitsMap  = {};
+    (splitsRes.data||[]).forEach(r=>{
+      if(!splitsMap[r.player_id]) splitsMap[r.player_id]={};
+      splitsMap[r.player_id][r.split]=r;
+    });
+    const arsenalMap = {};
+    (Array.isArray(arsenalRows)?arsenalRows:[]).forEach(r=>{
+      if(!arsenalMap[r.player_id]) arsenalMap[r.player_id]=[];
+      arsenalMap[r.player_id].push(r);
+    });
+    Object.values(arsenalMap).forEach(arr=>arr.sort((a,b)=>(b.usage_pct||0)-(a.usage_pct||0)));
+
+    const lineupsByGame = {};
+    (lineupsRes.data||[]).forEach(p=>{
+      if(!lineupsByGame[p.game_pk]) lineupsByGame[p.game_pk]={};
+      if(!lineupsByGame[p.game_pk][p.team_id]) lineupsByGame[p.game_pk][p.team_id]=[];
+      lineupsByGame[p.game_pk][p.team_id].push(p);
+    });
+
+    // Build pitcher objects
+    const raw=[];
+    for(const game of games){
+      const odds    = oddsMap[game.game_pk]||{};
+      const weather = weatherMap[game.game_pk]||null;
+      const park    = parkMap[game.venue_id]||null;
+      const gameLU  = lineupsByGame[game.game_pk]||{};
+
+      for(const side of ['home','away']){
+        const isHome   = side==='home';
+        const spId     = isHome ? game.home_sp_id   : game.away_sp_id;
+        const spName   = isHome ? game.home_sp_name : game.away_sp_name;
+        const teamAbbr = isHome ? game.home_team    : game.away_team;
+        const teamId   = isHome ? game.home_team_id : game.away_team_id;
+        const oppAbbr  = isHome ? game.away_team    : game.home_team;
+        const oppTeamId= isHome ? game.away_team_id : game.home_team_id;
+        if(!spId||!spName) continue;
+
+        const spStats  = spStatsMap[spId]||null;
+        const spProj   = projMap[spId]||null;
+        const spSal    = salaryMap[spId]||null;
+        const spHand   = spStats?.throws||'R';
+
+        const impliedTotal = isHome?(odds.home_implied||0):(odds.away_implied||0);
+        const oppImplied   = isHome?(odds.away_implied||0):(odds.home_implied||0);
+        const winProb = spProj?.win_prob ?? mlToWinProb(isHome?odds.home_ml:odds.away_ml);
+
+        // Opposing hitters enriched with splits vs SP hand
+        const oppRoster=(gameLU[oppTeamId]||[]).sort((a,b)=>(a.batting_order||9)-(b.batting_order||9));
+        const oppHitters=oppRoster.map(lp=>{
+          const split=(splitsMap[lp.player_id]||{})[spHand]||null;
+          const proj=projMap[lp.player_id]||{};
+          return {
+            player_id:lp.player_id, name:lp.player_name,
+            batting_order:lp.batting_order, position:lp.position,
+            woba:split?.woba??null, kPct:split?.k_pct??null,
+            proj_dk_pts:proj.proj_dk_pts||0,
+          };
+        });
+
+        const withWoba    = oppHitters.filter(h=>h.woba!=null);
+        const withKPct    = oppHitters.filter(h=>h.kPct!=null);
+        const top4        = oppHitters.filter(h=>h.batting_order<=4);
+        const oppLineupWoba    = withWoba.length  ? withWoba.reduce((s,h)=>s+h.woba,0)/withWoba.length : null;
+        const oppLineupKPct    = withKPct.length  ? withKPct.reduce((s,h)=>s+h.kPct,0)/withKPct.length : null;
+        const oppTop4AvgProj   = top4.length      ? top4.reduce((s,h)=>s+h.proj_dk_pts,0)/top4.length : null;
+        const lineupConfirmed  = oppHitters.length>=7;
+
+        const p={
+          id:`${game.game_pk}_${side}`, gamePk:game.game_pk,
+          spId, name:spProj?.full_name||spStats?.full_name||spName,
+          team:teamAbbr, teamId, opponent:oppAbbr, oppTeamId, isHome, spHand,
+          salary:spSal?.salary||0,
+          proj_dk_pts :spProj?.proj_dk_pts||0,
+          proj_floor  :spProj?.proj_floor||0,
+          proj_ceiling:spProj?.proj_ceiling||0,
+          proj_ip     :spProj?.proj_ip||0,
+          proj_ks     :spProj?.proj_ks||0,
+          proj_er     :spProj?.proj_er||0,
+          proj_h      :spProj?.proj_h_allowed||0,
+          proj_bb     :spProj?.proj_bb_allowed||0,
+          win_prob:winProb,
+          proj_ownership:spProj?.proj_ownership||0,
+          era:spStats?.era??null, xfip:spStats?.xfip??null, siera:spStats?.siera??null,
+          stuff_plus:spStats?.stuff_plus??null, k_pct:spStats?.k_pct??null,
+          bb_pct:spStats?.bb_pct??null, swstr_pct:spStats?.swstr_pct??null,
+          csw_pct:spStats?.csw_pct??null, velo:spStats?.velo??null,
+          arm_angle:spStats?.arm_angle??null,
+          weather, parkFactor:park?.park_factor||100, hrFactor:park?.hr_factor||100,
+          venueId:game.venue_id,
+          impliedTotal, oppImplied, gameTotal:odds.game_total||0,
+          oppLineupWoba, oppLineupKPct, oppTop4AvgProj, lineupConfirmed, oppHitters,
+          arsenal:(arsenalMap[spId]||[]).slice(0,5),
+        };
+        p.pitcherScore=computePitcherScore(p,_mode);
+        p.scoreBreak  =computeScoreBreakdown(p,_mode);
+        raw.push(p);
+      }
+    }
+
+    _pitchers=raw;
+    renderPitchers();
+
+  }catch(err){
+    console.error(err);
+    document.getElementById('pitchers-container').innerHTML=
+      `<div class="empty-state">Error loading data: ${err.message}</div>`;
+  }
+}
+
+// ── RENDER ───────────────────────────────────────────────────────────────────
+
+function getSorted(){
+  const list=[..._pitchers];
+  list.forEach(p=>{ p.pitcherScore=computePitcherScore(p,_mode); p.scoreBreak=computeScoreBreakdown(p,_mode); });
+  const fn={
+    score    :p=>-p.pitcherScore,
+    proj     :p=>-p.proj_dk_pts,
+    ks       :p=>-p.proj_ks,
+    value    :p=>-(p.proj_dk_pts/Math.max(1,p.salary/1000)),
+    salary   :p=>p.salary,
+    ownership:p=>p.proj_ownership,
+  }[_sort]||(p=>-p.pitcherScore);
+  return list.sort((a,b)=>fn(a)-fn(b));
+}
+
+function renderPitchers(){
+  const list=getSorted();
+  const c=document.getElementById('pitchers-container');
+  document.getElementById('pitcher-count').textContent=
+    `${list.length} starter${list.length!==1?'s':''} on ${fmtDate(_date)}`;
+  if(!list.length){ c.innerHTML='<div class="empty-state">No starting pitchers found.</div>'; return; }
+  c.innerHTML=`<div class="pitchers-grid">${list.map((p,i)=>renderCard(p,i)).join('')}</div>`;
+}
+
+function scoreColor(s){ return s>=75?'#4ade80':s>=55?'#fbbf24':'#f87171'; }
+function scoreRingSVG(s){
+  const clr=scoreColor(s),r=22,circ=2*Math.PI*r,dash=(s/100)*circ;
+  return `<svg width="52" height="52" viewBox="0 0 52 52">
+    <circle cx="26" cy="26" r="${r}" fill="none" stroke="#252d3a" stroke-width="4"/>
+    <circle cx="26" cy="26" r="${r}" fill="none" stroke="${clr}" stroke-width="4"
+      stroke-dasharray="${dash.toFixed(1)} ${circ.toFixed(1)}" stroke-linecap="round"/>
+  </svg>`;
+}
+function fmtPct(v,d=1){ return v!=null?(v*100).toFixed(d)+'%':'—'; }
+function fmtSal(s){ return s?`$${(s/1000).toFixed(1)}K`:'—'; }
+
+function windLabel(w){
+  if(!w) return '—';
+  const dir=(w.wind_direction||'').toLowerCase();
+  if(dir.includes('dome')||dir.includes('indoor')) return '🏟 Dome';
+  if(!w.wind_speed) return 'Calm';
+  return `${Math.round(w.wind_speed)} mph ${w.wind_direction}`;
+}
+function windClassPitcher(w){
+  if(!w) return '';
+  const dir=(w.wind_direction||'').toLowerCase();
+  if(dir.includes('dome')||dir.includes('indoor')) return '';
+  const isIn=dir.includes('in from')||dir.includes('from cf');
+  const isOut=dir.includes('out')||(dir.includes(' to ')&&!dir.includes('from'));
+  if(isIn  &&(w.wind_speed||0)>=10) return 'good';
+  if(isOut &&(w.wind_speed||0)>=10) return 'bad';
+  return 'mid';
+}
+
+function renderCard(p, rank){
+  const tc=abbrColor(p.team), opp=abbrColor(p.opponent);
+  const sc=p.pitcherScore, clr=scoreColor(sc), isEx=_expandedId===p.id;
+  const projColor=p.proj_dk_pts>=20?'var(--hi)':p.proj_dk_pts>=15?'var(--mid)':'var(--lo)';
+  const winColor=(p.win_prob||0)>=0.55?'var(--hi)':(p.win_prob||0)>=0.42?'var(--mid)':'var(--lo)';
+  const ownColor=(p.proj_ownership||0)<=15?'var(--hi)':(p.proj_ownership||0)<=25?'var(--mid)':'var(--lo)';
+  const tempClass=p.weather?.temp!=null?(p.weather.temp<=55?'good':p.weather.temp>=75?'bad':'mid'):'';
+
+  return `
+<div class="pitcher-card${isEx?' expanded':''}" id="card-${p.id}">
+  <div class="pitcher-header" onclick="toggleCard('${p.id}')">
+    <div class="ph-rank" style="color:${rank<3?clr:'var(--muted)'};">#${rank+1}</div>
+    <div class="ph-identity">
+      <div class="ph-team-pill" style="background:${tc.bg};color:${tc.tx};">${p.team}</div>
+      <div class="ph-info">
+        <div class="ph-name">${p.name}</div>
+        <div class="ph-meta">
+          <span class="ph-hand-badge ${p.spHand==='L'?'lhp':'rhp'}">${p.spHand}HP</span>
+          <span>${p.isHome?'vs':'@'} <span style="background:${opp.bg};color:${opp.tx};padding:1px 5px;border-radius:3px;font-size:11px;">${p.opponent}</span></span>
+          ${p.oppImplied?`<span style="color:var(--muted)">Opp ${p.oppImplied.toFixed(1)}</span>`:''}
+          ${!p.lineupConfirmed?`<span style="color:var(--mid);font-size:10px;">Lineup TBD</span>`:''}
+        </div>
+      </div>
+    </div>
+    <div class="ph-cell">
+      <div class="ph-cell-val" style="color:var(--muted2)">${fmtSal(p.salary)}</div>
+      <div class="ph-cell-lbl">Salary</div>
+    </div>
+    <div class="ph-cell">
+      <div class="ph-cell-val" style="color:${projColor}">${p.proj_dk_pts?p.proj_dk_pts.toFixed(1):'—'}</div>
+      <div class="ph-cell-lbl">Proj FP</div>
+    </div>
+    <div class="ph-cell">
+      <div class="ph-cell-val" style="color:var(--purple)">${p.proj_ks?p.proj_ks.toFixed(1):'—'}</div>
+      <div class="ph-cell-lbl">Proj Ks</div>
+    </div>
+    <div class="ph-cell">
+      <div class="ph-cell-val" style="color:${winColor}">${p.win_prob!=null?Math.round(p.win_prob*100)+'%':'—'}</div>
+      <div class="ph-cell-lbl">Win%</div>
+    </div>
+    <div class="ph-cell">
+      <div class="ph-cell-val" style="color:${ownColor}">${p.proj_ownership?p.proj_ownership.toFixed(0)+'%':'—'}</div>
+      <div class="ph-cell-lbl">Own%</div>
+    </div>
+    <div class="ph-cell">
+      <div class="ph-cell-val" style="color:${p.stuff_plus!=null?(p.stuff_plus>=115?'var(--hi)':p.stuff_plus>=100?'var(--mid)':'var(--lo)'):'var(--muted2)'}">${p.stuff_plus!=null?Math.round(p.stuff_plus):'—'}</div>
+      <div class="ph-cell-lbl">Stuff+</div>
+    </div>
+    <div class="ph-score-cell">
+      <div class="ph-score-ring">
+        ${scoreRingSVG(sc)}
+        <div class="ph-score-num" style="color:${clr}">${sc}</div>
+      </div>
+    </div>
+    <div class="ph-chevron">▼</div>
+  </div>
+
+  <div class="env-strip">
+    <span class="env-pill ${p.impliedTotal<=3.8?'good':p.impliedTotal<=4.8?'mid':'bad'}">Implied ${p.impliedTotal?p.impliedTotal.toFixed(1):'—'}</span>
+    <span class="env-pill ${windClassPitcher(p.weather)}">${windLabel(p.weather)}</span>
+    ${p.weather?.temp!=null?`<span class="env-pill ${tempClass}">${Math.round(p.weather.temp)}°F</span>`:''}
+    <span class="env-pill">Park ${p.parkFactor}</span>
+    ${p.xfip!=null?`<span class="env-pill ${p.xfip<=3.50?'good':p.xfip<=4.20?'mid':'bad'}">xFIP ${p.xfip.toFixed(2)}</span>`:''}
+    <span class="env-pill ${p.lineupConfirmed?'good':'mid'}">${p.lineupConfirmed?'Lineup Conf.':'Lineup TBD'}</span>
+  </div>
+
+  <div class="pitcher-body">
+    ${renderDetail(p)}
+    ${renderSidebar(p)}
+  </div>
+</div>`;
+}
+
+function renderDetail(p){
+  const ipPts  = +(p.proj_ip*2.25).toFixed(1);
+  const kPts   = +(p.proj_ks*2.00).toFixed(1);
+  const erPts  = +(p.proj_er*-2.00).toFixed(1);
+  const hbbPts = +((p.proj_h*-0.6)+(p.proj_bb*-0.6)).toFixed(1);
+  const winPts = +((p.win_prob||0)*4.00).toFixed(1);
+  function ptClr(v){ return v>0?'var(--hi)':v<0?'var(--lo)':'var(--muted2)'; }
+  function ptLbl(v){ return v>0?'+'+v:''+v; }
+
+  const maxC = Math.max(p.proj_ceiling||0, 35);
+  const flPct = ((p.proj_floor||0)/maxC*100).toFixed(1);
+  const prPct = ((p.proj_dk_pts||0)/maxC*100).toFixed(1);
+  const cePct = ((p.proj_ceiling||0)/maxC*100).toFixed(1);
+
+  const arsRows = p.arsenal.length
+    ? p.arsenal.slice(0,5).map(a=>{
+        const wW=Math.min(50,(a.whiff_pct||0)*100*0.8);
+        const rvClr=a.rv100<-1?'var(--hi)':a.rv100>1?'var(--lo)':'var(--muted2)';
+        return `<tr>
+          <td><span class="pitch-badge">${a.pitch_type||'—'}</span></td>
+          <td>${a.pitch_name||'—'}</td>
+          <td style="text-align:right">${a.velo?a.velo.toFixed(1)+' mph':'—'}</td>
+          <td style="text-align:right">${a.usage_pct?(a.usage_pct*100).toFixed(0)+'%':'—'}</td>
+          <td style="text-align:right">
+            <span class="whiff-bar" style="width:${wW}px"></span>
+            <span style="margin-left:4px;font-size:11px;color:var(--muted2)">${a.whiff_pct?(a.whiff_pct*100).toFixed(0)+'%':'—'}</span>
+          </td>
+          <td style="text-align:right;color:${rvClr}">${a.rv100!=null?a.rv100.toFixed(1):'—'}</td>
+        </tr>`;
+      }).join('')
+    : `<tr><td colspan="6" style="color:var(--muted);font-size:11px;padding:8px 0">No arsenal data</td></tr>`;
+
+  return `<div class="pitcher-detail">
+    <div class="detail-section">
+      <div class="detail-title">DK Projection Breakdown — ${p.proj_dk_pts?p.proj_dk_pts.toFixed(1)+' pts':'—'}</div>
+      <div class="proj-breakdown">
+        <div class="proj-comp"><div class="proj-comp-val">${p.proj_ip?p.proj_ip.toFixed(1):'—'}</div><div class="proj-comp-lbl">Proj IP</div></div>
+        <div class="proj-comp"><div class="proj-comp-val" style="color:var(--hi)">${ptLbl(ipPts)}</div><div class="proj-comp-lbl">IP pts</div></div>
+        <div class="proj-comp"><div class="proj-comp-val" style="color:var(--purple)">${ptLbl(kPts)}</div><div class="proj-comp-lbl">K pts</div></div>
+        <div class="proj-comp"><div class="proj-comp-val" style="color:${ptClr(winPts)}">${ptLbl(winPts)}</div><div class="proj-comp-lbl">Win pts</div></div>
+        <div class="proj-comp"><div class="proj-comp-val" style="color:${ptClr(erPts)}">${ptLbl(erPts)}</div><div class="proj-comp-lbl">ER pts</div></div>
+        <div class="proj-comp"><div class="proj-comp-val" style="color:${ptClr(hbbPts)}">${ptLbl(hbbPts)}</div><div class="proj-comp-lbl">H/BB pts</div></div>
+      </div>
+      <div style="margin-top:10px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+          <span style="font-family:'Barlow Condensed',sans-serif;font-size:11px;color:var(--muted)">Floor: <b style="color:var(--text)">${p.proj_floor?p.proj_floor.toFixed(1):'—'}</b></span>
+          <span style="font-family:'Barlow Condensed',sans-serif;font-size:11px;color:var(--muted)">Proj: <b style="color:var(--purple)">${p.proj_dk_pts?p.proj_dk_pts.toFixed(1):'—'}</b></span>
+          <span style="font-family:'Barlow Condensed',sans-serif;font-size:11px;color:var(--muted)">Ceil: <b style="color:var(--hi)">${p.proj_ceiling?p.proj_ceiling.toFixed(1):'—'}</b></span>
+        </div>
+        <div class="fc-bar-wrap">
+          <div class="fc-bar-fill" style="left:${flPct}%;width:${Math.max(0,+cePct - +flPct)}%"></div>
+          <div class="fc-bar-proj" style="left:${prPct}%"></div>
+          <span class="fc-bar-label" style="left:4px;color:var(--muted2);font-size:10px">${p.proj_floor?p.proj_floor.toFixed(0):''}</span>
+          <span class="fc-bar-label" style="right:4px;color:var(--hi);font-size:10px">${p.proj_ceiling?p.proj_ceiling.toFixed(0):''}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail-section">
+      <div class="detail-title">Pitch Arsenal</div>
+      <table class="arsenal-table">
+        <thead><tr>
+          <th style="width:42px">Type</th><th>Pitch</th>
+          <th class="r">Velo</th><th class="r">Use%</th><th class="r">Whiff%</th><th class="r">RV/100</th>
+        </tr></thead>
+        <tbody>${arsRows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function renderSidebar(p){
+  const br=p.scoreBreak;
+  const opp=abbrColor(p.opponent);
+
+  // Pitcher stats rows
+  const stats=[
+    ['xFIP',   p.xfip!=null?p.xfip.toFixed(2):'—',  p.xfip!=null?(p.xfip<=3.50?'var(--hi)':p.xfip<=4.20?'var(--mid)':'var(--lo)'):'var(--muted2)'],
+    ['K%',     fmtPct(p.k_pct),    p.k_pct!=null?(p.k_pct>=0.28?'var(--hi)':p.k_pct>=0.20?'var(--mid)':'var(--lo)'):'var(--muted2)'],
+    ['SwStr%', fmtPct(p.swstr_pct),p.swstr_pct!=null?(p.swstr_pct>=0.14?'var(--hi)':p.swstr_pct>=0.10?'var(--mid)':'var(--lo)'):'var(--muted2)'],
+    ['BB%',    fmtPct(p.bb_pct),   p.bb_pct!=null?(p.bb_pct<=0.07?'var(--hi)':p.bb_pct<=0.10?'var(--mid)':'var(--lo)'):'var(--muted2)'],
+    ['ERA',    p.era!=null?p.era.toFixed(2):'—',     p.era!=null?(p.era<=3.00?'var(--hi)':p.era<=4.00?'var(--mid)':'var(--lo)'):'var(--muted2)'],
+    ['Velo',   p.velo?p.velo.toFixed(1)+' mph':'—',  'var(--muted2)'],
+  ].map(([l,v,c])=>`<div class="stat-row"><span class="stat-lbl">${l}</span><span class="stat-val" style="color:${c}">${v}</span></div>`).join('');
+
+  // Lineup quality rows
+  const lqColor=(val,good,bad,inverse=false)=>{
+    if(val==null) return 'var(--muted2)';
+    if(!inverse) return val<=good?'var(--hi)':val<=bad?'var(--mid)':'var(--lo)';
+    return val>=good?'var(--hi)':val>=bad?'var(--mid)':'var(--lo)';
+  };
+  const lqRows=[
+    ['Opp wOBA vs '+p.spHand+'HP', p.oppLineupWoba!=null?p.oppLineupWoba.toFixed(3):(p.lineupConfirmed?'—':'TBD'),
+     lqColor(p.oppLineupWoba,0.300,0.340)],
+    ['Opp K% vs '+p.spHand+'HP',   p.oppLineupKPct!=null?fmtPct(p.oppLineupKPct):(p.lineupConfirmed?'—':'TBD'),
+     lqColor(p.oppLineupKPct,0.25,0.18,true)],
+    ['Top-4 Avg Proj',             p.oppTop4AvgProj!=null?p.oppTop4AvgProj.toFixed(1)+' FP':(p.lineupConfirmed?'—':'TBD'),
+     lqColor(p.oppTop4AvgProj,8,12)],
+    ['Opp Implied',                p.oppImplied?p.oppImplied.toFixed(1):'—',
+     lqColor(p.oppImplied,3.8,4.8)],
+  ].map(([l,v,c])=>`<div class="stat-row"><span class="stat-lbl">${l}</span><span class="stat-val" style="color:${c}">${v}</span></div>`).join('');
+
+  // Opp hitters
+  const oppRows=p.oppHitters.length
+    ? p.oppHitters.slice(0,7).map(h=>{
+        const wc=h.woba!=null?(h.woba>=0.370?'var(--lo)':h.woba>=0.330?'var(--mid)':'var(--hi)'):'var(--muted2)';
+        return `<div class="opp-hitter">
+          <div class="opp-bo">${h.batting_order}</div>
+          <div class="opp-name">${h.name}</div>
+          <div class="opp-woba" style="color:${wc}">${h.woba!=null?h.woba.toFixed(3):'—'}</div>
+          <div class="opp-proj">${h.proj_dk_pts?h.proj_dk_pts.toFixed(1):'—'}</div>
+        </div>`;
+      }).join('')
+    : `<div style="font-size:11px;color:var(--muted);padding:6px 0">Lineup not yet confirmed</div>`;
+
+  // Score breakdown bars
+  const breakRows=[
+    ['Proj FP',  br.proj,     30],
+    ['K Upside', br.k,        20],
+    ['Win Prob', br.win,      15],
+    ['Lineup',   br.lineup,   20],
+    ['Leverage', br.leverage, 10],
+    ['Park/Env', br.park,      5],
+  ].map(([l,v,mx])=>`
+    <div class="sb-row">
+      <span class="sb-label">${l}</span>
+      <div class="sb-bar-wrap"><div class="sb-bar" style="width:${Math.round((v/mx)*100)}%;background:${scoreColor(Math.round((v/mx)*100))}"></div></div>
+      <span class="sb-val">${v}/${mx}</span>
+    </div>`).join('');
+
+  return `<div class="pitcher-sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">Pitcher Stats (${SEASON})</div>
+      ${stats}
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Opp Lineup — <span style="background:${opp.bg};color:${opp.tx};padding:1px 6px;border-radius:3px;font-size:11px">${p.opponent}</span></div>
+      ${lqRows}
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Batting Order (wOBA vs ${p.spHand}HP · Proj)</div>
+      ${oppRows}
+    </div>
+    <div class="score-breakdown">
+      <div class="sb-title">Score Breakdown (${_mode.toUpperCase()})</div>
+      ${breakRows}
+    </div>
+  </div>`;
+}
+
+function toggleCard(id){
+  _expandedId = _expandedId===id ? null : id;
+  renderPitchers();
+  if(_expandedId){
+    const el=document.getElementById(`card-${id}`);
+    if(el) el.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }
+}
+
+renderDatePicker();
+loadAll();
+</script>
+</body>
+</html>
