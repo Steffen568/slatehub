@@ -7144,27 +7144,32 @@ function renderSlot_SD(s, player) {
   const p = player !== undefined ? player : lineup[s.key];
   const isCpt = s.isCpt;
   const label = isCpt ? 'CPT' : 'FLEX';
-  const salary = p ? (isCpt ? (p.salary||0)*1.5 : (p.salary||0)) : null;
-  const proj   = p ? (isCpt ? (p.proj_dk_pts||0)*1.5 : (p.proj_dk_pts||0)) : null;
-  const posLabel = p ? (p.primary_position || p.position || '?') : '';
-  const isSP = p && (p.primary_position === 'SP' || p.is_pitcher);
 
   if (!p) {
     return `<div class="lineup-slot${isCpt?' sd-cpt':''}" id="slot-${s.key}"
-      ondragover="slotDragOver(event,'${s.key}')" ondrop="dropPlayer(event,'${s.key}')"
-      onclick="clearSlot('${s.key}')">
-      <span class="slot-label${isCpt?' cpt-label':''}">${label}</span>
-      <span class="slot-empty">empty</span>
+      ondragover="slotDragOver(event,'${s.key}')" ondragleave="slotDragLeave(event)"
+      ondrop="dropPlayer(event,'${s.key}')">
+      <span class="slot-pos">${label}</span>
+      <span class="slot-empty">Click or drag player</span>
     </div>`;
   }
+  const salary = isCpt ? (p.salary||0)*1.5 : (p.salary||0);
+  const proj   = p.proj_dk_pts != null ? (isCpt ? p.proj_dk_pts*1.5 : p.proj_dk_pts) : null;
+  const tc  = abbrColor(p.team);
+  const tag = p.team ? `<span class="team-tag" style="background:${tc.bg};color:${tc.tx};font-size:9px;padding:1px 3px;">${p.team}</span>` : '';
+  const confirmBadge = p.lineup_confirmed ? '<span style="color:var(--hi);font-size:9px;">✓</span>'
+                     : p.in_lineup        ? '<span style="color:var(--mid);font-size:9px;">~</span>' : '';
   return `<div class="lineup-slot filled${isCpt?' sd-cpt':''}" id="slot-${s.key}"
-    ondragover="slotDragOver(event,'${s.key}')" ondrop="dropPlayer(event,'${s.key}')"
-    onclick="clearSlot('${s.key}')">
-    <span class="slot-label${isCpt?' cpt-label':''}">${label}</span>
-    <span class="p-pos-badge${isSP?' pit-badge':''}">${posLabel}</span>
-    <span class="slot-name">${p.name}</span>
-    <span class="slot-salary">$${salary ? salary.toLocaleString() : '—'}</span>
-    <span class="slot-proj">${proj ? proj.toFixed(1) : '—'}</span>
+    ondragover="slotDragOver(event,'${s.key}')" ondragleave="slotDragLeave(event)"
+    ondrop="dropPlayer(event,'${s.key}')">
+    <span class="slot-pos"${isCpt?' style="color:#fbbf24;font-weight:700;"':''}>${label}</span>
+    <div class="slot-player">
+      ${tag}${confirmBadge}
+      <span class="slot-pname">${p.name}</span>
+    </div>
+    <span class="slot-psal">${salary ? '$'+salary.toLocaleString() : '—'}</span>
+    <span class="slot-pproj">${proj != null ? proj.toFixed(1)+' pts' : '—'}</span>
+    <span class="slot-remove" onclick="clearSlot('${s.key}')" title="Remove">×</span>
   </div>`;
 }
 
@@ -7209,40 +7214,82 @@ function updateTotals_SD() {
 // ── SD PLAYER POOL ────────────────────────────────────────────────────────────
 
 function renderSDPool() {
-  const container = document.getElementById('pool-list');
-  if (!container) return;
-  const search = (document.getElementById('pool-search')?.value || '').toLowerCase();
+  const list = document.getElementById('pool-list');
+  if (!list) return;
+  const search  = (document.getElementById('pool-search')?.value || '').toLowerCase();
+  const expMap  = getExposureMap();
   let all = [...allHitters, ...allPitchers].filter(p => (p.salary||0) > 0);
-  if (search) all = all.filter(p => (p.name||'').toLowerCase().includes(search) || (p.team||'').toLowerCase().includes(search));
-  // Captains tab (hitters key) → sort by proj; Utility tab (pitchers key) → sort by value (proj/salary)
-  if (activeTab === 'pitchers') {
-    all.sort((a,b) => ((b.proj_dk_pts||0)/(b.salary||1)) - ((a.proj_dk_pts||0)/(a.salary||1)));
-  } else {
-    all.sort((a,b) => (b.proj_dk_pts||0) - (a.proj_dk_pts||0));
+  if (search) all = all.filter(p =>
+    (p.name||'').toLowerCase().includes(search) || (p.team||'').toLowerCase().includes(search));
+
+  all.sort((a, b) => {
+    const aExcl = isExcluded(a) ? 1 : 0, bExcl = isExcluded(b) ? 1 : 0;
+    if (aExcl !== bExcl) return aExcl - bExcl;
+    const aLock = lockedPlayers.has(a.player_id) ? 1 : 0, bLock = lockedPlayers.has(b.player_id) ? 1 : 0;
+    if (aLock !== bLock) return bLock - aLock;
+    // Utility tab → sort by value (proj/salary); Captains tab → sort by proj
+    if (activeTab === 'pitchers') {
+      return ((b.proj_dk_pts||0)/(b.salary||1)) - ((a.proj_dk_pts||0)/(a.salary||1));
+    }
+    return (b.proj_dk_pts||0) - (a.proj_dk_pts||0);
+  });
+
+  const total = [...allHitters, ...allPitchers].filter(p => (p.salary||0) > 0).length;
+  document.getElementById('pool-count').textContent = `${all.length} of ${total} players`;
+
+  if (!all.length) {
+    list.innerHTML = '<div class="pool-empty">No players loaded for this slate.</div>';
+    return;
   }
-  container.innerHTML = all.length
-    ? all.map(p => renderSDPlayerRow(p)).join('')
-    : '<div style="color:var(--muted);padding:12px;font-size:12px;">No players match</div>';
+
+  const thead = `<tr>
+    <th style="width:26px;"></th><th style="width:26px;"></th>
+    <th>Player</th><th style="width:36px;">Pos</th>
+    <th style="width:72px;" title="Captain salary (1.5×)">CPT $</th>
+    <th style="width:62px;">FLEX $</th>
+    <th style="width:48px;">Proj</th>
+    <th style="width:44px;">Val</th>
+    <th style="width:44px;">Exp%</th>
+  </tr>`;
+
+  list.innerHTML = `<table class="player-table"><thead>${thead}</thead><tbody>
+    ${all.map(p => renderSDPlayerRow(p, expMap[p.player_id] ?? null)).join('')}
+  </tbody></table>`;
 }
 
-function renderSDPlayerRow(p) {
+function renderSDPlayerRow(p, expPct) {
   const inLineup = SD_LINEUP_SLOTS.some(s => lineup[s.key]?.player_id === p.player_id);
-  const exc = isExcluded(p);
-  const isSP = p.is_pitcher || p.primary_position === 'SP';
-  const proj = projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
-  const salCpt  = ((p.salary||0)*1.5).toLocaleString();
-  const salFlex = (p.salary||0).toLocaleString();
-  return `<div class="pool-row${inLineup?' in-lineup':''}${exc?' excluded':''}"
-    draggable="true"
-    ondragstart="dragStart(event,'${p.player_id}')"
-    onclick="addToLineup_SD('${p.player_id}')">
-    <span class="p-pos-badge${isSP?' pit-badge':''}">${p.primary_position||p.position||'?'}</span>
-    <span class="pool-name">${p.name}</span>
-    <span class="pool-team">${p.team||''}</span>
-    <span class="pool-sal" title="CPT / FLEX">$${salCpt} / $${salFlex}</span>
-    <span class="pool-proj">${proj.toFixed(1)}</span>
-    <button class="pool-exc-btn" onclick="event.stopPropagation();toggleExclude('${p.player_id}')" title="${exc?'Un-exclude':'Exclude'}">${exc?'✓':'✕'}</button>
-  </div>`;
+  const locked   = lockedPlayers.has(p.player_id);
+  const excluded = isExcluded(p);
+  const tc       = abbrColor(p.team);
+  const teamTag  = p.team ? `<span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${p.team}</span>` : '';
+  const badge    = lineupBadge(p);
+  const pos      = (p.positions && p.positions.length) ? p.positions.join('/') : (p.position || '?');
+  const proj     = projOverrides[p.player_id] ?? p.proj_dk_pts;
+  const projOv   = projOverrides[p.player_id] != null;
+  const salFlex  = p.salary || 0;
+  const salCpt   = salFlex * 1.5;
+  const value    = (salFlex && proj != null) ? (proj / salFlex * 1000).toFixed(1) : '—';
+  const expColor = expPct == null ? 'var(--muted)' : expPct >= 66 ? '#4ade80' : expPct >= 33 ? '#fbbf24' : 'var(--text2)';
+
+  let rowCls = '';
+  if (excluded) rowCls = ' row-excluded';
+  else if (locked) rowCls = ' row-locked';
+  else if (inLineup) rowCls = ' in-lineup';
+
+  return `<tr class="${rowCls}" draggable="true"
+    ondragstart="dragStart(event,${p.player_id})" ondragend="dragEnd(event)"
+    onclick="addToLineup(${p.player_id})">
+    <td><button class="pt-icon-btn${locked?' locked':''}" onclick="toggleLock(event,${p.player_id})" title="Lock">${locked ? SVG_LOCK_LOCKED : SVG_LOCK_OPEN}</button></td>
+    <td><button class="pt-icon-btn${excluded?' excluded':''}" onclick="toggleExclude(event,${p.player_id})" title="Exclude">${SVG_BAN}</button></td>
+    <td><div class="pt-name-cell">${teamTag}${badge}<span class="pt-name">${p.name}</span></div></td>
+    <td><span class="pt-muted" style="font-size:10px;">${pos}</span></td>
+    <td class="pt-sal" style="color:#fbbf24;font-weight:600;">$${salCpt.toLocaleString()}</td>
+    <td class="pt-sal">$${salFlex.toLocaleString()}</td>
+    <td class="pt-proj" style="${projOv?'color:#fbbf24;font-weight:700;':''}">${proj != null ? Number(proj).toFixed(1) : '—'}</td>
+    <td class="pt-val">${value}</td>
+    <td style="color:${expColor};font-weight:700;font-family:'Barlow Condensed',sans-serif;">${expPct != null ? expPct.toFixed(0)+'%' : '—'}</td>
+  </tr>`;
 }
 
 // ── SD LP OPTIMIZER ───────────────────────────────────────────────────────────
