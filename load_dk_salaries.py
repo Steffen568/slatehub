@@ -74,7 +74,7 @@ for c in contests:
         continue
     if gt == 'Classic':
         classic_dg_ids.add(dg)
-    elif gt == 'Showdown':
+    elif gt == 'Showdown Captain Mode':
         showdown_dg_ids.add(dg)
 
 print(f"  Classic draft group IDs:  {sorted(classic_dg_ids)}")
@@ -107,17 +107,9 @@ for dg in dg_list:
         dg_meta[dgid] = {'slate_label': slate_label, 'contest_type': 'classic'}
 
     elif dgid in showdown_dg_ids:
-        # Build a game-specific slate label: sd_AWAY@HOME_DATE
-        # DraftGroups entry may have a 'Games' array with team info
-        games = dg.get('Games') or dg.get('games') or []
-        if games:
-            g = games[0]
-            away = g.get('AwayTeamAbbreviation') or g.get('awayTeam') or g.get('AwayTeam', 'AWAY')
-            home = g.get('HomeTeamAbbreviation') or g.get('homeTeam') or g.get('HomeTeam', 'HOME')
-            slate_label = f'sd_{away}@{home}_{game_date}' if game_date else f'sd_{away}@{home}'
-        else:
-            slate_label = f'sd_{dgid}_{game_date}' if game_date else f'sd_{dgid}'
-        dg_meta[dgid] = {'slate_label': slate_label, 'contest_type': 'showdown'}
+        # Team names aren't in DG metadata (Games array is always empty from the lobby API)
+        # Slate label will be resolved from draftables in Step 3
+        dg_meta[dgid] = {'slate_label': f'sd_{dgid}', 'contest_type': 'showdown', 'game_date': game_date}
 
 # ── STEP 2: Load MLBAM player ID map from Supabase
 print("\nLoading player ID map from Supabase...")
@@ -245,13 +237,15 @@ for dgid in all_dg_ids:
         # For Showdown: CSV position column is 'CPT' or the real position ('SP','OF', etc.)
         csv_pos_map = fetch_dk_csv_positions(dgid)
 
-        # If game info was missing from DG metadata, try to infer slate label from team names in draftables
-        if is_showdown and slate_label.startswith('sd_' + str(dgid)):
-            teams = list({p.get('teamAbbreviation','') for p in draftables if p.get('teamAbbreviation')})
-            teams.sort()
+        # Games array is always empty from DG metadata — infer team names from draftables instead
+        if is_showdown:
+            teams = sorted({p.get('teamAbbreviation','') for p in draftables if p.get('teamAbbreviation')})
+            game_date_str = dg_meta[dgid].get('game_date', '')
             if len(teams) >= 2:
-                slate_label = f'sd_{teams[0]}@{teams[1]}_{slate_label.split("_")[-1]}'
-                dg_meta[dgid]['slate_label'] = slate_label
+                slate_label = f'sd_{teams[0]}@{teams[1]}_{game_date_str}' if game_date_str else f'sd_{teams[0]}@{teams[1]}'
+            else:
+                slate_label = f'sd_{dgid}_{game_date_str}' if game_date_str else f'sd_{dgid}'
+            dg_meta[dgid]['slate_label'] = slate_label
 
         count = 0
         name_hit = 0
