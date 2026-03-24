@@ -4435,6 +4435,7 @@ let _weather        = {};
 let _allSlates      = [];
 let _teamIdAbbrMap  = {};   // team_id → dk_salaries abbreviation (e.g. 139 → "SF")
 let dragPlayerId    = null;
+let dragRole        = null;   // 'cpt' | 'flex' | null — set during SD pool drag
 
 // ── LINEUP HUB STATE ────────────────────────────────────────────────────────
 let lockedPlayers   = new Set();   // player_ids — must include
@@ -5702,8 +5703,9 @@ function hesColor(score) {
 }
 
 // ── DRAG AND DROP ─────────────────────────────────────────────────────────────
-function dragStart(e, pid) {
+function dragStart(e, pid, role) {
   dragPlayerId = pid;
+  dragRole     = role || null;
   e.dataTransfer.effectAllowed = 'copy';
   e.currentTarget.classList.add('dragging');
 }
@@ -5728,20 +5730,33 @@ function dropPlayer(e, key) {
   e.currentTarget.classList.remove('drag-over','drag-invalid');
   if (!dragPlayerId) return;
   if (_contestMode === 'showdown') {
-    const player = [...allHitters,...allPitchers].find(p=>p.player_id===dragPlayerId);
-    if (!player) { dragPlayerId=null; return; }
+    const player  = [...allHitters,...allPitchers].find(p=>p.player_id===dragPlayerId);
+    const slotDef = SD_LINEUP_SLOTS.find(sl=>sl.key===key);
+    if (!player || !slotDef) { dragPlayerId=null; dragRole=null; return; }
+    // Enforce role: CPT drag → CPT slot only; FLEX drag → FLEX slot only
+    if (dragRole === 'cpt' && !slotDef.isCpt) {
+      showToast('Drop on the CPT slot to add as captain');
+      dragPlayerId=null; dragRole=null; return;
+    }
+    if (dragRole === 'flex' && slotDef.isCpt) {
+      showToast('Drop on a FLEX slot to add as utility');
+      dragPlayerId=null; dragRole=null; return;
+    }
+    // Block duplicate: can't be in CPT and FLEX at same time
+    const otherSlot = SD_LINEUP_SLOTS.find(sl=>sl.key!==key && lineup[sl.key]?.player_id===dragPlayerId);
+    if (otherSlot) { showToast('Player already in lineup'); dragPlayerId=null; dragRole=null; return; }
+    // Move from existing same-role slot if dragging between slots
     const existSlot = SD_LINEUP_SLOTS.find(sl=>lineup[sl.key]?.player_id===dragPlayerId);
     if (existSlot && existSlot.key !== key) {
       lineup[existSlot.key] = null;
       const el = document.getElementById(`slot-${existSlot.key}`);
       if (el) el.outerHTML = renderSlot_SD(existSlot);
     }
-    const slotDef = SD_LINEUP_SLOTS.find(sl=>sl.key===key);
     lineup[key] = player;
     const el = document.getElementById(`slot-${key}`);
     if (el) el.outerHTML = renderSlot_SD(slotDef, player);
     updateTotals_SD(); renderPool();
-    dragPlayerId=null; return;
+    dragPlayerId=null; dragRole=null; return;
   }
   const player  = [...allHitters,...allPitchers].find(p=>p.player_id===dragPlayerId);
   if (!player) return;
@@ -7173,28 +7188,32 @@ function renderSlot_SD(s, player) {
   </div>`;
 }
 
-function addToLineup_SD(pid) {
+function addToLineup_SD(pid, role) {
   const pool = [...allHitters, ...allPitchers];
   const p = pool.find(x => x.player_id === pid);
   if (!p) return;
 
-  // Check if already in lineup (any slot)
+  // Block duplicate player in any slot
   const alreadyIn = SD_LINEUP_SLOTS.some(s => lineup[s.key]?.player_id === pid);
   if (alreadyIn) { showToast('Player already in lineup'); return; }
 
-  // Fill CPT first if empty, then flex slots
   const cptSlot = SD_LINEUP_SLOTS.find(s => s.isCpt);
-  if (!lineup[cptSlot.key]) {
+
+  if (role === 'cpt') {
+    if (lineup[cptSlot.key]) { showToast('CPT slot is filled — remove first'); return; }
     lineup[cptSlot.key] = p;
-    document.getElementById(`slot-${cptSlot.key}`).outerHTML = renderSlot_SD(cptSlot, p);
-    updateTotals_SD();
-    return;
+    const el = document.getElementById(`slot-${cptSlot.key}`);
+    if (el) el.outerHTML = renderSlot_SD(cptSlot, p);
+    updateTotals_SD(); renderPool(); return;
   }
+
+  // FLEX (Utility)
   const flexSlot = SD_LINEUP_SLOTS.find(s => !s.isCpt && !lineup[s.key]);
-  if (!flexSlot) { showToast('Lineup is full'); return; }
+  if (!flexSlot) { showToast('All FLEX slots are filled'); return; }
   lineup[flexSlot.key] = p;
-  document.getElementById(`slot-${flexSlot.key}`).outerHTML = renderSlot_SD(flexSlot, p);
-  updateTotals_SD();
+  const el = document.getElementById(`slot-${flexSlot.key}`);
+  if (el) el.outerHTML = renderSlot_SD(flexSlot, p);
+  updateTotals_SD(); renderPool();
 }
 
 function updateTotals_SD() {
@@ -7216,8 +7235,10 @@ function updateTotals_SD() {
 function renderSDPool() {
   const list = document.getElementById('pool-list');
   if (!list) return;
-  const search  = (document.getElementById('pool-search')?.value || '').toLowerCase();
-  const expMap  = getExposureMap();
+  const isCpt  = activeTab === 'hitters';   // Captains tab
+  const role   = isCpt ? 'cpt' : 'flex';
+  const search = (document.getElementById('pool-search')?.value || '').toLowerCase();
+  const expMap = getExposureMap();
   let all = [...allHitters, ...allPitchers].filter(p => (p.salary||0) > 0);
   if (search) all = all.filter(p =>
     (p.name||'').toLowerCase().includes(search) || (p.team||'').toLowerCase().includes(search));
@@ -7227,11 +7248,11 @@ function renderSDPool() {
     if (aExcl !== bExcl) return aExcl - bExcl;
     const aLock = lockedPlayers.has(a.player_id) ? 1 : 0, bLock = lockedPlayers.has(b.player_id) ? 1 : 0;
     if (aLock !== bLock) return bLock - aLock;
-    // Utility tab → sort by value (proj/salary); Captains tab → sort by proj
-    if (activeTab === 'pitchers') {
-      return ((b.proj_dk_pts||0)/(b.salary||1)) - ((a.proj_dk_pts||0)/(a.salary||1));
+    if (isCpt) {
+      return (b.proj_dk_pts||0) - (a.proj_dk_pts||0);           // Captains: best proj first
+    } else {
+      return ((b.proj_dk_pts||0)/(b.salary||1)) - ((a.proj_dk_pts||0)/(a.salary||1)); // Utility: best value first
     }
-    return (b.proj_dk_pts||0) - (a.proj_dk_pts||0);
   });
 
   const total = [...allHitters, ...allPitchers].filter(p => (p.salary||0) > 0).length;
@@ -7242,34 +7263,40 @@ function renderSDPool() {
     return;
   }
 
+  const salHeader = isCpt
+    ? `<th style="width:80px;color:#fbbf24;" title="Captain salary (1.5×)">CPT $</th>`
+    : `<th style="width:80px;">FLEX $</th>`;
   const thead = `<tr>
     <th style="width:26px;"></th><th style="width:26px;"></th>
     <th>Player</th><th style="width:36px;">Pos</th>
-    <th style="width:72px;" title="Captain salary (1.5×)">CPT $</th>
-    <th style="width:62px;">FLEX $</th>
+    ${salHeader}
     <th style="width:48px;">Proj</th>
     <th style="width:44px;">Val</th>
     <th style="width:44px;">Exp%</th>
   </tr>`;
 
   list.innerHTML = `<table class="player-table"><thead>${thead}</thead><tbody>
-    ${all.map(p => renderSDPlayerRow(p, expMap[p.player_id] ?? null)).join('')}
+    ${all.map(p => renderSDPlayerRow(p, expMap[p.player_id] ?? null, role)).join('')}
   </tbody></table>`;
 }
 
-function renderSDPlayerRow(p, expPct) {
-  const inLineup = SD_LINEUP_SLOTS.some(s => lineup[s.key]?.player_id === p.player_id);
+function renderSDPlayerRow(p, expPct, role) {
+  const isCpt    = role === 'cpt';
+  const cptKey   = SD_LINEUP_SLOTS.find(s => s.isCpt)?.key;
+  const inCpt    = lineup[cptKey]?.player_id === p.player_id;
+  const inFlex   = SD_LINEUP_SLOTS.filter(s => !s.isCpt).some(s => lineup[s.key]?.player_id === p.player_id);
+  const inLineup = isCpt ? inCpt : inFlex;
   const locked   = lockedPlayers.has(p.player_id);
   const excluded = isExcluded(p);
   const tc       = abbrColor(p.team);
   const teamTag  = p.team ? `<span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${p.team}</span>` : '';
   const badge    = lineupBadge(p);
   const pos      = (p.positions && p.positions.length) ? p.positions.join('/') : (p.position || '?');
-  const proj     = projOverrides[p.player_id] ?? p.proj_dk_pts;
+  const projBase = projOverrides[p.player_id] ?? p.proj_dk_pts;
   const projOv   = projOverrides[p.player_id] != null;
-  const salFlex  = p.salary || 0;
-  const salCpt   = salFlex * 1.5;
-  const value    = (salFlex && proj != null) ? (proj / salFlex * 1000).toFixed(1) : '—';
+  const sal      = isCpt ? (p.salary||0)*1.5 : (p.salary||0);
+  const proj     = (projBase != null) ? (isCpt ? projBase*1.5 : projBase) : null;
+  const value    = (p.salary && projBase != null) ? (projBase / p.salary * 1000).toFixed(1) : '—';
   const expColor = expPct == null ? 'var(--muted)' : expPct >= 66 ? '#4ade80' : expPct >= 33 ? '#fbbf24' : 'var(--text2)';
 
   let rowCls = '';
@@ -7278,14 +7305,13 @@ function renderSDPlayerRow(p, expPct) {
   else if (inLineup) rowCls = ' in-lineup';
 
   return `<tr class="${rowCls}" draggable="true"
-    ondragstart="dragStart(event,${p.player_id})" ondragend="dragEnd(event)"
-    onclick="addToLineup(${p.player_id})">
+    ondragstart="dragStart(event,${p.player_id},'${role}')" ondragend="dragEnd(event)"
+    onclick="addToLineup_SD(${p.player_id},'${role}')">
     <td><button class="pt-icon-btn${locked?' locked':''}" onclick="toggleLock(event,${p.player_id})" title="Lock">${locked ? SVG_LOCK_LOCKED : SVG_LOCK_OPEN}</button></td>
     <td><button class="pt-icon-btn${excluded?' excluded':''}" onclick="toggleExclude(event,${p.player_id})" title="Exclude">${SVG_BAN}</button></td>
     <td><div class="pt-name-cell">${teamTag}${badge}<span class="pt-name">${p.name}</span></div></td>
     <td><span class="pt-muted" style="font-size:10px;">${pos}</span></td>
-    <td class="pt-sal" style="color:#fbbf24;font-weight:600;">$${salCpt.toLocaleString()}</td>
-    <td class="pt-sal">$${salFlex.toLocaleString()}</td>
+    <td class="pt-sal" style="${isCpt?'color:#fbbf24;font-weight:600;':''}">$${sal.toLocaleString()}</td>
     <td class="pt-proj" style="${projOv?'color:#fbbf24;font-weight:700;':''}">${proj != null ? Number(proj).toFixed(1) : '—'}</td>
     <td class="pt-val">${value}</td>
     <td style="color:${expColor};font-weight:700;font-family:'Barlow Condensed',sans-serif;">${expPct != null ? expPct.toFixed(0)+'%' : '—'}</td>
