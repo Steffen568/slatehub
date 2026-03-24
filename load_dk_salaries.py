@@ -58,38 +58,66 @@ def fetch_dk_csv_positions(dgid):
         print(f"  WARNING: Could not fetch CSV positions for DG {dgid}: {e}")
         return {}
 
-# ── STEP 1: Get Classic MLB draft groups
+# ── STEP 1: Get Classic + Showdown MLB draft groups
 print("\nFetching MLB contests from DraftKings...")
 data = fetch_json('https://www.draftkings.com/lobby/getcontests?sport=MLB')
 
 contests = data.get('Contests', [])
 dg_list  = data.get('DraftGroups', [])
 
-classic_dg_ids = set()
+classic_dg_ids  = set()
+showdown_dg_ids = set()
 for c in contests:
-    if c.get('gameType') == 'Classic' and c.get('dg'):
-        classic_dg_ids.add(c['dg'])
+    gt = c.get('gameType', '')
+    dg = c.get('dg')
+    if not dg:
+        continue
+    if gt == 'Classic':
+        classic_dg_ids.add(dg)
+    elif gt == 'Showdown':
+        showdown_dg_ids.add(dg)
 
-print(f"  Classic draft group IDs: {sorted(classic_dg_ids)}")
+print(f"  Classic draft group IDs:  {sorted(classic_dg_ids)}")
+print(f"  Showdown draft group IDs: {sorted(showdown_dg_ids)}")
 
-# Build DG metadata
+# Build DG metadata (classic slate labels + showdown game labels)
 dg_meta = {}
 for dg in dg_list:
-    dgid = dg.get('DraftGroupId')
+    dgid      = dg.get('DraftGroupId')
+    start_est = dg.get('StartDateEst', '')
+    game_date = ''
+    if start_est:
+        try:
+            game_date = datetime.fromisoformat(start_est.replace('Z','')).strftime('%Y-%m-%d')
+        except Exception:
+            pass
+
     if dgid in classic_dg_ids:
-        start_est = dg.get('StartDateEst', '')
         slate_label = 'main'
         if start_est:
             try:
                 dt = datetime.fromisoformat(start_est.replace('Z',''))
                 et_hour = dt.hour + dt.minute / 60
-                if et_hour < 13:    slate_label = 'early'
-                elif et_hour < 17:  slate_label = 'afternoon'
+                if et_hour < 13:     slate_label = 'early'
+                elif et_hour < 17:   slate_label = 'afternoon'
                 elif et_hour < 19.5: slate_label = 'main'
-                else:               slate_label = 'late'
+                else:                slate_label = 'late'
             except Exception:
                 pass
-        dg_meta[dgid] = {'slate_label': slate_label}
+        dg_meta[dgid] = {'slate_label': slate_label, 'contest_type': 'classic'}
+
+    elif dgid in showdown_dg_ids:
+        # Build a game-specific slate label: sd_AWAY@HOME_DATE
+        # DraftGroups entry may have a 'Games' array with team info
+        games = dg.get('Games') or dg.get('games') or []
+        if games:
+            g = games[0]
+            away = g.get('AwayTeamAbbreviation') or g.get('awayTeam') or g.get('AwayTeam', 'AWAY')
+            home = g.get('HomeTeamAbbreviation') or g.get('homeTeam') or g.get('HomeTeam', 'HOME')
+            slate_label = f'sd_{away}@{home}_{game_date}' if game_date else f'sd_{away}@{home}'
+        else:
+            slate_label = f'sd_{dgid}_{game_date}' if game_date else f'sd_{dgid}'
+        dg_meta[dgid] = {'slate_label': slate_label, 'contest_type': 'showdown'}
 
 # ── STEP 2: Load MLBAM player ID map from Supabase
 print("\nLoading player ID map from Supabase...")
@@ -194,34 +222,60 @@ print(f"  Loaded {len(name_to_mlbam):,} player name mappings ({len(valid_mlbam_i
 if ambiguous_names:
     print(f"  ⚠ {len(ambiguous_names)} ambiguous name(s) excluded (duplicate players — DK playerId required): {sorted(ambiguous_names)[:8]}")
 
-# ── STEP 3: Fetch draftables for each Classic DG and collect salaries
+# ── STEP 3: Fetch draftables for Classic + Showdown DGs
 print("\nFetching salaries from DraftKings...")
 
 all_salary_rows = []
 seen_player_dg  = set()
 
-for dgid in sorted(classic_dg_ids):
-    slate_label = dg_meta.get(dgid, {}).get('slate_label', 'main')
+all_dg_ids = sorted(classic_dg_ids | showdown_dg_ids)
+
+for dgid in all_dg_ids:
+    meta         = dg_meta.get(dgid, {})
+    slate_label  = meta.get('slate_label', 'main')
+    contest_type = meta.get('contest_type', 'classic')
+    is_showdown  = contest_type == 'showdown'
+
     try:
         url = f'https://api.draftkings.com/draftgroups/v1/draftgroups/{dgid}/draftables'
         result = fetch_json(url)
         draftables = result.get('draftables', [])
 
-        # Fetch CSV for this DG to get multi-position eligibility (e.g. "2B/SS", "1B/3B")
+        # Fetch CSV for this DG to get position info
+        # For Showdown: CSV position column is 'CPT' or the real position ('SP','OF', etc.)
         csv_pos_map = fetch_dk_csv_positions(dgid)
+
+        # If game info was missing from DG metadata, try to infer slate label from team names in draftables
+        if is_showdown and slate_label.startswith('sd_' + str(dgid)):
+            teams = list({p.get('teamAbbreviation','') for p in draftables if p.get('teamAbbreviation')})
+            teams.sort()
+            if len(teams) >= 2:
+                slate_label = f'sd_{teams[0]}@{teams[1]}_{slate_label.split("_")[-1]}'
+                dg_meta[dgid]['slate_label'] = slate_label
 
         count = 0
         name_hit = 0
         dk_fallback = 0
         no_match = 0
+        cpt_skipped = 0
+
         for p in draftables:
             dk_player_id = p.get('playerDkId')
             mlbam_id     = p.get('playerId')
             name         = p.get('displayName', '')
             draftable_id = p.get('draftableId')
-            position     = csv_pos_map.get(draftable_id) or p.get('position', '')
+            csv_pos      = csv_pos_map.get(draftable_id, '')
+            api_pos      = p.get('position', '')
             salary       = p.get('salary', 0)
             team         = p.get('teamAbbreviation', '')
+
+            # Showdown: skip CPT rows — we only store FLEX salary (CPT is always 1.5× FLEX)
+            # CPT rows have position='CPT' in the CSV and in the API response
+            if is_showdown and (csv_pos == 'CPT' or api_pos == 'CPT'):
+                cpt_skipped += 1
+                continue
+
+            position = csv_pos or api_pos
 
             # Skip if already seen this player in this DG
             key = (dk_player_id, dgid)
@@ -230,11 +284,11 @@ for dgid in sorted(classic_dg_ids):
             seen_player_dg.add(key)
 
             # Resolve to MLBAM ID — priority order:
-            # 1. Hardcoded DK→MLBAM override (catches known DK proprietary IDs)
-            # 2. Unambiguous name match → MLBAM from Chadwick (same source as lineups)
-            # 3. Middle-initial-stripped name match (Chadwick "Bryan R. De La Cruz" → DK "Bryan De La Cruz")
-            # 4. DK playerId confirmed in our players table (DK ID happens to equal MLBAM)
-            # 5. Raw DK playerId fallback (stored with warning — add to DK_TO_MLBAM when found)
+            # 1. Hardcoded DK→MLBAM override
+            # 2. Unambiguous name match → MLBAM from Chadwick
+            # 3. Middle-initial-stripped name match
+            # 4. DK playerId confirmed in our players table
+            # 5. Raw DK playerId fallback
             norm       = normalize(name)
             norm_no_mi = drop_middle_initials(norm)
 
@@ -251,7 +305,7 @@ for dgid in sorted(classic_dg_ids):
                 player_id = mlbam_id
                 dk_fallback += 1
             elif mlbam_id:
-                player_id = mlbam_id  # raw DK id — add to DK_TO_MLBAM if salary doesn't show
+                player_id = mlbam_id
                 dk_fallback += 1
                 print(f"    ⚠ No match for '{name}' (DK id {mlbam_id}) — stored raw DK id, add to DK_TO_MLBAM if broken")
             else:
@@ -268,11 +322,13 @@ for dgid in sorted(classic_dg_ids):
                 'salary':       salary,
                 'team':         team,
                 'dk_slate':     slate_label,
+                'contest_type': contest_type,
                 'dg_id':        dgid,
             })
             count += 1
 
-        print(f"  DG {dgid} ({slate_label}): {count} players | name_matched: {name_hit} | dk_id_fallback: {dk_fallback} | no_match: {no_match}")
+        extra = f' | cpt_skipped: {cpt_skipped}' if is_showdown else ''
+        print(f"  DG {dgid} [{contest_type}] ({slate_label}): {count} players | name_matched: {name_hit} | dk_id_fallback: {dk_fallback} | no_match: {no_match}{extra}")
         time.sleep(0.3)
 
     except Exception as e:
@@ -291,12 +347,15 @@ print(f"Total salary rows (post-dedup): {len(all_salary_rows)}")
 # ── STEP 4: Upload to Supabase
 if all_salary_rows:
     # Delete existing rows for these slate labels + season before inserting fresh data
-    # This removes stale rows with wrong player_ids from previous loads
     slate_labels = list({r['dk_slate'] for r in all_salary_rows})
     season = all_salary_rows[0]['season']
     print(f"Clearing old dk_salaries rows for slates {slate_labels} season {season}...")
     for sl in slate_labels:
         supabase.table('dk_salaries').delete().eq('dk_slate', sl).eq('season', season).execute()
+    # Also clear any stale showdown rows by dg_id (slate label may have changed between runs)
+    sd_dg_ids = list({r['dg_id'] for r in all_salary_rows if r.get('contest_type') == 'showdown'})
+    for dgid in sd_dg_ids:
+        supabase.table('dk_salaries').delete().eq('dg_id', dgid).eq('season', season).execute()
     print("Cleared. Uploading fresh data...")
     batch_size = 500
     uploaded = 0

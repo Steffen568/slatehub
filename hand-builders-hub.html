@@ -4560,13 +4560,20 @@ async function loadDates() {
     .select('game_date').gte('game_date','2025-01-01').order('game_date',{ascending:true});
 
   const { data: slateData } = await sb.from('dk_salaries')
-    .select('dk_slate').limit(3000);
+    .select('dk_slate,contest_type').limit(3000);
 
-  _allSlates = [...new Set((slateData||[]).map(r=>r.dk_slate).filter(Boolean))].sort();
+  // _allSlates: array of { slate, contestType } — deduplicated
+  const seenSlates = new Map();
+  (slateData||[]).forEach(r => {
+    if (r.dk_slate && !seenSlates.has(r.dk_slate))
+      seenSlates.set(r.dk_slate, r.contest_type || 'classic');
+  });
+  _allSlates = [...seenSlates.entries()].map(([slate, contestType]) => ({ slate, contestType }))
+    .sort((a,b) => a.slate.localeCompare(b.slate));
 
   const gameDates  = new Set((gameData||[]).map(r=>r.game_date));
   const slateDates = new Set();
-  _allSlates.forEach(s => { const d = parseDateFromSlate(s); if (d) slateDates.add(d); });
+  _allSlates.forEach(({ slate: s }) => { const d = parseDateFromSlate(s); if (d) slateDates.add(d); });
   const allDates   = [...new Set([...gameDates,...slateDates])].sort();
 
   if (!allDates.length) {
@@ -4591,15 +4598,22 @@ async function loadSlates(date) {
   orig.parentNode.replaceChild(sel, orig);
   sel.innerHTML = '<option>Loading…</option>';
 
-  let matching = date === 'all' ? _allSlates
-    : _allSlates.filter(s => parseDateFromSlate(s) === date);
-  if (!matching.length) matching = _allSlates;
+  // Filter by current contest mode so Classic mode never shows SD slates and vice versa
+  const wantType = _contestMode === 'showdown' ? 'showdown' : 'classic';
+  let pool = _allSlates.filter(({ contestType }) => contestType === wantType);
 
-  if (!matching.length) { sel.innerHTML = '<option>No slates</option>'; return; }
+  let matching = date === 'all' ? pool
+    : pool.filter(({ slate: s }) => parseDateFromSlate(s) === date);
+  if (!matching.length) matching = pool;
 
-  sel.innerHTML = matching.map(s=>`<option value="${s}">${s}</option>`).join('');
-  sel.addEventListener('change', ()=>loadPlayerPool(date, sel.value));
-  await loadPlayerPool(date, matching[0]);
+  if (!matching.length) {
+    sel.innerHTML = `<option>No ${wantType} slates</option>`;
+    return;
+  }
+
+  sel.innerHTML = matching.map(({ slate: s }) => `<option value="${s}">${s}</option>`).join('');
+  sel.addEventListener('change', () => loadPlayerPool(date, sel.value));
+  await loadPlayerPool(date, matching[0].slate);
 }
 
 // ── PLAYER POOL LOADING ──────────────────────────────────────────────────────
@@ -7053,11 +7067,13 @@ function setContestMode(mode) {
   if (tabH) tabH.textContent = mode === 'showdown' ? 'Captains' : 'Hitters';
   if (tabP) tabP.textContent = mode === 'showdown' ? 'Utility'  : 'Pitchers';
   _updatePosFilters(mode);
-  // Rebuild lineup slots and pool
+  // Rebuild lineup slots
   buildSlots();
-  renderPool();
   renderBuildTabs();
   renderSavedCards();
+  // Reload slate picker filtered to the correct contest type, which triggers loadPlayerPool
+  const currentDate = document.getElementById('date-select')?.value || 'all';
+  loadSlates(currentDate);
 }
 
 function _updatePosFilters(mode) {
