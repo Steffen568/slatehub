@@ -4265,13 +4265,13 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <div class="opto-row"><label>Min Conf</label><input class="opto-input" id="opto-conf" type="number" min="0" max="10" value="0" oninput="optoSettings.minConfirmed=+this.value"></div>
     </div>
     <!-- Stack Rules — rendered by renderStackRules() -->
-    <div class="opto-col" id="opto-stack-col">
+    <div class="opto-col classic-only" id="opto-stack-col">
       <div class="opto-col-title">Stack Rules</div>
       <div id="stack-rules-list"></div>
       <button class="sr-add-btn" onclick="addStackRule()">+ Add Stack Rule</button>
     </div>
     <!-- Team Stack Settings — rendered by renderTeamStacks() -->
-    <div class="opto-col">
+    <div class="opto-col classic-only">
       <div class="opto-col-title">Team Stack Settings</div>
       <div id="team-stack-prefs-list" style="margin-bottom:8px;"></div>
       <!-- Add team stack form -->
@@ -4585,10 +4585,18 @@ async function loadDates() {
   // Use local date (not UTC) so the slate doesn't roll over until actual midnight
   const now   = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-  const defaultDate = allDates.find(d=>d>=today) || allDates[allDates.length-1];
+
+  // Restrict picker to 3 days past → 5 days future
+  const pastBound   = new Date(now); pastBound.setDate(pastBound.getDate() - 3);
+  const futureBound = new Date(now); futureBound.setDate(futureBound.getDate() + 5);
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const visibleDates = allDates.filter(d => d >= fmt(pastBound) && d <= fmt(futureBound));
+  const datesToShow  = visibleDates.length ? visibleDates : allDates;
+
+  const defaultDate = datesToShow.find(d=>d>=today) || datesToShow[datesToShow.length-1];
 
   const sel = document.getElementById('date-select');
-  sel.innerHTML = allDates.map(d=>`<option value="${d}"${d===defaultDate?' selected':''}>${formatDate(d)}</option>`).join('');
+  sel.innerHTML = datesToShow.map(d=>`<option value="${d}"${d===defaultDate?' selected':''}>${formatDate(d)}</option>`).join('');
   sel.addEventListener('change', ()=>loadSlates(sel.value));
   await loadSlates(defaultDate);
 }
@@ -5035,8 +5043,33 @@ async function loadPlayerPool(date, slate) {
     });
   });
 
-  // ── Filter hitters: lineup players only (reverse-join means all hitters came from lineup pids)
-  if (starterPids.length > 0) {
+  // ── SD mode: build pitchers from dk_salaries for any SP/RP not already in allPitchers
+  // Needed because pitcherProjRaw is empty when no player_projections exist for the slate date
+  if (_contestMode === 'showdown') {
+    const knownPitIds = new Set(allPitchers.map(p => p.player_id));
+    (pitcherSalRes.data || [])
+      .filter(r => (r.position||'').split('/').some(pos => ['SP','RP','P'].includes(pos.trim())))
+      .forEach(r => {
+        if (!r.player_id || knownPitIds.has(r.player_id)) return;
+        const teamId = abbrToTeamId[r.team] ?? null;
+        allPitchers.push({
+          player_id: r.player_id, name: r.name || '—',
+          positions: ['SP'], salary: r.salary || 0,
+          team_id: teamId, team: r.team || '',
+          game_pk: teamId ? teamGameMap[teamId] : null,
+          in_lineup: false, lineup_confirmed: false, batting_order: null,
+          proj_dk_pts: null, proj_floor: null, proj_ceiling: null,
+          proj_hr: null, proj_r: null, proj_rbi: null, proj_sb: null,
+          proj_ip: null, proj_ks: null, proj_er: null, win_prob: null,
+          proj_ownership: null, is_pitcher: true, primary_position: 'SP',
+          xfip: null, k_pct: null, stuff_plus: null, location_plus: null,
+          pitching_plus: null, era: null, sp_grade_self: null, hes: null, pms: null,
+        });
+      });
+  }
+
+  // ── Filter hitters: lineup players only (skip in SD mode — all slate players are eligible)
+  if (starterPids.length > 0 && _contestMode !== 'showdown') {
     allHitters = allHitters.filter(h => h.in_lineup);
   }
 
