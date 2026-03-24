@@ -3761,6 +3761,17 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 .hbh-select:hover{border-color:var(--hi);color:var(--text);}
 .hbh-back{margin-left:auto;font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);text-decoration:none;padding:4px 10px;border:1px solid var(--border2);border-radius:4px;transition:all 0.15s;flex-shrink:0;}
 .hbh-back:hover{color:var(--text);background:var(--s3);}
+.hbh-mode-toggle{display:flex;border-radius:4px;overflow:hidden;border:1px solid var(--border2);flex-shrink:0;}
+.hbh-mode-btn{font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;padding:4px 12px;background:var(--s2);color:var(--muted);cursor:pointer;border:none;letter-spacing:.5px;transition:all .15s;}
+.hbh-mode-btn:hover{color:var(--text);}
+.hbh-mode-btn.active{background:#1a2a3d;color:var(--blue);}
+.hbh-mode-btn.active-sd{background:#3d2a00;color:#fbbf24;}
+.sd-cpt{border-color:rgba(251,191,36,.5)!important;background:rgba(251,191,36,.04)!important;}
+.cpt-label{background:#3d2a00!important;color:#fbbf24!important;}
+.sd-cpt-row{background:rgba(251,191,36,.04);}
+.p-pos-badge{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;background:#1a2a3a;color:var(--blue);margin-right:4px;}
+.p-pos-badge.pit-badge{background:#1a3d28;color:var(--hi);}
+.lc-badge.sd-badge{background:#3d2a00;color:#fbbf24;font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;margin-left:6px;}
 
 /* ── GAME STRIP ──────────────────────────────────────────────────────────── */
 .game-strip{background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;overflow-x:auto;}
@@ -4115,6 +4126,10 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     <select class="hbh-select" id="date-select"><option>Loading…</option></select>
     <select class="hbh-select" id="slate-select"><option>Select slate</option></select>
   </div>
+  <div class="hbh-mode-toggle" style="margin-left:10px;">
+    <button class="hbh-mode-btn active" id="btn-mode-classic" onclick="setContestMode('classic')">Classic</button>
+    <button class="hbh-mode-btn" id="btn-mode-showdown" onclick="setContestMode('showdown')">Showdown</button>
+  </div>
   <a href="index.html" class="hbh-back">← Main View</a>
 </header>
 
@@ -4244,7 +4259,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <div class="opto-row"><label>Min Unique</label><input class="opto-input" id="opto-unique" type="number" min="0" max="8" value="3" oninput="optoSettings.minUnique=+this.value"></div>
       <div class="opto-row"><label>Randomness %</label><input class="opto-input" id="opto-randpct" type="number" min="0" max="30" value="10" title="Adds ±N% noise to projections — produces diverse lineups quickly. 0=off (exhaustive), 5-15=recommended for 20+ lineups" oninput="optoSettings.randPct=+this.value"></div>
       <div class="opto-row"><label>Hitter Max Exp%</label><input class="opto-input" id="opto-expmax-hit" type="number" min="1" max="100" value="100" oninput="expHitterMax=+this.value"></div>
-      <div class="opto-row"><label>Pitcher Max Exp%</label><input class="opto-input" id="opto-expmax-pit" type="number" min="1" max="100" value="100" oninput="expPitcherMax=+this.value"></div>
+      <div class="opto-row classic-only"><label>Pitcher Max Exp%</label><input class="opto-input" id="opto-expmax-pit" type="number" min="1" max="100" value="100" oninput="expPitcherMax=+this.value"></div>
+      <div class="opto-row sd-only" style="display:none"><label>CPT Max Exp%</label><input class="opto-input" id="opto-cpt-max" type="number" min="1" max="100" value="35" oninput="expCptMax=+this.value" title="Max % of lineups any player can appear as Captain"></div>
       <div class="opto-row"><label>Max/Team</label><input class="opto-input" id="opto-maxteam" type="number" min="3" max="8" value="5" oninput="optoSettings.maxPerTeam=+this.value"></div>
       <div class="opto-row"><label>Min Conf</label><input class="opto-input" id="opto-conf" type="number" min="0" max="10" value="0" oninput="optoSettings.minConfirmed=+this.value"></div>
     </div>
@@ -4396,6 +4412,14 @@ const LINEUP_SLOTS = [
   { key:'of2', pos:'OF', label:'OF', accepts:['OF'] },
   { key:'of3', pos:'OF', label:'OF', accepts:['OF'] },
 ];
+const SD_LINEUP_SLOTS = [
+  { key:'cpt',   label:'CPT',  isCpt:true  },
+  { key:'flex1', label:'FLEX', isCpt:false },
+  { key:'flex2', label:'FLEX', isCpt:false },
+  { key:'flex3', label:'FLEX', isCpt:false },
+  { key:'flex4', label:'FLEX', isCpt:false },
+  { key:'flex5', label:'FLEX', isCpt:false },
+];
 
 let activeTab   = 'hitters';
 let activePos   = 'ALL';
@@ -4423,6 +4447,10 @@ let projOverrides   = {};          // player_id → manual proj override
 let expTargets      = {};          // player_id → manual max exposure % (0–100)
 let expHitterMax    = 100;         // global hitter exposure cap %
 let expPitcherMax   = 100;         // global pitcher exposure cap %
+let expCptMax       = 35;          // Showdown: max % any player can appear as CPT
+let _contestMode    = 'classic';   // 'classic' | 'showdown'
+let dkDraftgroupMapCPT  = {};      // Showdown: player name → CPT draftgroup ID
+let dkDraftgroupMapFLEX = {};      // Showdown: player name → FLEX draftgroup ID
 let activeBuildId = null;     // ID of currently displayed build
 let stackExpCaps    = {};          // "TEAM_N" → max stack exposure % (e.g. "ARI_3" → 20)
 
@@ -5418,6 +5446,7 @@ function getPvhExcludedTeamIds() {
 }
 
 function renderPool() {
+  if (_contestMode === 'showdown') { renderSDPool(); return; }
   const isHit      = activeTab === 'hitters';
   const pool       = isHit ? allHitters : allPitchers;
   const cols       = isHit ? HIT_COLS   : PIT_COLS;
@@ -5640,6 +5669,11 @@ function dragEnd(e) { e.currentTarget.classList.remove('dragging'); }
 
 function slotDragOver(e, key) {
   e.preventDefault();
+  if (_contestMode === 'showdown') {
+    e.currentTarget.classList.remove('drag-over','drag-invalid');
+    e.currentTarget.classList.add('drag-over');
+    return;
+  }
   const p = [...allHitters,...allPitchers].find(p=>p.player_id===dragPlayerId);
   const s = LINEUP_SLOTS.find(s=>s.key===key);
   const ok = p && s && s.accepts.some(a=>p.positions.includes(a));
@@ -5651,6 +5685,22 @@ function dropPlayer(e, key) {
   e.preventDefault();
   e.currentTarget.classList.remove('drag-over','drag-invalid');
   if (!dragPlayerId) return;
+  if (_contestMode === 'showdown') {
+    const player = [...allHitters,...allPitchers].find(p=>p.player_id===dragPlayerId);
+    if (!player) { dragPlayerId=null; return; }
+    const existSlot = SD_LINEUP_SLOTS.find(sl=>lineup[sl.key]?.player_id===dragPlayerId);
+    if (existSlot && existSlot.key !== key) {
+      lineup[existSlot.key] = null;
+      const el = document.getElementById(`slot-${existSlot.key}`);
+      if (el) el.outerHTML = renderSlot_SD(existSlot);
+    }
+    const slotDef = SD_LINEUP_SLOTS.find(sl=>sl.key===key);
+    lineup[key] = player;
+    const el = document.getElementById(`slot-${key}`);
+    if (el) el.outerHTML = renderSlot_SD(slotDef, player);
+    updateTotals_SD(); renderPool();
+    dragPlayerId=null; return;
+  }
   const player  = [...allHitters,...allPitchers].find(p=>p.player_id===dragPlayerId);
   if (!player) return;
   const slotDef = LINEUP_SLOTS.find(s=>s.key===key);
@@ -5666,6 +5716,7 @@ function dropPlayer(e, key) {
 
 // ── LINEUP MANAGEMENT ────────────────────────────────────────────────────────
 function buildSlots() {
+  if (_contestMode === 'showdown') { buildSlots_SD(); return; }
   document.getElementById('lineup-slots').innerHTML = LINEUP_SLOTS.map(s=>`
     <div class="lineup-slot" id="slot-${s.key}" data-key="${s.key}"
       ondragover="slotDragOver(event,'${s.key}')"
@@ -5677,6 +5728,7 @@ function buildSlots() {
 }
 
 function addToLineup(pid) {
+  if (_contestMode === 'showdown') { addToLineup_SD(pid); return; }
   const player = [...allHitters,...allPitchers].find(p=>p.player_id===pid);
   if (!player) return;
   if (Object.values(lineup).some(p=>p?.player_id===pid)) {
@@ -5692,6 +5744,16 @@ function addToLineup(pid) {
 }
 
 function removeFromSlot(key) { lineup[key]=null; renderSlot(key); updateTotals(); renderPool(); }
+function clearSlot(key) {
+  if (_contestMode === 'showdown') {
+    lineup[key] = null;
+    const slotDef = SD_LINEUP_SLOTS.find(sl => sl.key === key);
+    const el = document.getElementById(`slot-${key}`);
+    if (el && slotDef) el.outerHTML = renderSlot_SD(slotDef);
+    updateTotals_SD(); renderPool(); return;
+  }
+  removeFromSlot(key);
+}
 
 function renderSlot(key) {
   const def = LINEUP_SLOTS.find(s=>s.key===key);
@@ -5721,6 +5783,7 @@ function renderSlot(key) {
 }
 
 function updateTotals() {
+  if (_contestMode === 'showdown') { updateTotals_SD(); return; }
   const filled   = Object.values(lineup).filter(Boolean);
   const totSal   = filled.reduce((s,p)=>s+(p.salary||0),0);
   const totProj  = filled.reduce((s,p)=>s+(p.proj_dk_pts||0),0);
@@ -5740,8 +5803,10 @@ function updateTotals() {
 
 function clearLineup() { lineup={}; buildSlots(); updateTotals(); renderPool(); }
 
+
 // ── SAVE / LOAD ──────────────────────────────────────────────────────────────
 function saveLineup() {
+  if (_contestMode === 'showdown') { saveLineup_SD(); return; }
   if (Object.values(lineup).filter(Boolean).length < 10) { showToast('Fill all 10 slots before saving'); return; }
   const name    = document.getElementById('lineup-name').value.trim() || 'Lineup '+new Date().toLocaleTimeString();
   const totProj = Object.values(lineup).filter(Boolean).reduce((s,p)=>s+(p.proj_dk_pts||0),0);
@@ -5793,6 +5858,7 @@ function renderSavedCards() {
 function clearAllLineups() { clearActiveBuild(); }
 
 function renderLineupCard(s, i) {
+  if (s.mode === 'showdown') return renderLineupCard_SD(s, i);
   const pts     = (s.totProj || s.totalProj || 0).toFixed(1);
   const salUsed = LINEUP_SLOTS.reduce((sum, slot) => sum + (s.lineup?.[slot.key]?.salary || 0), 0);
 
@@ -6659,6 +6725,7 @@ function optoDebug() {
 }
 
 function generateLineups() {
+  if (_contestMode === 'showdown') { generateLineups_Showdown(); return; }
   const N = optoSettings.numLineups || 1;
 
   // Validate pool
@@ -6826,23 +6893,32 @@ function fillDKTemplate(event) {
   const reader = new FileReader();
   reader.onload = e => {
     const lines = e.target.result.split(/\r?\n/);
-    const map = {};
+    const map = {}, mapCPT = {}, mapFLEX = {};
     let found = 0;
     for (const line of lines) {
       // CSV columns (0-indexed): 0=EntryID ... 14=blank 15=Position 16="Name + ID" 17=Name 18=ID
-      // Split on comma but be careful — names can contain commas if quoted.
-      // Simple split is fine here since DK names don't contain commas.
       const cols     = line.split(',');
+      const posCol   = (cols[15] || '').replace(/^"|"$/g, '').trim().toUpperCase();
       const nameCol  = (cols[17] || '').replace(/^"|"$/g, '').trim();
       const idCol    = (cols[18] || '').replace(/^"|"$/g, '').trim();
       if (nameCol && idCol && /^\d{6,}$/.test(idCol)) {
-        map[nameCol.toLowerCase()] = idCol;   // exact lowercase
-        map[normName(nameCol)]     = idCol;   // normalized (strips Jr., periods, etc.)
+        map[nameCol.toLowerCase()] = idCol;
+        map[normName(nameCol)]     = idCol;
+        // SD-specific: split into CPT vs FLEX maps by position column
+        if (posCol === 'CPT') {
+          mapCPT[nameCol.toLowerCase()] = idCol;
+          mapCPT[normName(nameCol)]     = idCol;
+        } else {
+          mapFLEX[nameCol.toLowerCase()] = idCol;
+          mapFLEX[normName(nameCol)]     = idCol;
+        }
         found++;
       }
     }
     if (!found) { showToast('No player IDs found — check CSV format'); return; }
-    dkDraftgroupMap = map;
+    dkDraftgroupMap     = map;
+    dkDraftgroupMapCPT  = mapCPT;
+    dkDraftgroupMapFLEX = mapFLEX;
     showToast(`DK template loaded — ${found} player IDs mapped`);
     // Re-stamp dk_id on all loaded players so chips and exports use the right ID
     [...allHitters, ...allPitchers].forEach(p => {
@@ -6870,6 +6946,7 @@ function dkIdFor(p) {
 }
 
 function exportCSV() {
+  if (_contestMode === 'showdown') { exportCSV_Showdown(); return; }
   if (Object.values(lineup).filter(Boolean).length < 10) { showToast('Fill all 10 slots to export'); return; }
   if (!Object.keys(dkDraftgroupMap).length) {
     showToast('⚠ Upload your DK entries CSV first so we have the correct draftgroup IDs');
@@ -6885,6 +6962,7 @@ function exportCSV() {
 }
 
 function exportSavedCSV() {
+  if (_contestMode === 'showdown') { exportSavedCSV_Showdown(); return; }
   const saved = getActiveLineups();
   if (!saved.length) { showToast('No saved lineups to export'); return; }
   if (!Object.keys(dkDraftgroupMap).length) {
@@ -6949,6 +7027,449 @@ function computeSimplePMS(spInfo, hesScore) {
   const base = gradeBase[spInfo.grade.letter] ?? 5;
   const hesAdj = hesScore != null ? (hesScore - 5) * 0.2 : 0;
   return Math.min(10, Math.max(1, Math.round(base + hesAdj)));
+}
+
+// ── SHOWDOWN MODE ─────────────────────────────────────────────────────────────
+
+function setContestMode(mode) {
+  _contestMode = mode;
+  document.getElementById('btn-mode-classic').classList.toggle('active',   mode === 'classic');
+  document.getElementById('btn-mode-classic').classList.remove('active-sd');
+  document.getElementById('btn-mode-showdown').classList.toggle('active-sd', mode === 'showdown');
+  document.getElementById('btn-mode-showdown').classList.remove('active');
+  // Show/hide settings rows
+  document.querySelectorAll('.classic-only').forEach(el => el.style.display = mode === 'classic' ? '' : 'none');
+  document.querySelectorAll('.sd-only').forEach(el => el.style.display = mode === 'showdown' ? '' : 'none');
+  // Rebuild lineup slots and pool
+  buildSlots();
+  renderPool();
+  renderBuildTabs();
+  renderSavedCards();
+}
+
+// ── SD LINEUP SLOTS ───────────────────────────────────────────────────────────
+
+function buildSlots_SD() {
+  const container = document.getElementById('lineup-slots');
+  if (!container) return;
+  // SD lineup object uses keys: cpt, flex1-5
+  // Reset lineup to SD keys (keep classic keys separate — they persist in saved lineups)
+  const sdLineup = {};
+  SD_LINEUP_SLOTS.forEach(s => { sdLineup[s.key] = lineup[s.key] || null; });
+  // Overwrite lineup with SD keys only
+  Object.keys(lineup).forEach(k => delete lineup[k]);
+  Object.assign(lineup, sdLineup);
+
+  container.innerHTML = SD_LINEUP_SLOTS.map(s => renderSlot_SD(s)).join('');
+  updateTotals_SD();
+}
+
+function renderSlot_SD(s, player) {
+  const p = player !== undefined ? player : lineup[s.key];
+  const isCpt = s.isCpt;
+  const label = isCpt ? 'CPT' : 'FLEX';
+  const salary = p ? (isCpt ? (p.salary||0)*1.5 : (p.salary||0)) : null;
+  const proj   = p ? (isCpt ? (p.proj_dk_pts||0)*1.5 : (p.proj_dk_pts||0)) : null;
+  const posLabel = p ? (p.primary_position || p.position || '?') : '';
+  const isSP = p && (p.primary_position === 'SP' || p.is_pitcher);
+
+  if (!p) {
+    return `<div class="lineup-slot${isCpt?' sd-cpt':''}" id="slot-${s.key}"
+      ondragover="slotDragOver(event,'${s.key}')" ondrop="dropPlayer(event,'${s.key}')"
+      onclick="clearSlot('${s.key}')">
+      <span class="slot-label${isCpt?' cpt-label':''}">${label}</span>
+      <span class="slot-empty">empty</span>
+    </div>`;
+  }
+  return `<div class="lineup-slot filled${isCpt?' sd-cpt':''}" id="slot-${s.key}"
+    ondragover="slotDragOver(event,'${s.key}')" ondrop="dropPlayer(event,'${s.key}')"
+    onclick="clearSlot('${s.key}')">
+    <span class="slot-label${isCpt?' cpt-label':''}">${label}</span>
+    <span class="p-pos-badge${isSP?' pit-badge':''}">${posLabel}</span>
+    <span class="slot-name">${p.name}</span>
+    <span class="slot-salary">$${salary ? salary.toLocaleString() : '—'}</span>
+    <span class="slot-proj">${proj ? proj.toFixed(1) : '—'}</span>
+  </div>`;
+}
+
+function addToLineup_SD(pid) {
+  const pool = [...allHitters, ...allPitchers];
+  const p = pool.find(x => x.player_id === pid);
+  if (!p) return;
+
+  // Check if already in lineup (any slot)
+  const alreadyIn = SD_LINEUP_SLOTS.some(s => lineup[s.key]?.player_id === pid);
+  if (alreadyIn) { showToast('Player already in lineup'); return; }
+
+  // Fill CPT first if empty, then flex slots
+  const cptSlot = SD_LINEUP_SLOTS.find(s => s.isCpt);
+  if (!lineup[cptSlot.key]) {
+    lineup[cptSlot.key] = p;
+    document.getElementById(`slot-${cptSlot.key}`).outerHTML = renderSlot_SD(cptSlot, p);
+    updateTotals_SD();
+    return;
+  }
+  const flexSlot = SD_LINEUP_SLOTS.find(s => !s.isCpt && !lineup[s.key]);
+  if (!flexSlot) { showToast('Lineup is full'); return; }
+  lineup[flexSlot.key] = p;
+  document.getElementById(`slot-${flexSlot.key}`).outerHTML = renderSlot_SD(flexSlot, p);
+  updateTotals_SD();
+}
+
+function updateTotals_SD() {
+  const players = SD_LINEUP_SLOTS.map(s => ({ slot: s, p: lineup[s.key] })).filter(x => x.p);
+  let sal = 0, proj = 0;
+  for (const { slot, p } of players) {
+    sal  += slot.isCpt ? (p.salary||0)*1.5 : (p.salary||0);
+    proj += slot.isCpt ? (p.proj_dk_pts||0)*1.5 : (p.proj_dk_pts||0);
+  }
+  const salEl  = document.getElementById('total-salary');
+  const projEl = document.getElementById('total-proj');
+  const cap = 50000;
+  if (salEl)  { salEl.textContent  = '$'+sal.toLocaleString(); salEl.style.color  = sal > cap ? 'var(--red)' : 'var(--hi)'; }
+  if (projEl) { projEl.textContent = proj.toFixed(1); }
+}
+
+// ── SD PLAYER POOL ────────────────────────────────────────────────────────────
+
+function renderSDPool() {
+  const container = document.getElementById('player-pool');
+  if (!container) return;
+  // Combine all players — hitters + pitchers, any position
+  const all = [...allHitters, ...allPitchers].filter(p => (p.salary||0) > 0 && (p.proj_dk_pts||0) > 0);
+  all.sort((a,b) => (b.proj_dk_pts||0) - (a.proj_dk_pts||0));
+  container.innerHTML = all.map(p => renderSDPlayerRow(p)).join('');
+}
+
+function renderSDPlayerRow(p) {
+  const inLineup = SD_LINEUP_SLOTS.some(s => lineup[s.key]?.player_id === p.player_id);
+  const exc = isExcluded(p);
+  const isSP = p.is_pitcher || p.primary_position === 'SP';
+  const proj = projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
+  const salCpt  = ((p.salary||0)*1.5).toLocaleString();
+  const salFlex = (p.salary||0).toLocaleString();
+  return `<div class="pool-row${inLineup?' in-lineup':''}${exc?' excluded':''}"
+    draggable="true"
+    ondragstart="dragStart(event,'${p.player_id}')"
+    onclick="addToLineup_SD('${p.player_id}')">
+    <span class="p-pos-badge${isSP?' pit-badge':''}">${p.primary_position||p.position||'?'}</span>
+    <span class="pool-name">${p.name}</span>
+    <span class="pool-team">${p.team||''}</span>
+    <span class="pool-sal" title="CPT / FLEX">$${salCpt} / $${salFlex}</span>
+    <span class="pool-proj">${proj.toFixed(1)}</span>
+    <button class="pool-exc-btn" onclick="event.stopPropagation();toggleExclude('${p.player_id}')" title="${exc?'Un-exclude':'Exclude'}">${exc?'✓':'✕'}</button>
+  </div>`;
+}
+
+// ── SD LP OPTIMIZER ───────────────────────────────────────────────────────────
+
+function optoBuildLP_Showdown(pool, rule, cptCount, totalGenerated) {
+  // Dual variables: c{pid} = CPT slot, f{pid} = FLEX slot
+  // CPT: salary×1.5, proj×1.5
+  // FLEX: salary×1.0, proj×1.0
+  const model = {
+    optimize: 'proj',
+    optiType: 'max',
+    constraints: {},
+    variables: {},
+    ints: {},
+  };
+
+  const cap = 50000;
+  model.constraints['salary'] = { max: cap };
+  // Exactly 1 CPT
+  model.constraints['cpt_count'] = { equal: 1 };
+  // Exactly 5 FLEX
+  model.constraints['flex_count'] = { equal: 5 };
+  // Total players = 6
+  model.constraints['total'] = { equal: 6 };
+
+  // Lock/exclude constraints per player
+  const locked   = rule?.locks   || [];
+  const excluded = rule?.excludes || [];
+
+  pool.forEach(p => {
+    const pid  = p.player_id;
+    const proj = projOverrides[pid] ?? p.proj_dk_pts ?? 0;
+    const sal  = p.salary || 0;
+    if (!sal || !proj) return;
+    if (excluded.includes(pid)) return;
+
+    const ck = `c${pid}`;
+    const fk = `f${pid}`;
+
+    // CPT variable
+    model.variables[ck] = {
+      proj: proj * 1.5,
+      salary: sal * 1.5,
+      cpt_count: 1,
+      total: 1,
+      [`same_${pid}`]: 1,
+    };
+    model.ints[ck] = 1;
+
+    // FLEX variable
+    model.variables[fk] = {
+      proj: proj,
+      salary: sal,
+      flex_count: 1,
+      total: 1,
+      [`same_${pid}`]: 1,
+    };
+    model.ints[fk] = 1;
+
+    // Mutual exclusion: player can be CPT or FLEX, not both
+    model.constraints[`same_${pid}`] = { max: 1 };
+
+    // CPT exposure cap
+    const cptExp = (cptCount[pid] || 0) / Math.max(1, totalGenerated || 1);
+    if (cptExp >= (expCptMax / 100)) {
+      model.variables[ck].proj = -9999; // effectively banned from CPT
+    }
+  });
+
+  // Lock constraints
+  locked.forEach(pid => {
+    // Force this player into lineup (CPT or FLEX — just require total ≥ 1 by banning exclusion above)
+    // We can't force a specific slot, so just ensure they appear somewhere
+    const ck = `c${pid}`, fk = `f${pid}`;
+    if (model.variables[ck] || model.variables[fk]) {
+      model.constraints[`lock_${pid}`] = { min: 1 };
+      if (model.variables[ck]) model.variables[ck][`lock_${pid}`] = 1;
+      if (model.variables[fk]) model.variables[fk][`lock_${pid}`] = 1;
+    }
+  });
+
+  return model;
+}
+
+function optoSolve_Showdown(model) {
+  try {
+    const result = solver.Solve(model);
+    if (!result || result.feasible === false) return null;
+    // Extract CPT and FLEX assignments
+    let cptPid = null;
+    const flexPids = [];
+    for (const [key, val] of Object.entries(result)) {
+      if (val !== 1) continue;
+      if (key.startsWith('c')) { cptPid = key.slice(1); }
+      else if (key.startsWith('f')) { flexPids.push(key.slice(1)); }
+    }
+    if (!cptPid || flexPids.length !== 5) return null;
+    return { cptPid, flexPids };
+  } catch(e) { return null; }
+}
+
+function optoAssembleLineup_Showdown(pool, { cptPid, flexPids }) {
+  const byId = Object.fromEntries(pool.map(p => [p.player_id, p]));
+  const cptP = byId[cptPid];
+  if (!cptP) return null;
+  const flexPs = flexPids.map(pid => byId[pid]).filter(Boolean);
+  if (flexPs.length !== 5) return null;
+
+  const result = { cpt: cptP };
+  flexPs.forEach((p, i) => { result[`flex${i+1}`] = p; });
+  return result;
+}
+
+function generateLineups_Showdown() {
+  const N = optoSettings.numLineups || 1;
+  const pool = [...allHitters, ...allPitchers].filter(p =>
+    !isExcluded(p) && (p.salary||0) > 0 && (projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0) > 0
+  );
+  if (pool.length < 6) { showToast('Need at least 6 eligible players with projections'); return; }
+  if (typeof solver === 'undefined') { showToast('LP solver not loaded — check internet connection'); return; }
+
+  showToast(`Generating ${N} SD lineup${N > 1 ? 's' : ''}…`);
+
+  const newBuild = { id: 'build_' + Date.now(), name: 'SD Build ' + (getBuilds().length + 1), ts: Date.now(), lineups: [], mode: 'showdown' };
+  const allBuilds = getBuilds();
+  allBuilds.push(newBuild);
+  saveBuilds(allBuilds);
+  activeBuildId = newBuild.id;
+
+  const generated   = [];
+  const cptCount    = {};
+  const appearCount = {};
+  let lineupIdx = 0;
+
+  function buildOne() {
+    const rule = optoPickRule(lineupIdx, N);
+    // Add diversity: exclude players over exposure cap
+    const capExcluded = new Set();
+    const maxExp = (optoSettings.maxExp || 65) / 100;
+    for (const [pid, cnt] of Object.entries(appearCount)) {
+      if (cnt / Math.max(1, generated.length) >= maxExp) capExcluded.add(pid);
+    }
+    const filteredPool = pool.filter(p => !capExcluded.has(p.player_id));
+    if (filteredPool.length < 6) return null;
+
+    const augRule = { locks: rule?.locks || [], excludes: [...(rule?.excludes || []), ...capExcluded] };
+    const model = optoBuildLP_Showdown(filteredPool, augRule, cptCount, generated.length);
+    const sol   = optoSolve_Showdown(model);
+    if (!sol) return null;
+    const sdLineup = optoAssembleLineup_Showdown(filteredPool, sol);
+    if (!sdLineup) return null;
+
+    // Compute totals
+    let sal = 0, proj = 0;
+    SD_LINEUP_SLOTS.forEach(s => {
+      const p = sdLineup[s.key];
+      if (!p) return;
+      sal  += s.isCpt ? (p.salary||0)*1.5 : (p.salary||0);
+      proj += s.isCpt ? (projOverrides[p.player_id]??p.proj_dk_pts??0)*1.5 : (projOverrides[p.player_id]??p.proj_dk_pts??0);
+    });
+
+    // Update appear/CPT counts
+    Object.values(sdLineup).forEach(p => {
+      if (!p) return;
+      appearCount[p.player_id] = (appearCount[p.player_id]||0) + 1;
+    });
+    cptCount[sdLineup.cpt.player_id] = (cptCount[sdLineup.cpt.player_id]||0) + 1;
+
+    return { name: `SD Lineup ${generated.length+1}`, totProj: proj, salary: sal, lineup: sdLineup, ts: Date.now(), mode: 'showdown' };
+  }
+
+  let attempts = 0;
+  while (generated.length < N && attempts < N * 4) {
+    attempts++;
+    const lu = buildOne();
+    if (lu) { generated.push(lu); lineupIdx++; }
+  }
+
+  if (!generated.length) { showToast('Could not generate any valid SD lineups — check pool/salary'); return; }
+  updateActiveBuild(generated);
+  renderBuildTabs();
+  renderSavedCards();
+  showToast(`Generated ${generated.length} SD lineup${generated.length>1?'s':''}!`);
+}
+
+// ── SD LINEUP CARD ────────────────────────────────────────────────────────────
+
+function renderLineupCard_SD(s, i) {
+  const slots = SD_LINEUP_SLOTS;
+  let sal = 0, proj = 0;
+  slots.forEach(sl => {
+    const p = s.lineup?.[sl.key];
+    if (!p) return;
+    sal  += sl.isCpt ? (p.salary||0)*1.5  : (p.salary||0);
+    proj += sl.isCpt ? (p.proj_dk_pts||0)*1.5 : (p.proj_dk_pts||0);
+  });
+
+  const rows = slots.map(sl => {
+    const p = s.lineup?.[sl.key];
+    if (!p) return `<div class="lc-row${sl.isCpt?' sd-cpt-row':''}"><span class="lc-pos${sl.isCpt?' cpt-label':''}">${sl.label}</span><span style="color:var(--muted)">—</span></div>`;
+    const isSP = p.is_pitcher || p.primary_position === 'SP';
+    const posBadge = `<span class="p-pos-badge${isSP?' pit-badge':''}">${p.primary_position||p.position||'?'}</span>`;
+    const pSal  = sl.isCpt ? (p.salary||0)*1.5  : (p.salary||0);
+    const pProj = sl.isCpt ? (p.proj_dk_pts||0)*1.5 : (p.proj_dk_pts||0);
+    return `<div class="lc-row${sl.isCpt?' sd-cpt-row':''}">
+      <span class="lc-pos${sl.isCpt?' cpt-label':''}">${sl.label}</span>
+      ${posBadge}
+      <span class="lc-name">${p.name}</span>
+      <span class="lc-sal">$${pSal.toLocaleString()}</span>
+      <span class="lc-proj">${pProj.toFixed(1)}</span>
+    </div>`;
+  }).join('');
+
+  return `<div class="lineup-card" data-idx="${i}">
+    <div class="lc-header">
+      <span class="lc-title">${s.name||'SD Lineup '+(i+1)}</span>
+      <span class="lc-badge sd-badge">SD</span>
+      <span class="lc-sal-total">$${sal.toLocaleString()} / $50,000</span>
+      <span class="lc-proj-total">${proj.toFixed(1)} pts</span>
+      <button class="lc-load-btn" onclick="loadLineupCard_SD(${i})">Load</button>
+      <button class="lc-del-btn" onclick="deleteLineupCard(${i})">✕</button>
+    </div>
+    <div class="lc-rows">${rows}</div>
+  </div>`;
+}
+
+function loadLineupCard_SD(i) {
+  const s = getActiveLineups()[i];
+  if (!s) return;
+  // Switch to SD mode and load slots
+  if (_contestMode !== 'showdown') setContestMode('showdown');
+  SD_LINEUP_SLOTS.forEach(sl => { lineup[sl.key] = s.lineup?.[sl.key] || null; });
+  buildSlots_SD();
+}
+
+// ── SD SAVE ───────────────────────────────────────────────────────────────────
+
+function saveLineup_SD() {
+  const players = SD_LINEUP_SLOTS.map(s => lineup[s.key]).filter(Boolean);
+  if (players.length < 6) { showToast('Fill all 6 SD slots before saving'); return; }
+  const name = document.getElementById('lineup-name').value.trim() || 'SD Lineup '+new Date().toLocaleTimeString();
+  let sal = 0, proj = 0;
+  SD_LINEUP_SLOTS.forEach(s => {
+    const p = lineup[s.key];
+    if (!p) return;
+    sal  += s.isCpt ? (p.salary||0)*1.5  : (p.salary||0);
+    proj += s.isCpt ? (p.proj_dk_pts||0)*1.5 : (p.proj_dk_pts||0);
+  });
+
+  let bs = getBuilds();
+  if (!activeBuildId || !bs.find(b => b.id === activeBuildId)) {
+    const nb = { id: 'build_' + Date.now(), name: 'Manual SD', ts: Date.now(), lineups: [], mode: 'showdown' };
+    bs.push(nb); saveBuilds(bs); activeBuildId = nb.id;
+  }
+  const lines = getActiveLineups();
+  lines.unshift({ name, totProj: proj, salary: sal, lineup: { ...lineup }, ts: Date.now(), mode: 'showdown' });
+  updateActiveBuild(lines.slice(0, 150));
+  renderBuildTabs(); renderSavedCards(); showToast('SD Lineup saved!');
+}
+
+// ── SD EXPORT ─────────────────────────────────────────────────────────────────
+
+function dkIdForSD(p, isCpt) {
+  if (!p) return null;
+  const map = isCpt ? dkDraftgroupMapCPT : dkDraftgroupMapFLEX;
+  return map[normName(p.name)]
+      || map[(p.name||'').toLowerCase()]
+      || dkDraftgroupMap[normName(p.name)]
+      || p.dk_id
+      || p.player_id;
+}
+
+function exportCSV_Showdown() {
+  const players = SD_LINEUP_SLOTS.map(s => lineup[s.key]);
+  if (players.filter(Boolean).length < 6) { showToast('Fill all 6 SD slots to export'); return; }
+  if (!Object.keys(dkDraftgroupMap).length) {
+    showToast('⚠ Upload your DK entries CSV first so we have the correct draftgroup IDs');
+    return;
+  }
+  // DK SD CSV format: CPT,FLEX,FLEX,FLEX,FLEX,FLEX
+  const cols = SD_LINEUP_SLOTS.map(s => {
+    const p = lineup[s.key];
+    return p ? `${p.name} (${dkIdForSD(p, s.isCpt)})` : '';
+  }).join(',');
+  const csv = 'CPT,FLEX,FLEX,FLEX,FLEX,FLEX\n' + cols;
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([csv],{type:'text/csv'})),
+    download: (document.getElementById('lineup-name').value.trim()||'sd-lineup')+'.csv',
+  });
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+function exportSavedCSV_Showdown() {
+  const saved = getActiveLineups();
+  if (!saved.length) { showToast('No saved SD lineups to export'); return; }
+  if (!Object.keys(dkDraftgroupMap).length) {
+    showToast('⚠ Upload your DK entries CSV first so we have the correct draftgroup IDs');
+    return;
+  }
+  const rows = saved.map(s =>
+    SD_LINEUP_SLOTS.map(sl => {
+      const p = s.lineup?.[sl.key];
+      return p ? `${p.name} (${dkIdForSD(p, sl.isCpt)})` : '';
+    }).join(',')
+  );
+  const csv = 'CPT,FLEX,FLEX,FLEX,FLEX,FLEX\n' + rows.join('\n');
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([csv],{type:'text/csv'})),
+    download: 'sd_saved_lineups.csv',
+  });
+  a.click(); URL.revokeObjectURL(a.href);
 }
 
 // ── UTILS ────────────────────────────────────────────────────────────────────
