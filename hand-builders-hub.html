@@ -5180,11 +5180,17 @@ function syncGameCards() {
 function switchPoolTab(tab) {
   activeTab = tab; activePos = 'ALL';
   document.querySelectorAll('.pool-tab').forEach(t => t.classList.toggle('active', t.dataset.tab===tab));
+  if (_contestMode === 'showdown') {
+    // SD mode: no pos filters, just keep search box
+    renderPool();
+    return;
+  }
   const pf = document.getElementById('pos-filters');
   pf.innerHTML = tab === 'pitchers'
     ? `<button class="pos-filter active" data-pos="ALL" onclick="setPositionFilter('ALL')">All</button>
        <button class="pos-filter" data-pos="SP"  onclick="setPositionFilter('SP')">SP</button>
-       <input class="pool-search" id="pool-search" type="text" placeholder="Search player…" oninput="renderPool()">`
+       <input class="pool-search" id="pool-search" type="text" placeholder="Search player…" oninput="renderPool()">
+       <button class="pvh-toggle active" id="pvh-btn" onclick="togglePvh()" title="Pitchers vs Hitters — hide hitters facing your lineup's SP">PvH Off</button>`
     : `<button class="pos-filter active" data-pos="ALL" onclick="setPositionFilter('ALL')">All</button>
        <button class="pos-filter" data-pos="C"   onclick="setPositionFilter('C')">C</button>
        <button class="pos-filter" data-pos="1B"  onclick="setPositionFilter('1B')">1B</button>
@@ -5192,7 +5198,8 @@ function switchPoolTab(tab) {
        <button class="pos-filter" data-pos="3B"  onclick="setPositionFilter('3B')">3B</button>
        <button class="pos-filter" data-pos="SS"  onclick="setPositionFilter('SS')">SS</button>
        <button class="pos-filter" data-pos="OF"  onclick="setPositionFilter('OF')">OF</button>
-       <input class="pool-search" id="pool-search" type="text" placeholder="Search player…" oninput="renderPool()">`;
+       <input class="pool-search" id="pool-search" type="text" placeholder="Search player…" oninput="renderPool()">
+       <button class="pvh-toggle active" id="pvh-btn" onclick="togglePvh()" title="Pitchers vs Hitters — hide hitters facing your lineup's SP">PvH Off</button>`;
   renderPool();
   // Refresh col picker if open
   if (document.getElementById('col-picker')?.classList.contains('open')) renderColPicker();
@@ -7040,11 +7047,43 @@ function setContestMode(mode) {
   // Show/hide settings rows
   document.querySelectorAll('.classic-only').forEach(el => el.style.display = mode === 'classic' ? '' : 'none');
   document.querySelectorAll('.sd-only').forEach(el => el.style.display = mode === 'showdown' ? '' : 'none');
+  // Update pool tabs labels + pos filters
+  const tabH = document.querySelector('.pool-tab[data-tab="hitters"]');
+  const tabP = document.querySelector('.pool-tab[data-tab="pitchers"]');
+  if (tabH) tabH.textContent = mode === 'showdown' ? 'Captains' : 'Hitters';
+  if (tabP) tabP.textContent = mode === 'showdown' ? 'Utility'  : 'Pitchers';
+  _updatePosFilters(mode);
   // Rebuild lineup slots and pool
   buildSlots();
   renderPool();
   renderBuildTabs();
   renderSavedCards();
+}
+
+function _updatePosFilters(mode) {
+  if (mode === undefined) mode = _contestMode;
+  const pf = document.getElementById('pos-filters');
+  if (!pf) return;
+  if (mode === 'showdown') {
+    pf.innerHTML = `<input class="pool-search" id="pool-search" type="text" placeholder="Search player…" oninput="renderPool()">`;
+  } else {
+    // Restore classic filters (matches the default in switchPoolTab)
+    const isP = activeTab === 'pitchers';
+    pf.innerHTML = isP
+      ? `<button class="pos-filter active" data-pos="ALL" onclick="setPositionFilter('ALL')">All</button>
+         <button class="pos-filter" data-pos="SP" onclick="setPositionFilter('SP')">SP</button>
+         <input class="pool-search" id="pool-search" type="text" placeholder="Search player…" oninput="renderPool()">
+         <button class="pvh-toggle active" id="pvh-btn" onclick="togglePvh()" title="Pitchers vs Hitters — hide hitters facing your lineup's SP">PvH Off</button>`
+      : `<button class="pos-filter active" data-pos="ALL" onclick="setPositionFilter('ALL')">All</button>
+         <button class="pos-filter" data-pos="C"   onclick="setPositionFilter('C')">C</button>
+         <button class="pos-filter" data-pos="1B"  onclick="setPositionFilter('1B')">1B</button>
+         <button class="pos-filter" data-pos="2B"  onclick="setPositionFilter('2B')">2B</button>
+         <button class="pos-filter" data-pos="3B"  onclick="setPositionFilter('3B')">3B</button>
+         <button class="pos-filter" data-pos="SS"  onclick="setPositionFilter('SS')">SS</button>
+         <button class="pos-filter" data-pos="OF"  onclick="setPositionFilter('OF')">OF</button>
+         <input class="pool-search" id="pool-search" type="text" placeholder="Search player…" oninput="renderPool()">
+         <button class="pvh-toggle active" id="pvh-btn" onclick="togglePvh()" title="Pitchers vs Hitters — hide hitters facing your lineup's SP">PvH Off</button>`;
+  }
 }
 
 // ── SD LINEUP SLOTS ───────────────────────────────────────────────────────────
@@ -7135,10 +7174,18 @@ function updateTotals_SD() {
 function renderSDPool() {
   const container = document.getElementById('player-pool');
   if (!container) return;
-  // Combine all players — hitters + pitchers, any position
-  const all = [...allHitters, ...allPitchers].filter(p => (p.salary||0) > 0 && (p.proj_dk_pts||0) > 0);
-  all.sort((a,b) => (b.proj_dk_pts||0) - (a.proj_dk_pts||0));
-  container.innerHTML = all.map(p => renderSDPlayerRow(p)).join('');
+  const search = (document.getElementById('pool-search')?.value || '').toLowerCase();
+  let all = [...allHitters, ...allPitchers].filter(p => (p.salary||0) > 0 && (p.proj_dk_pts||0) > 0);
+  if (search) all = all.filter(p => (p.name||'').toLowerCase().includes(search) || (p.team||'').toLowerCase().includes(search));
+  // Captains tab (hitters key) → sort by proj; Utility tab (pitchers key) → sort by value (proj/salary)
+  if (activeTab === 'pitchers') {
+    all.sort((a,b) => ((b.proj_dk_pts||0)/(b.salary||1)) - ((a.proj_dk_pts||0)/(a.salary||1)));
+  } else {
+    all.sort((a,b) => (b.proj_dk_pts||0) - (a.proj_dk_pts||0));
+  }
+  container.innerHTML = all.length
+    ? all.map(p => renderSDPlayerRow(p)).join('')
+    : '<div style="color:var(--muted);padding:12px;font-size:12px;">No players match</div>';
 }
 
 function renderSDPlayerRow(p) {
