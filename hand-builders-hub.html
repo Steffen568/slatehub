@@ -4777,7 +4777,10 @@ async function loadPlayerPool(date, slate) {
   });
 
   // Fallback: for any lineup starter not matched by player_id, try name match then MLB→DK mapping
-  for (const pid of starterPids) {
+  // Skip in SD mode — all SD players are already in salByPid via pitcherSalRes; running this
+  // loop in SD mode adds players from OTHER games on the same date (via dkSalFallback) and
+  // causes cross-game contamination in the pool.
+  for (const pid of (_contestMode === 'showdown' ? [] : starterPids)) {
     if (!salByPid[pid]) {
       const lu = lineupMap[pid];
       const luName = lu?.player_name?.toLowerCase();
