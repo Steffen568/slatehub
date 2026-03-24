@@ -89,6 +89,29 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 
 ## Salary Pipeline Recurring Issues
 
-### `diagnose_salary_mismatch.py` does not catch all missing salaries
-**Status:** Open as of Session 22. Some players (e.g. Orlando Arcia) and entire teams (ATL, KC) have null pricing even after running the diagnose script. Root cause not yet identified — may be a DK→MLBAM ID issue in `load_dk_salaries.py` that bypasses the override map.
-**Next step:** Cross-reference players missing from `dk_salaries` against what DK returns for their draftgroup, check if their `playerDkId` is being resolved to the wrong `player_id`.
+### Entire teams missing from dk_salaries — root causes (Session 23)
+Three distinct causes. Don't conflate them.
+
+**Cause 1 — DK slate not open yet.**
+ATL, KC, MIA, OAK, TOR had zero rows because DK hadn't opened a classic DG for their Opening Day games yet. Not a bug. Re-run `load_dk_salaries.py` once DK opens the DG (typically 24–48 hrs before first pitch) and they appear automatically.
+**How to confirm:** Run `check_dk_contest_types.py` and verify the missing team's DG ID appears in `classic_dg_ids`.
+
+**Cause 2 — Wrong player IDs stored (DK proprietary IDs ≠ MLBAM).**
+DK returns its own internal `playerId` for many players. Our name lookup resolves to the wrong MLBAM ID and stores that. The `diagnose_salary_mismatch.py` script surfaces these as ID MISMATCH rows.
+**Fix:** Add the wrong ID → correct MLBAM ID mapping to `PLAYER_ID_REMAP` in `load_dk_salaries.py`, then re-run the pipeline.
+**Rule:** `DK_TO_MLBAM` intercepts at the DK API `playerId` level. `PLAYER_ID_REMAP` intercepts AFTER all resolution (name lookup, DK_TO_MLBAM, fallback) — use this when the wrong ID comes from the players table name lookup.
+
+**Cause 3 — Stale WBC / non-MLB team rows polluting dk_salaries.**
+Found CAN, DR, ISR, ITA, MEX, NED, PR, USA, VEN rows from old WBC DFS data. These are never cleared by the pipeline's slate-label delete step (which only clears current slate labels). Fixed in Session 23 by deleting by team abbreviation.
+**Rule:** After any bulk pipeline change, verify non-MLB teams aren't in dk_salaries. Delete with: `supabase.table('dk_salaries').delete().eq('team', 'CAN').execute()` etc.
+
+### `diagnose_salary_mismatch.py` silently truncated at 1000 rows (fixed Session 23)
+**What happened:** The `all_salary_rows` name-lookup query had no `.limit()`, so Supabase returned only the first 1000 rows. Players in rows 1001+ were misclassified as "truly missing" when they were actually ID mismatches.
+**Fix:** Use paginated `.range()` loop to load all rows. Already fixed in the script.
+**Rule:** Any diagnostic script that loads a full table must paginate — never use a bare `.select()` without `.range()` or explicit `.limit(5000)`.
+
+### Workflow after adding new PLAYER_ID_REMAP entries
+1. Add entry to `PLAYER_ID_REMAP` in `load_dk_salaries.py`
+2. Re-run `load_dk_salaries.py` (pipeline re-uploads all current slates with correct IDs)
+3. Re-run `diagnose_salary_mismatch.py` to verify — expect 0 ID mismatches
+4. If any stale rows with wrong IDs remain from old slate labels not in the current run, fix with the auto-generated SQL from the diagnose output

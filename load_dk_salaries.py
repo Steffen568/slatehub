@@ -162,6 +162,35 @@ DK_TO_MLBAM = {
     1118204: 677594,   # Julio Rodriguez (alternate slate)
     1118821: 677950,   # Alek Thomas
     830104 : 702284,   # Cole Young
+    # Added Session 23 — confirmed mismatches from diagnose_salary_mismatch.py
+    455591 : 514888,   # Jose Altuve
+    598784 : 608070,   # Jose Ramirez
+    657963 : 608348,   # Carson Kelly
+    830219 : 645277,   # Ozzie Albies
+    877503 : 660670,   # Ronald Acuna Jr.
+    917940 : 666185,   # Dylan Carlson
+    873265 : 669257,   # Will Smith (C)
+    1072529: 672356,   # Gabriel Arias
+    1169451: 677951,   # Bobby Witt Jr.
+    1115762: 686469,   # Vinnie Pasquantino
+    1453726: 692216,   # CJ Kayfus
+    1396848: 701358,   # Cam Smith (HOU) — was stored as raw DK id
+}
+
+# Final remap applied AFTER all ID resolution (name lookup, DK_TO_MLBAM, fallback).
+# Catches cases where the players table itself has a wrong/DK-internal ID that the
+# name lookup returns, and the lineups table uses the correct MLBAM ID.
+# Key = wrong ID that ends up resolved; Value = correct MLBAM ID matching lineups.
+PLAYER_ID_REMAP = {
+    392995 : 521692,   # Salvador Perez
+    455627 : 500743,   # Miguel Rojas
+    830219 : 645277,   # Ozzie Albies
+    877503 : 660670,   # Ronald Acuna Jr.
+    918766 : 666152,   # David Hamilton
+    918999 : 669701,   # Josh Smith (TEX)
+    1053355: 672580,   # Maikel Garcia
+    1169451: 677951,   # Bobby Witt Jr.
+    1115762: 686469,   # Vinnie Pasquantino
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids
@@ -320,6 +349,9 @@ for dgid in all_dg_ids:
                 no_match += 1
                 print(f"    ✗ No match at all for '{name}' — skipped")
                 continue
+
+            # Final remap: catches wrong IDs sourced from our players table or DK fallback
+            player_id = PLAYER_ID_REMAP.get(player_id, player_id)
 
             all_salary_rows.append({
                 'player_id':    player_id,

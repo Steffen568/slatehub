@@ -4621,11 +4621,18 @@ async function loadPlayerPool(date, slate) {
   document.getElementById('pool-list').innerHTML = '<div class="pool-empty">Loading…</div>';
   activeTeamIds = new Set();
 
+  // For Showdown slates, the date picker may show a different date than the slate's actual game date
+  // (e.g. picker shows 2026-03-24 but the SD slate is sd_NYY@SF_2026-03-25).
+  // Always derive the effective date from the slate label in SD mode.
+  const effectiveDate = (_contestMode === 'showdown' && slate)
+    ? (parseDateFromSlate(slate) || date)
+    : date;
+
   // 1. Games for this date
-  const { data: games } = date && date !== 'all'
+  const { data: games } = effectiveDate && effectiveDate !== 'all'
     ? await sb.from('games')
         .select('game_pk,game_date,home_team_id,away_team_id,home_team,away_team,home_sp_id,away_sp_id,home_sp_name,away_sp_name,venue_name,venue_id,game_time_utc')
-        .eq('game_date', date)
+        .eq('game_date', effectiveDate)
     : { data: [] };
   _games = games || [];
 
@@ -4643,7 +4650,7 @@ async function loadPlayerPool(date, slate) {
   let lineupRaw = [];
   try {
     const cached = JSON.parse(localStorage.getItem('sh_hbh_lineup') || 'null');
-    if (cached && cached.date === date && cached.players.length > 0) {
+    if (cached && cached.date === effectiveDate && cached.players.length > 0) {
       lineupRaw = cached.players;
     }
   } catch(e) {}
@@ -4712,6 +4719,20 @@ async function loadPlayerPool(date, slate) {
   (pitcherSalRes.data || [])
     .filter(r => (r.position||'').split('/').some(p => ['SP','RP','P'].includes(p.trim())))
     .forEach(r => { if (r.player_id) { salByPid[r.player_id] = r; salaries.push(r); } });
+
+  // Showdown: pitcherSalRes fetches ALL slate players (no position filter on the query).
+  // Add non-pitcher entries directly — don't rely on starterPids/lineupRaw for hitter salaries
+  // because the classic lineup-batting-order path misses pitchers and non-batting-order players.
+  if (_contestMode === 'showdown') {
+    (pitcherSalRes.data || [])
+      .filter(r => !(r.position||'').split('/').some(p => ['SP','RP','P'].includes(p.trim())))
+      .forEach(r => {
+        if (r.player_id && !salByPid[r.player_id]) {
+          salByPid[r.player_id] = r;
+          salaries.push(r);
+        }
+      });
+  }
 
   // Add hitters from today's slate (salary + correct DK position)
   hitterSalRaw.forEach(r => {
@@ -4812,19 +4833,19 @@ async function loadPlayerPool(date, slate) {
   //    Also fetch all pitcher projections for the date (is_pitcher=true) to get the authoritative
   //    scheduled-SP id list — avoids name-mismatch issues with the games table.
   const [projRaw, pitcherProjRaw] = await Promise.all([
-    date && date !== 'all'
+    effectiveDate && effectiveDate !== 'all'
       ? sb.from('player_projections')
           .select('player_id,full_name,game_date,proj_dk_pts,proj_floor,proj_ceiling,' +
                   'proj_hr,proj_r,proj_rbi,proj_sb,' +
                   'proj_ip,proj_ks,proj_er,win_prob,proj_ownership')
-          .eq('game_date', date)
+          .eq('game_date', effectiveDate)
           .eq('is_pitcher', false)
           .then(({ data }) => data || [])
       : Promise.resolve([]),
-    date && date !== 'all'
+    effectiveDate && effectiveDate !== 'all'
       ? sb.from('player_projections')
           .select('player_id, full_name, team, game_pk, proj_dk_pts, proj_floor, proj_ceiling, proj_ip, proj_ks, proj_er, win_prob, stats_level, proj_ownership')
-          .eq('game_date', date)
+          .eq('game_date', effectiveDate)
           .eq('is_pitcher', true)
           .then(({ data }) => data || [])
       : Promise.resolve([]),

@@ -59,10 +59,17 @@ if not missing_ids:
     print("\n✅ All lineup players have a matching dk_salaries row by player_id — no mismatch!")
     sys.exit()
 
-# ── 3. For missing players, load ALL dk_salaries for today to search by name
-all_salary_rows = sb.table('dk_salaries').select(
-    'player_id, name, salary, team, dk_slate'
-).execute().data or []
+# ── 3. For missing players, load ALL dk_salaries to search by name (paginated — avoid 1000-row limit)
+all_salary_rows = []
+_offset = 0
+while True:
+    _rows = sb.table('dk_salaries').select(
+        'player_id, name, salary, team, dk_slate'
+    ).range(_offset, _offset + 999).execute().data or []
+    all_salary_rows.extend(_rows)
+    if len(_rows) < 1000:
+        break
+    _offset += 1000
 
 salary_by_norm_name = {}
 for r in all_salary_rows:
@@ -115,13 +122,31 @@ if id_mismatches:
     for m in id_mismatches:
         print(f"  {m['name']:<28}  lineup_id={m['lineup_id']}  dk_id={m['dk_id']}  [{m['dk_slate']}  ${m['salary']:,}]")
 
-    # ── Auto-generate fix SQL
+    # ── Auto-generate fix SQL (deduplicated — one UPDATE per unique lineup_id/dk_id pair)
     print(f"\n── AUTO-FIX SQL (run in Supabase SQL editor) ──")
     print("-- Review carefully before running!")
+    seen_sql = set()
     for m in id_mismatches:
+        key = (m['lineup_id'], m['dk_id'])
+        if key in seen_sql:
+            continue
+        seen_sql.add(key)
         print(f"UPDATE dk_salaries SET player_id = {m['lineup_id']} WHERE player_id = {m['dk_id']} AND name = '{m['name']}';")
 
+# Teams that will never appear on DK (minor leagues, international leagues, etc.)
+NON_MLB_TEAMS = {
+    'sugar land space cowboys',
+    'sultanes de monterrey',
+}
+
 if truly_missing:
-    print(f"\n── TRULY MISSING (not on this slate) ──")
-    for m in truly_missing:
-        print(f"  {m['name']:<28}  lineup_id={m['lineup_id']}  ({m['team']})")
+    mlb_missing  = [m for m in truly_missing if m['team'].lower() not in NON_MLB_TEAMS]
+    skip_missing = [m for m in truly_missing if m['team'].lower() in NON_MLB_TEAMS]
+    if mlb_missing:
+        print(f"\n── TRULY MISSING (not on this slate) ──")
+        for m in mlb_missing:
+            print(f"  {m['name']:<28}  lineup_id={m['lineup_id']}  ({m['team']})")
+    if skip_missing:
+        print(f"\n── SKIPPED (non-MLB teams — will never be on DK) ──")
+        for m in skip_missing:
+            print(f"  {m['name']:<28}  ({m['team']})")
