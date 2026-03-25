@@ -7393,6 +7393,7 @@ function optoBuildLP_Showdown(pool, rule, cptCount, totalGenerated) {
   const excluded = rule?.excludes || [];
 
   const randPct = optoSettings.randPct || 0;
+  const cptCapMax = Math.max(1, Math.ceil(Math.max(1, totalGenerated + 1) * expCptMax / 100));
 
   pool.forEach(p => {
     const pid  = p.player_id;
@@ -7408,15 +7409,20 @@ function optoBuildLP_Showdown(pool, rule, cptCount, totalGenerated) {
     const ck = `c${pid}`;
     const fk = `f${pid}`;
 
-    // CPT variable
-    model.variables[ck] = {
-      proj: proj * 1.5,
-      salary: sal * 1.5,
-      cpt_count: 1,
-      total: 1,
-      [`same_${pid}`]: 1,
-    };
-    model.ints[ck] = 1;
+    // CPT exposure cap — don't even add the CPT variable if this player has hit the cap
+    const cptBanned = (cptCount[pid] || 0) >= cptCapMax;
+
+    if (!cptBanned) {
+      // CPT variable
+      model.variables[ck] = {
+        proj: proj * 1.5,
+        salary: sal * 1.5,
+        cpt_count: 1,
+        total: 1,
+        [`same_${pid}`]: 1,
+      };
+      model.ints[ck] = 1;
+    }
 
     // FLEX variable
     model.variables[fk] = {
@@ -7428,14 +7434,8 @@ function optoBuildLP_Showdown(pool, rule, cptCount, totalGenerated) {
     };
     model.ints[fk] = 1;
 
-    // Mutual exclusion: player can be CPT or FLEX, not both
+    // Mutual exclusion: player can be CPT or FLEX, not both (only needed if both exist)
     model.constraints[`same_${pid}`] = { max: 1 };
-
-    // CPT exposure cap
-    const cptExp = (cptCount[pid] || 0) / Math.max(1, totalGenerated || 1);
-    if (cptExp >= (expCptMax / 100)) {
-      model.variables[ck].proj = -9999; // effectively banned from CPT
-    }
   });
 
   // Lock constraints
@@ -7458,10 +7458,11 @@ function optoSolve_Showdown(model) {
     const result = solver.Solve(model);
     if (!result || result.feasible === false) return null;
     // Extract CPT and FLEX assignments — keys are c{pid} and f{pid} where pid is numeric
+    // Use Math.round for comparison since LP solvers can return 0.9999 instead of 1
     let cptPid = null;
     const flexPids = [];
     for (const [key, val] of Object.entries(result)) {
-      if (val !== 1) continue;
+      if (Math.round(val) !== 1) continue;
       const m = key.match(/^([cf])(\d+)$/);
       if (!m) continue;
       if (m[1] === 'c') { cptPid = m[2]; }
@@ -7487,16 +7488,23 @@ function optoAssembleLineup_Showdown(pool, { cptPid, flexPids }) {
 function generateLineups_Showdown() {
   const N = optoSettings.numLineups || 1;
   // SD pool: include all players with salary. Players without projections get a
-  // salary-based baseline (pts-per-$1k × salary/1000) so pitchers aren't excluded.
+  // salary-based baseline so pitchers aren't excluded from optimization.
   const sdPoolAll = [...allHitters, ...allPitchers].filter(p => !isExcluded(p) && (p.salary||0) > 0);
   const pool = sdPoolAll.map(p => {
     const proj = projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
     if (proj > 0) return p;
-    // Baseline estimate: league-avg ~3.5 pts per $1k salary for hitters, ~4.0 for pitchers
+    // Baseline: ~2.5 pts/$1k for pitchers, ~2.0 for hitters (conservative league average)
     const isPit = (p.positions||[]).some(pos => ['SP','RP','P'].includes(pos));
-    const baseline = (isPit ? 4.0 : 3.5) * ((p.salary||0) / 1000);
+    const baseline = (isPit ? 2.5 : 2.0) * ((p.salary||0) / 1000);
     return { ...p, proj_dk_pts: baseline };
   });
+  // Debug: log pool composition so we can verify pitchers are included
+  const pitInPool = pool.filter(p => (p.positions||[]).some(pos => ['SP','RP','P'].includes(pos)));
+  const hitInPool = pool.filter(p => !(p.positions||[]).some(pos => ['SP','RP','P'].includes(pos)));
+  console.log(`[SD Optimizer] Pool: ${pool.length} total — ${pitInPool.length} pitchers, ${hitInPool.length} hitters`);
+  console.log(`[SD Optimizer] allPitchers: ${allPitchers.length}, allHitters: ${allHitters.length}`);
+  if (pitInPool.length > 0) console.log('[SD Optimizer] Pitchers in pool:', pitInPool.map(p => `${p.name} ($${p.salary}, proj=${p.proj_dk_pts})`));
+  else console.warn('[SD Optimizer] WARNING: No pitchers in pool! Check allPitchers array.');
   if (pool.length < 6) { showToast('Need at least 6 eligible players with projections'); return; }
   if (typeof solver === 'undefined') { showToast('LP solver not loaded — check internet connection'); return; }
 
@@ -7551,6 +7559,8 @@ function generateLineups_Showdown() {
       appearCount[p.player_id] = (appearCount[p.player_id]||0) + 1;
     });
     cptCount[sdLineup.cpt.player_id] = (cptCount[sdLineup.cpt.player_id]||0) + 1;
+    const hasPit = Object.values(sdLineup).some(p => p && (p.positions||[]).some(pos => ['SP','RP','P'].includes(pos)));
+    console.log(`[SD Lineup ${generated.length+1}] CPT: ${sdLineup.cpt.name} (cptCount: ${cptCount[sdLineup.cpt.player_id]}) | Pitcher: ${hasPit ? 'YES' : 'NO'} | Proj: ${proj.toFixed(1)}`);
 
     return { name: `SD Lineup ${generated.length+1}`, totProj: proj, salary: sal, lineup: sdLineup, ts: Date.now(), mode: 'showdown' };
   }
