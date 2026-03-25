@@ -5015,6 +5015,7 @@ async function loadPlayerPool(date, slate) {
   // Enrich with projections/stats by matching name against pitcherProjRaw.
   // Classic mode: build from pitcherProjRaw (player_projections) with salary from dk_salaries.
   if (_contestMode === 'showdown') {
+    console.log(`[SD Pitcher Build] Using dk_salaries ONLY. slate=${slate}, pitcherSalRes rows=${(pitcherSalRes.data||[]).length}, SP/RP rows=${(pitcherSalRes.data||[]).filter(r=>(r.position||'').split('/').some(p=>['SP','RP','P'].includes(p.trim()))).length}`);
     // Build projection lookup by name for enrichment
     const pitProjByName = {};
     pitcherProjRaw.forEach(proj => {
