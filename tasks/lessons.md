@@ -125,3 +125,15 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### Projection row count too low after compute_projections.py
 **What happened:** Only 20 rows in player_projections for 2026-03-25
 **Rule:** Check that load_schedule.py ran successfully and lineups loaded before projections.
+
+### SD optimizer repeated same players in every lineup (Session 25)
+**What happened:** Five bugs combined: (1) `Object.entries` produces string keys but `player_id` is numeric — `capExcluded.has(p.player_id)` never matched. (2) Exposure formula divided by `generated.length` (oscillates) instead of using absolute cap like classic (`Math.ceil(N * cap / 100)`). (3) Per-player `expTargets` not checked. (4) No projection randomization (`randPct`) — LP returned identical solution each time. (5) Referenced `optoSettings.maxExp` but the field is `optoSettings.exposureMax`.
+**Rule:** When porting logic between classic and SD optimizers, verify: type consistency (string vs number), correct property names, and all diversity mechanisms (noise, exposure caps, per-player caps).
+
+### SD lineup cards were unstyled — wrong CSS class structure (Session 25)
+**What happened:** `renderLineupCard_SD` used classes (`lc-row`, `lc-pos`, `lc-name`, etc.) with zero CSS definitions. Classic cards use `lc-chip` / `lc-slot-*` classes which have full styling.
+**Rule:** SD lineup cards must use the same `lc-chip` container structure as classic, with SD-specific grid layout (`lc-slot-sd`) for the player rows.
+
+### optoSolve_Showdown matched wrong keys from solver result (Session 25)
+**What happened:** `key.startsWith('c')` matched solver metadata like `cpt_count`. `key.startsWith('f')` matched `flex_count`, `feasible`. Also `byId[stringPid]` failed because map keys were numeric `player_id`.
+**Rule:** Use regex `/^([cf])(\d+)$/` to extract PIDs from solver result. Use `String(player_id)` for lookup maps when PIDs come from string sources.

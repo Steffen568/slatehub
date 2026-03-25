@@ -3919,6 +3919,14 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 .lc-slot-xfip{font-size:9px;color:var(--text2);text-align:right;}
 .lc-slot-kpct{font-size:9px;color:var(--text2);text-align:right;}
 .lc-slot-win{font-size:9px;color:var(--text2);text-align:right;}
+/* SD lineup card rows: slot | pos | team | name | sal | proj */
+.lc-slot-sd,.lc-shdr-sd{display:grid;grid-template-columns:30px 24px 28px 1fr 46px 34px;gap:3px;align-items:center;padding:2px 0;}
+.lc-slot-sd{border-bottom:1px solid rgba(255,255,255,.05);}
+.lc-slot-sd:nth-child(even){background:rgba(255,255,255,.02);}
+.lc-slot-sd.sd-cpt-row{background:rgba(251,191,36,.06);}
+.lc-shdr-sd{padding:5px 0 3px;background:rgba(251,191,36,.08);border-bottom:1px solid rgba(251,191,36,.2);margin-top:0;}
+.lc-slot-role{font-size:7px;font-weight:800;letter-spacing:.3px;text-align:center;color:var(--muted);}
+.lc-slot-role.cpt-role{color:#fbbf24;background:#3d2a00;padding:1px 3px;border-radius:2px;}
 
 /* ── OPTIMIZER SETTINGS PANEL (right-side drawer) ─────────────────────────── */
 .opto-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:199;display:none;}
@@ -6055,11 +6063,14 @@ function renderExposure() {
   const total = saved.length;
   const counts = {}; // id → {id, name, pos, team, count, isSP}
   saved.forEach(s => {
-    LINEUP_SLOTS.forEach(slot => {
+    const slots = s.mode === 'showdown' ? SD_LINEUP_SLOTS : LINEUP_SLOTS;
+    slots.forEach(slot => {
       const p = s.lineup?.[slot.key];
       if (!p) return;
       const id = p.player_id || p.dk_id;
-      if (!counts[id]) counts[id] = { id, name: p.name, pos: slot.pos, team: p.team || '', count: 0, isSP: slot.pos === 'SP' };
+      const pos = slot.pos || p.primary_position || p.position || '?';
+      const isCpt = slot.isCpt || false;
+      if (!counts[id]) counts[id] = { id, name: p.name, pos, team: p.team || '', count: 0, isSP: pos === 'SP', isCpt };
       counts[id].count++;
     });
   });
@@ -7381,12 +7392,18 @@ function optoBuildLP_Showdown(pool, rule, cptCount, totalGenerated) {
   const locked   = rule?.locks   || [];
   const excluded = rule?.excludes || [];
 
+  const randPct = optoSettings.randPct || 0;
+
   pool.forEach(p => {
     const pid  = p.player_id;
-    const proj = projOverrides[pid] ?? p.proj_dk_pts ?? 0;
+    const baseProj = projOverrides[pid] ?? p.proj_dk_pts ?? 0;
     const sal  = p.salary || 0;
-    if (!sal || !proj) return;
+    if (!sal || !baseProj) return;
     if (excluded.includes(pid)) return;
+
+    // Add randomization noise for lineup diversity (same approach as classic optimizer)
+    const noise = randPct > 0 ? 1 + (Math.random() * 2 - 1) * (randPct / 100) : 1;
+    const proj = baseProj * noise;
 
     const ck = `c${pid}`;
     const fk = `f${pid}`;
@@ -7440,13 +7457,15 @@ function optoSolve_Showdown(model) {
   try {
     const result = solver.Solve(model);
     if (!result || result.feasible === false) return null;
-    // Extract CPT and FLEX assignments
+    // Extract CPT and FLEX assignments — keys are c{pid} and f{pid} where pid is numeric
     let cptPid = null;
     const flexPids = [];
     for (const [key, val] of Object.entries(result)) {
       if (val !== 1) continue;
-      if (key.startsWith('c')) { cptPid = key.slice(1); }
-      else if (key.startsWith('f')) { flexPids.push(key.slice(1)); }
+      const m = key.match(/^([cf])(\d+)$/);
+      if (!m) continue;
+      if (m[1] === 'c') { cptPid = m[2]; }
+      else { flexPids.push(m[2]); }
     }
     if (!cptPid || flexPids.length !== 5) return null;
     return { cptPid, flexPids };
@@ -7454,7 +7473,7 @@ function optoSolve_Showdown(model) {
 }
 
 function optoAssembleLineup_Showdown(pool, { cptPid, flexPids }) {
-  const byId = Object.fromEntries(pool.map(p => [p.player_id, p]));
+  const byId = Object.fromEntries(pool.map(p => [String(p.player_id), p]));
   const cptP = byId[cptPid];
   if (!cptP) return null;
   const flexPs = flexPids.map(pid => byId[pid]).filter(Boolean);
@@ -7488,12 +7507,17 @@ function generateLineups_Showdown() {
 
   function buildOne() {
     const rule = optoPickRule(lineupIdx, N);
-    // Add diversity: exclude players over exposure cap
+    // Add diversity: exclude players over exposure cap (matches classic approach)
     const capExcluded = new Set();
-    const maxExp = (optoSettings.maxExp || 65) / 100;
+    const globalMax = Math.max(1, Math.ceil(N * (optoSettings.exposureMax || 65) / 100));
     for (const [pid, cnt] of Object.entries(appearCount)) {
-      if (cnt / Math.max(1, generated.length) >= maxExp) capExcluded.add(pid);
+      if (cnt >= globalMax) capExcluded.add(+pid);
     }
+    // Per-player exposure caps
+    Object.entries(expTargets).forEach(([pid, capPct]) => {
+      const playerMax = Math.max(1, Math.ceil(N * capPct / 100));
+      if ((appearCount[+pid] || 0) >= playerMax) capExcluded.add(+pid);
+    });
     const filteredPool = pool.filter(p => !capExcluded.has(p.player_id));
     if (filteredPool.length < 6) return null;
 
@@ -7546,35 +7570,55 @@ function renderLineupCard_SD(s, i) {
     const p = s.lineup?.[sl.key];
     if (!p) return;
     sal  += sl.isCpt ? (p.salary||0)*1.5  : (p.salary||0);
-    proj += sl.isCpt ? (p.proj_dk_pts||0)*1.5 : (p.proj_dk_pts||0);
+    proj += sl.isCpt ? (projOverrides[p.player_id]??p.proj_dk_pts||0)*1.5 : (projOverrides[p.player_id]??p.proj_dk_pts||0);
   });
 
-  const rows = slots.map(sl => {
-    const p = s.lineup?.[sl.key];
-    if (!p) return `<div class="lc-row${sl.isCpt?' sd-cpt-row':''}"><span class="lc-pos${sl.isCpt?' cpt-label':''}">${sl.label}</span><span style="color:var(--muted)">—</span></div>`;
-    const isSP = p.is_pitcher || p.primary_position === 'SP';
-    const posBadge = `<span class="p-pos-badge${isSP?' pit-badge':''}">${p.primary_position||p.position||'?'}</span>`;
-    const pSal  = sl.isCpt ? (p.salary||0)*1.5  : (p.salary||0);
-    const pProj = sl.isCpt ? (p.proj_dk_pts||0)*1.5 : (p.proj_dk_pts||0);
-    return `<div class="lc-row${sl.isCpt?' sd-cpt-row':''}">
-      <span class="lc-pos${sl.isCpt?' cpt-label':''}">${sl.label}</span>
-      ${posBadge}
-      <span class="lc-name">${p.name}</span>
-      <span class="lc-sal">$${pSal.toLocaleString()}</span>
-      <span class="lc-proj">${pProj.toFixed(1)}</span>
-    </div>`;
-  }).join('');
+  const fmtSal  = v => v ? `$${(v/1000).toFixed(1)}k` : '—';
+  const fmtProj = v => v != null ? (+v).toFixed(1) : '—';
 
-  return `<div class="lineup-card" data-idx="${i}">
-    <div class="lc-header">
-      <span class="lc-title">${s.name||'SD Lineup '+(i+1)}</span>
-      <span class="lc-badge sd-badge">SD</span>
-      <span class="lc-sal-total">$${sal.toLocaleString()} / $50,000</span>
-      <span class="lc-proj-total">${proj.toFixed(1)} pts</span>
-      <button class="lc-load-btn" onclick="loadLineupCard_SD(${i})">Load</button>
-      <button class="lc-del-btn" onclick="deleteLineupCard(${i})">✕</button>
+  function sdRow(sl) {
+    const p = s.lineup?.[sl.key];
+    const roleLabel = sl.isCpt ? 'CPT' : 'FLEX';
+    const roleCls   = sl.isCpt ? ' cpt-role' : '';
+    const rowCls    = sl.isCpt ? ' sd-cpt-row' : '';
+    if (!p) return `<div class="lc-slot-sd${rowCls}"><span class="lc-slot-role${roleCls}">${roleLabel}</span><span style="grid-column:2/7;color:var(--muted)">—</span></div>`;
+    const pos = p.primary_position || p.position || '?';
+    const isSP = ['SP','RP','P'].includes(pos);
+    const pc = posColor(pos);
+    const tc = abbrColor(p.team || '');
+    const lastName = (p.name || '').split(' ').slice(1).join(' ') || p.name || '—';
+    const pSal  = sl.isCpt ? (p.salary||0)*1.5  : (p.salary||0);
+    const pProj = sl.isCpt ? (projOverrides[p.player_id]??p.proj_dk_pts||0)*1.5 : (projOverrides[p.player_id]??p.proj_dk_pts||0);
+    return `<div class="lc-slot-sd${rowCls}">
+      <span class="lc-slot-role${roleCls}">${roleLabel}</span>
+      <span class="lc-slot-pos" style="background:${pc.bg};color:${pc.tx};">${pos}</span>
+      <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
+      <span class="lc-slot-name">${lastName}</span>
+      <span class="lc-slot-sal">${fmtSal(pSal)}</span>
+      <span class="lc-slot-proj">${fmtProj(pProj)}</span>
+    </div>`;
+  }
+
+  const sdSection = `
+    <div class="lc-shdr-sd">
+      <span class="lc-sh-label">Slot</span>
+      <span class="lc-sh-label" style="grid-column:2/4">Player</span>
+      <span></span>
+      <span class="lc-sh-stat">Sal</span>
+      <span class="lc-sh-stat">Proj</span>
     </div>
-    <div class="lc-rows">${rows}</div>
+    ${slots.map(sdRow).join('')}`;
+
+  return `<div class="lc-chip">
+    <div class="lc-chip-hd" style="border-bottom-color:rgba(251,191,36,.3);">
+      <span class="lc-chip-name">${s.name||'SD Lineup '+(i+1)}</span>
+      <span class="lc-badge sd-badge">SD</span>
+      <span class="lc-chip-pts">${proj.toFixed(1)} pts</span>
+      <span class="lc-chip-sal">$${sal.toLocaleString()}</span>
+      <button class="lc-chip-load" onclick="loadLineupCard_SD(${i})" title="Load into builder">↑ Load</button>
+      <button class="lc-chip-del" onclick="deleteSavedLineup(event,${i})" title="Delete">×</button>
+    </div>
+    <div class="lc-chip-slots">${sdSection}</div>
   </div>`;
 }
 
