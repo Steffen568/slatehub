@@ -4269,8 +4269,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <div class="opto-row"><label>Hitter Max Exp%</label><input class="opto-input" id="opto-expmax-hit" type="number" min="1" max="100" value="100" oninput="expHitterMax=+this.value"></div>
       <div class="opto-row classic-only"><label>Pitcher Max Exp%</label><input class="opto-input" id="opto-expmax-pit" type="number" min="1" max="100" value="100" oninput="expPitcherMax=+this.value"></div>
       <div class="opto-row sd-only" style="display:none"><label>CPT Max Exp%</label><input class="opto-input" id="opto-cpt-max" type="number" min="1" max="100" value="35" oninput="expCptMax=+this.value" title="Max % of lineups any player can appear as Captain"></div>
-      <div class="opto-row"><label>Max/Team</label><input class="opto-input" id="opto-maxteam" type="number" min="3" max="8" value="5" oninput="optoSettings.maxPerTeam=+this.value"></div>
-      <div class="opto-row"><label>Min Conf</label><input class="opto-input" id="opto-conf" type="number" min="0" max="10" value="0" oninput="optoSettings.minConfirmed=+this.value"></div>
+      <div class="opto-row classic-only"><label>Max/Team</label><input class="opto-input" id="opto-maxteam" type="number" min="3" max="8" value="5" oninput="optoSettings.maxPerTeam=+this.value"></div>
+      <div class="opto-row classic-only"><label>Min Conf</label><input class="opto-input" id="opto-conf" type="number" min="0" max="10" value="0" oninput="optoSettings.minConfirmed=+this.value"></div>
     </div>
     <!-- Stack Rules — rendered by renderStackRules() -->
     <div class="opto-col classic-only" id="opto-stack-col">
@@ -7486,9 +7486,17 @@ function optoAssembleLineup_Showdown(pool, { cptPid, flexPids }) {
 
 function generateLineups_Showdown() {
   const N = optoSettings.numLineups || 1;
-  const pool = [...allHitters, ...allPitchers].filter(p =>
-    !isExcluded(p) && (p.salary||0) > 0 && (projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0) > 0
-  );
+  // SD pool: include all players with salary. Players without projections get a
+  // salary-based baseline (pts-per-$1k × salary/1000) so pitchers aren't excluded.
+  const sdPoolAll = [...allHitters, ...allPitchers].filter(p => !isExcluded(p) && (p.salary||0) > 0);
+  const pool = sdPoolAll.map(p => {
+    const proj = projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
+    if (proj > 0) return p;
+    // Baseline estimate: league-avg ~3.5 pts per $1k salary for hitters, ~4.0 for pitchers
+    const isPit = (p.positions||[]).some(pos => ['SP','RP','P'].includes(pos));
+    const baseline = (isPit ? 4.0 : 3.5) * ((p.salary||0) / 1000);
+    return { ...p, proj_dk_pts: baseline };
+  });
   if (pool.length < 6) { showToast('Need at least 6 eligible players with projections'); return; }
   if (typeof solver === 'undefined') { showToast('LP solver not loaded — check internet connection'); return; }
 
