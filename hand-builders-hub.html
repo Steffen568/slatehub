@@ -5014,7 +5014,7 @@ async function loadPlayerPool(date, slate) {
   pitcherProjRaw.forEach(proj => {
     const name    = proj.full_name || '?';
     const ps      = pitcherStatMap[proj.player_id];
-    const salRow  = pitcherSalByName[name.toLowerCase()] || pitcherSalByName[normName(name)];
+    const salRow  = pitcherSalByName[name.toLowerCase()] || pitcherSalByName[normName(name)] || salByPid[proj.player_id] || null;
     const teamId  = spIdToTeamId[proj.player_id] || null;
     const hesInfo = proj.game_pk ? gameHesMap[proj.game_pk] : null;
 
@@ -5054,14 +5054,34 @@ async function loadPlayerPool(date, slate) {
     });
   });
 
-  // ── SD mode: build pitchers from dk_salaries for any SP/RP not already in allPitchers
-  // Needed because pitcherProjRaw is empty when no player_projections exist for the slate date
+  // ── SD mode: scope pitchers to this slate only ──────────────────────────
+  // pitcherProjRaw returns ALL pitchers on the date (all games), but SD is a single game.
+  // Filter allPitchers to only include players that appear on this SD slate,
+  // then backfill any SD-slate pitchers not already in allPitchers from dk_salaries.
   if (_contestMode === 'showdown') {
-    const knownPitIds = new Set(allPitchers.map(p => p.player_id));
+    // Build set of valid player names from the slate's dk_salaries rows (slate-scoped)
+    const slatePlayerNames = new Set();
+    const slatePlayerIds   = new Set();
+    (pitcherSalRes.data || []).forEach(r => {
+      if (r.player_id) slatePlayerIds.add(r.player_id);
+      if (r.name) { slatePlayerNames.add(r.name.toLowerCase()); slatePlayerNames.add(normName(r.name)); }
+    });
+
+    // Remove pitchers from other games (matched by name since MLB vs DK IDs differ)
+    allPitchers = allPitchers.filter(p =>
+      slatePlayerIds.has(p.player_id) ||
+      slatePlayerNames.has((p.name||'').toLowerCase()) ||
+      slatePlayerNames.has(normName(p.name||''))
+    );
+
+    // Backfill: add any SD-slate SP/RP not already in allPitchers
+    const knownPitIds   = new Set(allPitchers.map(p => p.player_id));
+    const knownPitNames = new Set(allPitchers.map(p => (p.name||'').toLowerCase()));
     (pitcherSalRes.data || [])
       .filter(r => (r.position||'').split('/').some(pos => ['SP','RP','P'].includes(pos.trim())))
       .forEach(r => {
-        if (!r.player_id || knownPitIds.has(r.player_id)) return;
+        if (!r.player_id) return;
+        if (knownPitIds.has(r.player_id) || knownPitNames.has((r.name||'').toLowerCase())) return;
         const teamId = abbrToTeamId[r.team] ?? null;
         allPitchers.push({
           player_id: r.player_id, name: r.name || '—',
