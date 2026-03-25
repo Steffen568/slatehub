@@ -7570,7 +7570,7 @@ function renderLineupCard_SD(s, i) {
     const p = s.lineup?.[sl.key];
     if (!p) return;
     sal  += sl.isCpt ? (p.salary||0)*1.5  : (p.salary||0);
-    proj += sl.isCpt ? (projOverrides[p.player_id]??p.proj_dk_pts||0)*1.5 : (projOverrides[p.player_id]??p.proj_dk_pts||0);
+    proj += sl.isCpt ? ((projOverrides[p.player_id]??p.proj_dk_pts)??0)*1.5 : ((projOverrides[p.player_id]??p.proj_dk_pts)??0);
   });
 
   const fmtSal  = v => v ? `$${(v/1000).toFixed(1)}k` : '—';
@@ -7588,7 +7588,7 @@ function renderLineupCard_SD(s, i) {
     const tc = abbrColor(p.team || '');
     const lastName = (p.name || '').split(' ').slice(1).join(' ') || p.name || '—';
     const pSal  = sl.isCpt ? (p.salary||0)*1.5  : (p.salary||0);
-    const pProj = sl.isCpt ? (projOverrides[p.player_id]??p.proj_dk_pts||0)*1.5 : (projOverrides[p.player_id]??p.proj_dk_pts||0);
+    const pProj = sl.isCpt ? ((projOverrides[p.player_id]??p.proj_dk_pts)??0)*1.5 : ((projOverrides[p.player_id]??p.proj_dk_pts)??0);
     return `<div class="lc-slot-sd${rowCls}">
       <span class="lc-slot-role${roleCls}">${roleLabel}</span>
       <span class="lc-slot-pos" style="background:${pc.bg};color:${pc.tx};">${pos}</span>
