@@ -4447,7 +4447,9 @@ let dragRole        = null;   // 'cpt' | 'flex' | null — set during SD pool dr
 
 // ── LINEUP HUB STATE ────────────────────────────────────────────────────────
 let lockedPlayers   = new Set();   // player_ids — must include
-let excludedPlayers = new Set();   // player_ids — individually excluded
+let excludedPlayers = new Set();   // player_ids — individually excluded (classic mode)
+let excludedCpt     = new Set();   // player_ids — excluded from CPT slot only (SD mode)
+let excludedFlex    = new Set();   // player_ids — excluded from FLEX slot only (SD mode)
 let teamExcludes    = new Set();   // team abbrs  — all players bulk-excluded
 let sortCol         = 'proj';
 let sortDir         = -1;          // -1 = desc, 1 = asc
@@ -5552,6 +5554,13 @@ function toggleExclude(e, pid) {
   e.stopPropagation();
   if (excludedPlayers.has(pid)) { excludedPlayers.delete(pid); }
   else { excludedPlayers.add(pid); lockedPlayers.delete(pid); }
+  renderPool();
+}
+function toggleExcludeSD(e, pid, role) {
+  e.stopPropagation();
+  const set = role === 'cpt' ? excludedCpt : excludedFlex;
+  if (set.has(pid)) { set.delete(pid); }
+  else { set.add(pid); }
   renderPool();
 }
 function toggleTeamExclude(abbr) {
@@ -7392,7 +7401,8 @@ function renderSDPlayerRow(p, expPct, role) {
   const inFlex   = SD_LINEUP_SLOTS.filter(s => !s.isCpt).some(s => lineup[s.key]?.player_id === p.player_id);
   const inLineup = isCpt ? inCpt : inFlex;
   const locked   = lockedPlayers.has(p.player_id);
-  const excluded = isExcluded(p);
+  const roleExcluded = isCpt ? excludedCpt.has(p.player_id) : excludedFlex.has(p.player_id);
+  const excluded = roleExcluded || teamExcludes.has(p.team);
   const tc       = abbrColor(p.team);
   const teamTag  = p.team ? `<span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${p.team}</span>` : '';
   const badge    = lineupBadge(p);
@@ -7413,7 +7423,7 @@ function renderSDPlayerRow(p, expPct, role) {
     ondragstart="dragStart(event,${p.player_id},'${role}')" ondragend="dragEnd(event)"
     onclick="addToLineup_SD(${p.player_id},'${role}')">
     <td><button class="pt-icon-btn${locked?' locked':''}" onclick="toggleLock(event,${p.player_id})" title="Lock">${locked ? SVG_LOCK_LOCKED : SVG_LOCK_OPEN}</button></td>
-    <td><button class="pt-icon-btn${excluded?' excluded':''}" onclick="toggleExclude(event,${p.player_id})" title="Exclude">${SVG_BAN}</button></td>
+    <td><button class="pt-icon-btn${excluded?' excluded':''}" onclick="toggleExcludeSD(event,${p.player_id},'${role}')" title="Exclude from ${isCpt?'CPT':'FLEX'}">${SVG_BAN}</button></td>
     <td><div class="pt-name-cell">${teamTag}${badge}<span class="pt-name">${p.name}</span></div></td>
     <td><span class="pt-muted" style="font-size:10px;">${pos}</span></td>
     <td class="pt-sal" style="${isCpt?'color:#fbbf24;font-weight:600;':''}">$${sal.toLocaleString()}</td>
@@ -7467,8 +7477,10 @@ function optoBuildLP_Showdown(pool, rule, cptCount, totalGenerated) {
     const ck = `c${pid}`;
     const fk = `f${pid}`;
 
-    // CPT exposure cap — don't even add the CPT variable if this player has hit the cap
-    const cptBanned = (cptCount[pid] || 0) >= cptCapMax;
+    // CPT: skip if exposure-capped OR role-excluded from CPT
+    const cptBanned = (cptCount[pid] || 0) >= cptCapMax || excludedCpt.has(pid);
+    // FLEX: skip if role-excluded from FLEX
+    const flexBanned = excludedFlex.has(pid);
 
     if (!cptBanned) {
       // CPT variable
@@ -7482,15 +7494,18 @@ function optoBuildLP_Showdown(pool, rule, cptCount, totalGenerated) {
       model.ints[ck] = 1;
     }
 
-    // FLEX variable
-    model.variables[fk] = {
-      proj: proj,
-      salary: sal,
-      flex_count: 1,
-      total: 1,
-      [`same_${pid}`]: 1,
-    };
-    model.ints[fk] = 1;
+    // FLEX variable — skip if role-excluded from FLEX
+    if (flexBanned && cptBanned) return; // fully excluded from both roles
+    if (!flexBanned) {
+      model.variables[fk] = {
+        proj: proj,
+        salary: sal,
+        flex_count: 1,
+        total: 1,
+        [`same_${pid}`]: 1,
+      };
+      model.ints[fk] = 1;
+    }
 
     // Mutual exclusion: player can be CPT or FLEX, not both (only needed if both exist)
     model.constraints[`same_${pid}`] = { max: 1 };
@@ -7547,7 +7562,9 @@ function generateLineups_Showdown() {
   const N = optoSettings.numLineups || 1;
   // SD pool: include all players with salary. Players without projections get a
   // salary-based baseline so pitchers aren't excluded from optimization.
-  const sdPoolAll = [...allHitters, ...allPitchers].filter(p => !isExcluded(p) && (p.salary||0) > 0);
+  // SD pool: exclude only by team (global), not by role-specific exclusions
+  // (those are handled in the LP builder per CPT/FLEX variable)
+  const sdPoolAll = [...allHitters, ...allPitchers].filter(p => !teamExcludes.has(p.team) && (p.salary||0) > 0);
   const pool = sdPoolAll.map(p => {
     const proj = projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
     if (proj > 0) return p;
@@ -7588,8 +7605,10 @@ function generateLineups_Showdown() {
     const rule = optoPickRule(lineupIdx, N);
     // Add diversity: exclude players over exposure cap (matches classic approach)
     const capExcluded = new Set();
-    const globalMax = Math.max(1, Math.ceil(N * (optoSettings.exposureMax || 65) / 100));
     for (const [pid, cnt] of Object.entries(appearCount)) {
+      const isPit = (pool.find(p => p.player_id === +pid)?.positions || []).some(pos => ['SP','RP','P'].includes(pos));
+      const globalCap = isPit ? expPitcherMax : expHitterMax;
+      const globalMax = Math.max(1, Math.ceil(N * globalCap / 100));
       if (cnt >= globalMax) capExcluded.add(+pid);
     }
     // Per-player exposure caps
