@@ -19,7 +19,7 @@ SETUP:
 """
 
 import os, requests
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from supabase import create_client
 from dotenv import load_dotenv
 
@@ -151,26 +151,38 @@ def run():
         return
 
     today = str(date.today())
-    print(f"  Date: {today}")
+    tomorrow = str(date.today() + timedelta(days=1))
+    print(f"  Date: {today} (also checking {tomorrow} for UTC-shifted games)")
 
-    # Fetch our games for today to get game_pks
+    # Fetch games for today AND tomorrow — late-night games (US time) have
+    # UTC commence dates one day ahead, so we need both.
     db_games = (sb.table("games")
                   .select("game_pk, home_team, away_team, game_date")
-                  .eq("game_date", today)
+                  .in_("game_date", [today, tomorrow])
                   .execute().data)
 
     if not db_games:
-        print("  No games in DB for today — skipping")
+        print("  No games in DB for today/tomorrow — skipping")
         return
 
-    print(f"  Games in DB today: {len(db_games)}")
+    print(f"  Games in DB: {len(db_games)} ({today} + {tomorrow})")
 
-    # Build lookup: (mapped_home, mapped_away) -> game_pk
-    # Our DB home_team/away_team values may be short names like "Yankees"
+    # Build lookup: match by team names.
+    # DB uses full names ("New York Yankees"); Odds API also uses full names.
+    # TEAM_NAME_MAP maps Odds API names → short DB names, but our DB actually
+    # stores full names. Build a reverse map: short → full for flexible matching.
+    short_to_full = {v: k for k, v in TEAM_NAME_MAP.items()}
+
     db_lookup = {}
     for g in db_games:
-        key = (g["home_team"], g["away_team"])
-        db_lookup[key] = g["game_pk"]
+        # Store both the raw DB name AND the full Odds API name as keys
+        home = g["home_team"]
+        away = g["away_team"]
+        db_lookup[(home, away)] = g
+        # Also index by Odds API full name → game, using reverse map
+        home_full = short_to_full.get(home, home)
+        away_full = short_to_full.get(away, away)
+        db_lookup[(home_full, away_full)] = g
 
     # Fetch odds
     print("  Fetching from The Odds API...")
@@ -186,20 +198,18 @@ def run():
     unmatched = []
 
     for og in odds_games:
-        # Only process today's games
-        commence = og.get("commence_time", "")
-        if today not in commence:
-            continue
-
         raw_home = og.get("home_team", "")
         raw_away = og.get("away_team", "")
         mapped_home = TEAM_NAME_MAP.get(raw_home, raw_home)
         mapped_away = TEAM_NAME_MAP.get(raw_away, raw_away)
 
-        game_pk = db_lookup.get((mapped_home, mapped_away))
-        if not game_pk:
+        # Try both raw Odds API names and mapped short names
+        db_game = (db_lookup.get((raw_home, raw_away))
+                   or db_lookup.get((mapped_home, mapped_away)))
+        if not db_game:
             unmatched.append(f"{raw_away} @ {raw_home}")
             continue
+        game_pk = db_game["game_pk"]
 
         bookmakers = og.get("bookmakers", [])
 
@@ -235,9 +245,9 @@ def run():
 
         record = {
             "game_pk"      : game_pk,
-            "game_date"    : today,
-            "home_team"    : mapped_home,
-            "away_team"    : mapped_away,
+            "game_date"    : db_game["game_date"],
+            "home_team"    : db_game["home_team"],
+            "away_team"    : db_game["away_team"],
             "game_total"   : game_total,
             "home_implied" : home_implied,
             "away_implied" : away_implied,
