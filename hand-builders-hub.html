@@ -7498,13 +7498,14 @@ function generateLineups_Showdown() {
     const baseline = (isPit ? 2.5 : 2.0) * ((p.salary||0) / 1000);
     return { ...p, proj_dk_pts: baseline };
   });
-  // Debug: log pool composition so we can verify pitchers are included
+  // Debug: log pool composition
   const pitInPool = pool.filter(p => (p.positions||[]).some(pos => ['SP','RP','P'].includes(pos)));
   const hitInPool = pool.filter(p => !(p.positions||[]).some(pos => ['SP','RP','P'].includes(pos)));
   console.log(`[SD Optimizer] Pool: ${pool.length} total — ${pitInPool.length} pitchers, ${hitInPool.length} hitters`);
-  console.log(`[SD Optimizer] allPitchers: ${allPitchers.length}, allHitters: ${allHitters.length}`);
-  if (pitInPool.length > 0) console.log('[SD Optimizer] Pitchers in pool:', pitInPool.map(p => `${p.name} ($${p.salary}, proj=${p.proj_dk_pts})`));
-  else console.warn('[SD Optimizer] WARNING: No pitchers in pool! Check allPitchers array.');
+  // Log top 5 pitchers and top 5 hitters by value to understand LP choices
+  const valSort = (a,b) => ((b.proj_dk_pts||0)/(b.salary||1)) - ((a.proj_dk_pts||0)/(a.salary||1));
+  console.table(pitInPool.sort(valSort).slice(0,5).map(p => ({name:p.name, pos:(p.positions||[]).join('/'), sal:p.salary, proj:p.proj_dk_pts, val:((p.proj_dk_pts||0)/(p.salary||1)*1000).toFixed(2)})));
+  console.table(hitInPool.sort(valSort).slice(0,5).map(p => ({name:p.name, pos:(p.positions||[]).join('/'), sal:p.salary, proj:p.proj_dk_pts, val:((p.proj_dk_pts||0)/(p.salary||1)*1000).toFixed(2)})));
   if (pool.length < 6) { showToast('Need at least 6 eligible players with projections'); return; }
   if (typeof solver === 'undefined') { showToast('LP solver not loaded — check internet connection'); return; }
 
@@ -7560,6 +7561,13 @@ function generateLineups_Showdown() {
     });
     cptCount[sdLineup.cpt.player_id] = (cptCount[sdLineup.cpt.player_id]||0) + 1;
     const hasPit = Object.values(sdLineup).some(p => p && (p.positions||[]).some(pos => ['SP','RP','P'].includes(pos)));
+    if (generated.length === 0) {
+      console.log('[SD Lineup 1 details]:');
+      console.table(SD_LINEUP_SLOTS.map(sl => {
+        const p = sdLineup[sl.key]; if (!p) return {slot:sl.label};
+        return {slot:sl.label, name:p.name, pos:(p.positions||[]).join('/'), sal:sl.isCpt?(p.salary||0)*1.5:(p.salary||0), proj:sl.isCpt?(p.proj_dk_pts||0)*1.5:(p.proj_dk_pts||0)};
+      }));
+    }
     console.log(`[SD Lineup ${generated.length+1}] CPT: ${sdLineup.cpt.name} (cptCount: ${cptCount[sdLineup.cpt.player_id]}) | Pitcher: ${hasPit ? 'YES' : 'NO'} | Proj: ${proj.toFixed(1)}`);
 
     return { name: `SD Lineup ${generated.length+1}`, totProj: proj, salary: sal, lineup: sdLineup, ts: Date.now(), mode: 'showdown' };
