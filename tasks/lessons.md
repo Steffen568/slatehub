@@ -134,6 +134,14 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 **What happened:** `renderLineupCard_SD` used classes (`lc-row`, `lc-pos`, `lc-name`, etc.) with zero CSS definitions. Classic cards use `lc-chip` / `lc-slot-*` classes which have full styling.
 **Rule:** SD lineup cards must use the same `lc-chip` container structure as classic, with SD-specific grid layout (`lc-slot-sd`) for the player rows.
 
+### SD reliever baseline projections were absurdly high (Session 25)
+**What happened:** All 52 pitchers in dk_salaries got baseline projections of 2.5 pts/$1K. Only 2 are actual starters with real projections; the other 50 are relievers. A reliever at $10K got 25 pts baseline — higher than Aaron Judge's real 10.7 pts. The LP stuffed lineups with relievers, and solving 180 binary variables made it slow (~1 minute).
+**Rule:** In SD mode, pitchers WITHOUT real projections from `player_projections` are relievers. They should get a flat low baseline (~3 pts) reflecting ~1 IP of relief work, not a salary-scaled baseline. Only starters have real projections and should drive lineup construction.
+
+### SD optimizer was MINIMIZING instead of maximizing — wrong jsLPSolver property (Session 25)
+**What happened:** `optoBuildLP_Showdown` used `optiType: 'max'` but jsLPSolver expects `opType: 'max'`. With the wrong property name, the solver saw no optimization direction and defaulted to minimization. This produced ~36-point lineups (the WORST possible) with zero pitchers, because the solver actively avoided high-projection players.
+**Rule:** jsLPSolver model properties are: `optimize` (string — attribute name), `opType` (string — `'max'` or `'min'`), `constraints`, `variables`, `ints`. NOT `optiType`. Always cross-reference with the classic optimizer model setup when building new optimizer modes.
+
 ### optoSolve_Showdown matched wrong keys from solver result (Session 25)
 **What happened:** `key.startsWith('c')` matched solver metadata like `cpt_count`. `key.startsWith('f')` matched `flex_count`, `feasible`. Also `byId[stringPid]` failed because map keys were numeric `player_id`.
 **Rule:** Use regex `/^([cf])(\d+)$/` to extract PIDs from solver result. Use `String(player_id)` for lookup maps when PIDs come from string sources.
