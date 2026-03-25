@@ -4213,6 +4213,10 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
         <button class="bld-btn" style="background:rgba(99,179,237,.1);border-color:rgba(99,179,237,.35);color:#63b3ed;" onclick="generateLineups()">Generate</button>
         <button class="bld-btn primary" onclick="saveLineup()">Save Lineup</button>
         <button class="bld-btn" onclick="clearLineup()">Clear</button>
+        <label class="bld-btn sd-only" style="display:none;background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.35);color:#fbbf24;cursor:pointer;" title="Import DKEntries.csv for export">
+          DK CSV <input type="file" accept=".csv" style="display:none" onchange="importDKTemplate(this.files[0])">
+        </label>
+        <button class="bld-btn sd-only" style="display:none;background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportToDK()" id="dk-export-btn" disabled title="Generate lineups first">Export DK</button>
         <label class="bld-btn" style="cursor:pointer;" title="Upload your DK entries CSV — lineups will be filled in automatically">
           ↑ DK Template
           <input type="file" accept=".csv" style="display:none;" onchange="fillDKTemplate(event)">
@@ -4460,6 +4464,7 @@ let expHitterMax    = 100;         // global hitter exposure cap %
 let expPitcherMax   = 100;         // global pitcher exposure cap %
 let expCptMax       = 35;          // Showdown: max % any player can appear as CPT
 let _contestMode    = 'classic';   // 'classic' | 'showdown'
+let _dkTemplate     = null;        // Parsed DKEntries.csv: { entries: [], cptIds: {name→id}, utilIds: {name→id} }
 let dkDraftgroupMapCPT  = {};      // Showdown: player name → CPT draftgroup ID
 let dkDraftgroupMapFLEX = {};      // Showdown: player name → FLEX draftgroup ID
 let activeBuildId = null;     // ID of currently displayed build
@@ -7666,6 +7671,121 @@ function generateLineups_Showdown() {
   renderBuildTabs();
   renderSavedCards();
   showToast(`Generated ${generated.length} SD lineup${generated.length>1?'s':''}!`);
+}
+
+// ── DK CSV IMPORT / EXPORT ────────────────────────────────────────────────────
+
+function importDKTemplate(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const text = e.target.result;
+    const rows = text.split('\n').map(r => r.split(','));
+    const entries = [];
+    const cptIds = {};   // normalized name → DK draftable ID (CPT slot)
+    const utilIds = {};  // normalized name → DK draftable ID (UTIL slot)
+
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      // Entry rows: have Entry ID in col A
+      if (r[0] && /^\d+$/.test(r[0].trim())) {
+        entries.push({
+          entryId: r[0].trim(),
+          contestName: r[1] || '',
+          contestId: r[2] || '',
+          entryFee: r[3] || '',
+        });
+      }
+      // Player pool on right side: col 13 = Name, col 14 = ID, col 15 = Roster Position (CPT/UTIL)
+      // CSV columns L=11, M=12, N=13(Name), O=14(ID), P=15(RosterPos)
+      const name = (r[13] || '').trim();
+      const dkId = (r[14] || '').trim();
+      const rosterPos = (r[15] || '').trim();
+      if (name && dkId && /^\d+$/.test(dkId)) {
+        const nName = normName(name);
+        const lName = name.toLowerCase();
+        if (rosterPos === 'CPT') {
+          cptIds[nName] = dkId;
+          cptIds[lName] = dkId;
+        } else if (rosterPos === 'UTIL') {
+          utilIds[nName] = dkId;
+          utilIds[lName] = dkId;
+        }
+      }
+    }
+
+    _dkTemplate = { entries, cptIds, utilIds };
+    const btn = document.getElementById('dk-export-btn');
+    if (btn) btn.disabled = false;
+    showToast(`DK CSV imported: ${entries.length} entries, ${Object.keys(cptIds).length/2} CPT IDs, ${Object.keys(utilIds).length/2} UTIL IDs`);
+    console.log('[DK Import] entries:', entries.length, 'cptIds:', Object.keys(cptIds).length/2, 'utilIds:', Object.keys(utilIds).length/2);
+  };
+  reader.readAsText(file);
+}
+
+function lookupDkId(playerName, role) {
+  if (!_dkTemplate) return null;
+  const map = role === 'cpt' ? _dkTemplate.cptIds : _dkTemplate.utilIds;
+  return map[playerName.toLowerCase()] || map[normName(playerName)] || null;
+}
+
+function exportToDK() {
+  if (!_dkTemplate) { showToast('Import DK CSV first'); return; }
+
+  // Get active build lineups
+  const builds = getBuilds();
+  const activeBuild = builds.find(b => b.id === activeBuildId);
+  if (!activeBuild || !activeBuild.lineups.length) { showToast('No lineups to export'); return; }
+
+  const lineups = activeBuild.lineups;
+  const entries = _dkTemplate.entries;
+
+  if (lineups.length > entries.length) {
+    showToast(`Warning: ${lineups.length} lineups but only ${entries.length} DK entries — extra lineups will be skipped`);
+  }
+
+  // Build CSV header
+  const csvRows = ['Entry ID,Contest Name,Contest ID,Entry Fee,CPT,UTIL,UTIL,UTIL,UTIL,UTIL'];
+  const unmatchedPlayers = new Set();
+
+  const count = Math.min(lineups.length, entries.length);
+  for (let i = 0; i < count; i++) {
+    const lu = lineups[i];
+    const entry = entries[i];
+    const lineup = lu.lineup || {};
+
+    // CPT
+    const cptPlayer = lineup.cpt;
+    const cptId = cptPlayer ? lookupDkId(cptPlayer.name, 'cpt') : '';
+    if (cptPlayer && !cptId) unmatchedPlayers.add(cptPlayer.name + ' (CPT)');
+
+    // FLEX 1-5
+    const flexIds = [];
+    for (let f = 1; f <= 5; f++) {
+      const fp = lineup[`flex${f}`];
+      const fId = fp ? lookupDkId(fp.name, 'util') : '';
+      if (fp && !fId) unmatchedPlayers.add(fp.name + ' (UTIL)');
+      flexIds.push(fId || '');
+    }
+
+    csvRows.push(`${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},${cptId || ''},${flexIds.join(',')}`);
+  }
+
+  if (unmatchedPlayers.size > 0) {
+    console.warn('[DK Export] Unmatched players:', [...unmatchedPlayers]);
+    showToast(`Warning: ${unmatchedPlayers.size} players could not be matched to DK IDs — check console`);
+  }
+
+  // Download
+  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `DKEntries_filled_${new Date().toISOString().slice(0,16).replace(':','')}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  showToast(`Exported ${count} lineups to DK CSV!`);
 }
 
 // ── SD LINEUP CARD ────────────────────────────────────────────────────────────
