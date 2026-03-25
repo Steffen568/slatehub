@@ -5010,93 +5010,111 @@ async function loadPlayerPool(date, slate) {
     });
   });
 
-  // Pitchers: built directly from player_projections (MLB API IDs — avoids DK/MLB ID mismatch)
-  pitcherProjRaw.forEach(proj => {
-    const name    = proj.full_name || '?';
-    const ps      = pitcherStatMap[proj.player_id];
-    const salRow  = pitcherSalByName[name.toLowerCase()] || pitcherSalByName[normName(name)] || salByPid[proj.player_id] || null;
-    const teamId  = spIdToTeamId[proj.player_id] || null;
-    const hesInfo = proj.game_pk ? gameHesMap[proj.game_pk] : null;
-
-    allPitchers.push({
-      player_id:        proj.player_id,
-      dk_id:            salRow?.player_id || null,  // DK player ID for CSV export
-      name,
-      positions:        ['SP'],
-      salary:           salRow?.salary || null,
-      team_id:          teamId,
-      team:             proj.team || '',
-      game_pk:          proj.game_pk || null,
-      in_lineup:        false,
-      lineup_confirmed: false,
-      batting_order:    null,
-      proj_dk_pts:      proj.proj_dk_pts  ?? null,
-      proj_floor:       proj.proj_floor   ?? null,
-      proj_ceiling:     proj.proj_ceiling ?? null,
-      proj_hr: null, proj_r: null, proj_rbi: null, proj_sb: null,
-      proj_ip:          proj.proj_ip    ?? null,
-      proj_ks:          proj.proj_ks    ?? null,
-      proj_er:          proj.proj_er    ?? null,
-      win_prob:         proj.win_prob   ?? null,
-      stats_level:      proj.stats_level ?? 'MLB',
-      wrc_plus: null, woba: null, iso: null,
-      sp_name: null, sp_grade: null,
-      hes:              hesInfo?.score ?? null,
-      pms:              null,
-      xfip:             ps?.xfip          ?? null,
-      k_pct:            ps?.k_pct         ?? null,
-      stuff_plus:       ps?.stuff_plus    ?? null,
-      location_plus:    ps?.location_plus ?? null,
-      pitching_plus:    ps?.pitching_plus ?? null,
-      era:              ps?.era           ?? null,
-      sp_grade_self:    ps ? computeSpGrade(ps) : null,
-      proj_ownership:   proj.proj_ownership ?? null,
-    });
-  });
-
-  // ── SD mode: scope pitchers to this slate only ──────────────────────────
-  // pitcherProjRaw returns ALL pitchers on the date (all games), but SD is a single game.
-  // Filter allPitchers to only include players that appear on this SD slate,
-  // then backfill any SD-slate pitchers not already in allPitchers from dk_salaries.
+  // ── Pitchers ──────────────────────────────────────────────────────────────
+  // SD mode: build pitchers ONLY from the slate's dk_salaries (guarantees single-game scope).
+  // Enrich with projections/stats by matching name against pitcherProjRaw.
+  // Classic mode: build from pitcherProjRaw (player_projections) with salary from dk_salaries.
   if (_contestMode === 'showdown') {
-    // Build set of valid player names from the slate's dk_salaries rows (slate-scoped)
-    const slatePlayerNames = new Set();
-    const slatePlayerIds   = new Set();
-    (pitcherSalRes.data || []).forEach(r => {
-      if (r.player_id) slatePlayerIds.add(r.player_id);
-      if (r.name) { slatePlayerNames.add(r.name.toLowerCase()); slatePlayerNames.add(normName(r.name)); }
+    // Build projection lookup by name for enrichment
+    const pitProjByName = {};
+    pitcherProjRaw.forEach(proj => {
+      if (proj.full_name) {
+        pitProjByName[proj.full_name.toLowerCase()] = proj;
+        pitProjByName[normName(proj.full_name)]     = proj;
+      }
     });
 
-    // Remove pitchers from other games (matched by name since MLB vs DK IDs differ)
-    allPitchers = allPitchers.filter(p =>
-      slatePlayerIds.has(p.player_id) ||
-      slatePlayerNames.has((p.name||'').toLowerCase()) ||
-      slatePlayerNames.has(normName(p.name||''))
-    );
-
-    // Backfill: add any SD-slate SP/RP not already in allPitchers
-    const knownPitIds   = new Set(allPitchers.map(p => p.player_id));
-    const knownPitNames = new Set(allPitchers.map(p => (p.name||'').toLowerCase()));
     (pitcherSalRes.data || [])
       .filter(r => (r.position||'').split('/').some(pos => ['SP','RP','P'].includes(pos.trim())))
       .forEach(r => {
         if (!r.player_id) return;
-        if (knownPitIds.has(r.player_id) || knownPitNames.has((r.name||'').toLowerCase())) return;
-        const teamId = abbrToTeamId[r.team] ?? null;
+        const teamId  = abbrToTeamId[r.team] ?? null;
+        const gamePk  = teamId ? teamGameMap[teamId] : null;
+        const hesInfo = gamePk ? gameHesMap[gamePk] : null;
+        // Enrich with projection data if available (match by name)
+        const proj = pitProjByName[(r.name||'').toLowerCase()] || pitProjByName[normName(r.name||'')] || null;
+        const ps   = proj ? pitcherStatMap[proj.player_id] : null;
+
         allPitchers.push({
-          player_id: r.player_id, name: r.name || '—',
-          positions: ['SP'], salary: r.salary || 0,
-          team_id: teamId, team: r.team || '',
-          game_pk: teamId ? teamGameMap[teamId] : null,
-          in_lineup: false, lineup_confirmed: false, batting_order: null,
-          proj_dk_pts: null, proj_floor: null, proj_ceiling: null,
+          player_id:        proj?.player_id || r.player_id,
+          dk_id:            r.player_id,
+          name:             r.name || '—',
+          positions:        ['SP'],
+          salary:           r.salary || 0,
+          team_id:          teamId,
+          team:             r.team || '',
+          game_pk:          gamePk,
+          in_lineup:        false,
+          lineup_confirmed: false,
+          batting_order:    null,
+          proj_dk_pts:      proj?.proj_dk_pts  ?? null,
+          proj_floor:       proj?.proj_floor   ?? null,
+          proj_ceiling:     proj?.proj_ceiling ?? null,
           proj_hr: null, proj_r: null, proj_rbi: null, proj_sb: null,
-          proj_ip: null, proj_ks: null, proj_er: null, win_prob: null,
-          proj_ownership: null, is_pitcher: true, primary_position: 'SP',
-          xfip: null, k_pct: null, stuff_plus: null, location_plus: null,
-          pitching_plus: null, era: null, sp_grade_self: null, hes: null, pms: null,
+          proj_ip:          proj?.proj_ip    ?? null,
+          proj_ks:          proj?.proj_ks    ?? null,
+          proj_er:          proj?.proj_er    ?? null,
+          win_prob:         proj?.win_prob   ?? null,
+          stats_level:      proj?.stats_level ?? 'MLB',
+          proj_ownership:   proj?.proj_ownership ?? null,
+          wrc_plus: null, woba: null, iso: null,
+          sp_name: null, sp_grade: null,
+          hes:              hesInfo?.score ?? null,
+          pms:              null,
+          is_pitcher:       true,
+          primary_position: 'SP',
+          xfip:             ps?.xfip          ?? null,
+          k_pct:            ps?.k_pct         ?? null,
+          stuff_plus:       ps?.stuff_plus    ?? null,
+          location_plus:    ps?.location_plus ?? null,
+          pitching_plus:    ps?.pitching_plus ?? null,
+          era:              ps?.era           ?? null,
+          sp_grade_self:    ps ? computeSpGrade(ps) : null,
         });
       });
+  } else {
+    pitcherProjRaw.forEach(proj => {
+      const name    = proj.full_name || '?';
+      const ps      = pitcherStatMap[proj.player_id];
+      const salRow  = pitcherSalByName[name.toLowerCase()] || pitcherSalByName[normName(name)] || null;
+      const teamId  = spIdToTeamId[proj.player_id] || null;
+      const hesInfo = proj.game_pk ? gameHesMap[proj.game_pk] : null;
+
+      allPitchers.push({
+        player_id:        proj.player_id,
+        dk_id:            salRow?.player_id || null,
+        name,
+        positions:        ['SP'],
+        salary:           salRow?.salary || null,
+        team_id:          teamId,
+        team:             proj.team || '',
+        game_pk:          proj.game_pk || null,
+        in_lineup:        false,
+        lineup_confirmed: false,
+        batting_order:    null,
+        proj_dk_pts:      proj.proj_dk_pts  ?? null,
+        proj_floor:       proj.proj_floor   ?? null,
+        proj_ceiling:     proj.proj_ceiling ?? null,
+        proj_hr: null, proj_r: null, proj_rbi: null, proj_sb: null,
+        proj_ip:          proj.proj_ip    ?? null,
+        proj_ks:          proj.proj_ks    ?? null,
+        proj_er:          proj.proj_er    ?? null,
+        win_prob:         proj.win_prob   ?? null,
+        stats_level:      proj.stats_level ?? 'MLB',
+        wrc_plus: null, woba: null, iso: null,
+        sp_name: null, sp_grade: null,
+        hes:              hesInfo?.score ?? null,
+        pms:              null,
+        xfip:             ps?.xfip          ?? null,
+        k_pct:            ps?.k_pct         ?? null,
+        stuff_plus:       ps?.stuff_plus    ?? null,
+        location_plus:    ps?.location_plus ?? null,
+        pitching_plus:    ps?.pitching_plus ?? null,
+        era:              ps?.era           ?? null,
+        sp_grade_self:    ps ? computeSpGrade(ps) : null,
+        proj_ownership:   proj.proj_ownership ?? null,
+      });
+    });
   }
 
   // ── Filter hitters: lineup players only (skip in SD mode — all slate players are eligible)
