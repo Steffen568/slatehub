@@ -7532,14 +7532,15 @@ function generateLineups_Showdown() {
   const pool = sdPoolAll.map(p => {
     const proj = projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
     if (proj > 0) return p;
-    // Baseline for players without real projections:
-    // - Hitters: 2.0 pts/$1K (reasonable for a full game of PA)
-    // - Pitchers WITHOUT projections are relievers (starters have real projections).
-    //   Relievers typically pitch 1 IP in SD → ~3 DK pts regardless of salary.
+    // Pitchers without real projections (relievers) are excluded from the LP
+    // entirely — only starters have projections from compute_projections.py.
+    // Users can add relievers via manual projection override if desired.
     const isPit = (p.positions||[]).some(pos => ['SP','RP','P'].includes(pos));
-    const baseline = isPit ? 3.0 : 2.0 * ((p.salary||0) / 1000);
+    if (isPit) return { ...p, proj_dk_pts: 0 };
+    // Hitters: salary-based baseline (2.0 pts/$1K)
+    const baseline = 2.0 * ((p.salary||0) / 1000);
     return { ...p, proj_dk_pts: baseline };
-  });
+  }).filter(p => (p.proj_dk_pts ?? 0) > 0 || (projOverrides[p.player_id] ?? 0) > 0);
   // Debug: log pool composition
   const pitInPool = pool.filter(p => (p.positions||[]).some(pos => ['SP','RP','P'].includes(pos)));
   const hitInPool = pool.filter(p => !(p.positions||[]).some(pos => ['SP','RP','P'].includes(pos)));
