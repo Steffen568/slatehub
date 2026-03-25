@@ -35,6 +35,7 @@ import os, math
 from datetime import date, datetime, timezone
 from supabase import create_client
 from dotenv import load_dotenv
+from config import SEASON
 
 load_dotenv()
 sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
@@ -818,13 +819,41 @@ def fetch_today_data(target_date: str) -> dict:
 
     print(f"  Bullpen quality computed for {len(bullpen_quality)} teams")
 
-    # Batter splits (current season)
+    # Batter splits — use current season once avg PA >= 75, else fall back to prior season
+    # Threshold of 75 PA is typically reached ~4-5 weeks into the season.
+    # Chunked into <=150-ID batches to avoid silent URL-too-long failures.
+    PA_THRESHOLD = 75
     batter_splits = {}
     if player_ids:
-        rows = sb.table('batter_splits').select(
-            'player_id,split,pa,wrc_plus,woba,k_pct,bb_pct'
-        ).in_('player_id', player_ids).eq('season', 2025).execute().data or []
-        for r in rows:
+        def _fetch_splits(season):
+            rows = []
+            for i in range(0, len(player_ids), 150):
+                chunk = player_ids[i:i + 150]
+                chunk_rows = sb.table('batter_splits').select(
+                    'player_id,split,pa,wrc_plus,woba,k_pct,bb_pct'
+                ).in_('player_id', chunk).eq('season', season).execute().data or []
+                rows.extend(chunk_rows)
+            return rows
+
+        current_rows = _fetch_splits(SEASON)
+        if current_rows:
+            avg_pa = sum(r.get('pa') or 0 for r in current_rows) / len(current_rows)
+        else:
+            avg_pa = 0
+
+        if avg_pa >= PA_THRESHOLD:
+            split_rows = current_rows
+            print(f"  Batter splits: using {SEASON} (avg PA={avg_pa:.0f}, {len(split_rows)} rows)")
+        else:
+            fallback = SEASON - 1
+            if current_rows:
+                print(f"  Batter splits: {SEASON} sample too thin (avg PA={avg_pa:.0f}) — using {fallback}")
+            else:
+                print(f"  Batter splits: no {SEASON} data yet — using {fallback}")
+            split_rows = _fetch_splits(fallback)
+            print(f"  Batter splits: loaded {len(split_rows)} rows from {fallback}")
+
+        for r in split_rows:
             pid = r['player_id']
             if pid not in batter_splits:
                 batter_splits[pid] = {}

@@ -115,3 +115,13 @@ Found CAN, DR, ISR, ITA, MEX, NED, PR, USA, VEN rows from old WBC DFS data. Thes
 2. Re-run `load_dk_salaries.py` (pipeline re-uploads all current slates with correct IDs)
 3. Re-run `diagnose_salary_mismatch.py` to verify — expect 0 ID mismatches
 4. If any stale rows with wrong IDs remain from old slate labels not in the current run, fix with the auto-generated SQL from the diagnose output
+
+### load_rosters.py failed during --stats run
+**What happened:**     return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 2: character maps to <undefined>
+**Rule:** Check that py -3.12 and all dependencies are installed. Check API availability.
+
+### Projection row count too low after compute_projections.py
+**What happened:** Only 20 rows in player_projections for 2026-03-25
+**Rule:** Check that load_schedule.py ran successfully and lineups loaded before projections.
