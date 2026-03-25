@@ -7412,7 +7412,7 @@ function optoBuildLP_Showdown(pool, rule, cptCount, totalGenerated) {
   // FLEX: salary×1.0, proj×1.0
   const model = {
     optimize: 'proj',
-    optiType: 'max',
+    opType: 'max',
     constraints: {},
     variables: {},
     ints: {},
@@ -7477,6 +7477,15 @@ function optoBuildLP_Showdown(pool, rule, cptCount, totalGenerated) {
     model.constraints[`same_${pid}`] = { max: 1 };
   });
 
+  // ── DEBUG: model composition ──
+  const varKeys = Object.keys(model.variables);
+  const cptVars = varKeys.filter(k => k.startsWith('c'));
+  const flexVars = varKeys.filter(k => k.startsWith('f'));
+  // Find top 5 variables by projection
+  const topByProj = varKeys.slice().sort((a,b) => (model.variables[b].proj||0) - (model.variables[a].proj||0)).slice(0,10);
+  console.log(`[SD LP Model] ${cptVars.length} CPT vars, ${flexVars.length} FLEX vars, ${Object.keys(model.constraints).length} constraints`);
+  console.table(topByProj.map(k => ({key:k, proj:(model.variables[k].proj||0).toFixed(1), salary:model.variables[k].salary, cpt:model.variables[k].cpt_count||0, flex:model.variables[k].flex_count||0})));
+
   // Lock constraints
   locked.forEach(pid => {
     // Force this player into lineup (CPT or FLEX — just require total ≥ 1 by banning exclusion above)
@@ -7495,6 +7504,10 @@ function optoBuildLP_Showdown(pool, rule, cptCount, totalGenerated) {
 function optoSolve_Showdown(model) {
   try {
     const result = solver.Solve(model);
+    console.log('[SD Solver] feasible:', result?.feasible, 'result:', result?.result, 'bounded:', result?.bounded);
+    // Log all non-zero variable assignments
+    const nonZero = Object.entries(result||{}).filter(([k,v]) => typeof v === 'number' && v > 0.01 && k.match(/^[cf]\d+$/));
+    console.log('[SD Solver] Selected vars:', nonZero.map(([k,v]) => `${k}=${v.toFixed(3)}`).join(', '));
     if (!result || result.feasible === false) return null;
     // Extract CPT and FLEX assignments — keys are c{pid} and f{pid} where pid is numeric
     // Use Math.round for comparison since LP solvers can return 0.9999 instead of 1
@@ -7575,6 +7588,11 @@ function generateLineups_Showdown() {
       if ((appearCount[+pid] || 0) >= playerMax) capExcluded.add(+pid);
     });
     const filteredPool = pool.filter(p => !capExcluded.has(p.player_id));
+    if (generated.length === 0) {
+      const fpPit = filteredPool.filter(p => (p.positions||[]).some(pos => ['SP','RP','P'].includes(pos)));
+      console.log(`[SD buildOne] filteredPool: ${filteredPool.length} total, ${fpPit.length} pitchers, capExcluded: ${capExcluded.size}`);
+      if (fpPit.length > 0) console.log('[SD buildOne] First pitcher in pool:', JSON.stringify({id:fpPit[0].player_id, name:fpPit[0].name, sal:fpPit[0].salary, proj:fpPit[0].proj_dk_pts, positions:fpPit[0].positions}));
+    }
     if (filteredPool.length < 6) return null;
 
     const augRule = { locks: rule?.locks || [], excludes: [...(rule?.excludes || []), ...capExcluded] };
