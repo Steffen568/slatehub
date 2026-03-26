@@ -4894,9 +4894,20 @@ async function loadPlayerPool(date, slate) {
   // Skip in SD mode — all SD players are already in salByPid via pitcherSalRes; running this
   // loop in SD mode adds players from OTHER games on the same date (via dkSalFallback) and
   // causes cross-game contamination in the pool.
+  // Also skip players whose team is not on this slate — prevents late-game players from
+  // bleeding into an afternoon or early slate pool.
+  const slateTeams = new Set(
+    [...(pitcherSalRes.data || []), ...hitterSalRaw]
+      .map(r => r.team).filter(Boolean)
+  );
   for (const pid of (_contestMode === 'showdown' ? [] : starterPids)) {
+    // Skip players not on this slate's teams
+    const lu = lineupMap[pid];
+    if (lu?.team_id) {
+      const teamAb = teamIdToAbbr[lu.team_id];
+      if (teamAb && slateTeams.size > 0 && !slateTeams.has(teamAb)) continue;
+    }
     if (!salByPid[pid]) {
-      const lu = lineupMap[pid];
       const luName = lu?.player_name?.toLowerCase();
       const nameSal = luName
         ? (nameToSalMap[luName] || nameToSalMap[normName(luName)])
