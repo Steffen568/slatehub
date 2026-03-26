@@ -4511,6 +4511,7 @@ let stackExpCaps    = {};          // "TEAM_N" → max stack exposure % (e.g. "A
 let lateSwapMode    = false;       // late-swap toggle — when ON, optimizer re-optimizes unlocked slots only
 let lateSwapAutoDetect = true;     // auto-detect locks from game_time_utc (vs manual toggle)
 let _lateSwapData   = null;        // parsed DK entries CSV: { entries: [{entryId, contestName, contestId, entryFee, playerCells: [...]}], poolSection: string, header: string }
+let _csvPoolData    = null;        // name → { name, draftableId, position, salary, team } from CSV pool section
 
 function isExcluded(p) { return excludedPlayers.has(p.player_id) || teamExcludes.has(p.team); }
 
@@ -7253,12 +7254,20 @@ function importLateSwapCSV(file) {
         entries.push({ entryId, contestName, contestId, entryFee, playerCells });
       }
 
-      // Pool data: columns 15+ contain player pool info (Position, "Name (ID)", Name, ID, ...)
-      const poolName = (cols[17] || '').trim();
-      const poolId   = (cols[18] || '').trim();
+      // Pool data: columns 15+ contain player pool info
+      // Col 15=Roster Position, 16="Name (ID)", 17=Name, 18=ID, 19=Position, 20=Salary, 21=GameInfo, 22=Team, 23=AvgPts
+      const poolName   = (cols[17] || '').trim();
+      const poolId     = (cols[18] || '').trim();
+      const poolPos    = (cols[19] || '').trim();
+      const poolSalary = parseInt((cols[20] || '').trim()) || 0;
+      const poolTeam   = (cols[22] || '').trim();
       if (poolName && /^\d{5,}$/.test(poolId)) {
         dkIdByName[poolName.toLowerCase()] = poolId;
         dkIdByName[normName(poolName)]     = poolId;
+        // Store full pool data for salary/position patching
+        if (!_csvPoolData) _csvPoolData = {};
+        _csvPoolData[normName(poolName)] = { name: poolName, draftableId: poolId, position: poolPos, salary: poolSalary, team: poolTeam };
+        _csvPoolData[poolName.toLowerCase()] = _csvPoolData[normName(poolName)];
       }
     }
 
@@ -7277,10 +7286,22 @@ function importLateSwapCSV(file) {
     // Store the draftgroup map so exports can find IDs for swapped players
     dkDraftgroupMap = dkIdByName;
 
-    // Stamp dk_id on all pool players
+    // Stamp dk_id on all pool players + patch salary/position from CSV pool data
     [...allHitters, ...allPitchers].forEach(p => {
       const id = dkIdByName[normName(p.name)] || dkIdByName[(p.name || '').toLowerCase()];
       if (id) p.dk_id = id;
+      // Patch missing salary/position from CSV pool section (covers locked games whose DG was removed from DK API)
+      if (_csvPoolData && (!p.salary || p.salary === 0)) {
+        const csvP = _csvPoolData[normName(p.name)] || _csvPoolData[(p.name || '').toLowerCase()];
+        if (csvP) {
+          if (csvP.salary) p.salary = csvP.salary;
+          if (csvP.position && (!p.positions || !p.positions.length)) {
+            p.positions = csvP.position.split('/').map(pos => mlbPosToDK(pos.trim())).filter(Boolean);
+          }
+          if (csvP.team && !p.team) p.team = csvP.team;
+          if (csvP.draftableId) p.dk_id = csvP.draftableId;
+        }
+      }
     });
 
     // Build lineup objects from entries by matching player names to our pool
@@ -7304,10 +7325,14 @@ function importLateSwapCSV(file) {
           lineupObj[slotKey] = { ...player, _dkDraftableId: pc.draftableId, _dkCellName: pc.name };
           matched++;
         } else {
-          // Create a stub player so the slot isn't empty
+          // Create a stub player — enrich from CSV pool data if available
+          const csvP = _csvPoolData?.[normName(pc.name)] || _csvPoolData?.[pc.name.toLowerCase()] || {};
           lineupObj[slotKey] = {
-            player_id: null, name: pc.name, salary: 0, positions: [],
-            proj_dk_pts: 0, team: '', game_pk: null,
+            player_id: null, name: pc.name,
+            salary: csvP.salary || 0,
+            positions: csvP.position ? csvP.position.split('/').map(p => mlbPosToDK(p.trim())).filter(Boolean) : [],
+            proj_dk_pts: 0, team: csvP.team || '', game_pk: null,
+            dk_id: csvP.draftableId || pc.draftableId,
             _dkDraftableId: pc.draftableId, _dkCellName: pc.name,
           };
           unmatched++;
