@@ -269,6 +269,13 @@ def run():
         print("  No records to upsert.")
         return
 
+    # Deduplicate by game_pk — Odds API may return the same game twice
+    # (today + tomorrow UTC windows). Keep the last occurrence.
+    deduped = {}
+    for r in records:
+        deduped[r['game_pk']] = r
+    records = list(deduped.values())
+
     # Upsert
     (sb.table("game_odds")
        .upsert(records, on_conflict="game_pk", ignore_duplicates=False)
