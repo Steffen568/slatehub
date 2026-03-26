@@ -4027,6 +4027,8 @@ function selectTeam(btn, side) {
   const pitTeam = side === 'home' ? teamAbbr(activeGame.away_team) : teamAbbr(activeGame.home_team);
   activeLineupTeamId = teamId;
   renderLineup(cachedLineupData, teamId);
+  // Update confirmed badge for THIS team (not the whole game)
+  if (cachedLineupData) updateLineupStatusForTeam(cachedLineupData, teamId);
 
   // Update matchup bar
   const mbTeams   = document.getElementById('mbTeams');
@@ -6136,12 +6138,8 @@ async function loadLineup(gamePk, homeTeamId, awayTeamId) {
     localStorage.setItem('sh_hbh_lineup', JSON.stringify({ date: activeDate, players: pool }));
   } catch(e) {}
 
-  // Check confirmed status
-  const confirmed = data.some(p => p.status === 'confirmed');
-  updateLineupStatus(
-    confirmed ? 'confirmed' : 'projected',
-    confirmed ? 'Official lineup confirmed' : 'Projected lineup'
-  );
+  // Check confirmed status PER TEAM (not whole game — one team can be confirmed while the other isn't)
+  updateLineupStatusForTeam(data, homeTeamId);
 
   // Update team cycle buttons with real names + team colors
   const homePill = document.getElementById('homeLineupPill');
@@ -8630,6 +8628,16 @@ function updateLineupStatus(status, text) {
   if (textEl) textEl.textContent = text || '';
   if (timeEl && status === 'projected') timeEl.textContent = 'Confirms ~2-3h before first pitch';
   if (timeEl && status === 'confirmed') timeEl.textContent = '';
+}
+
+// Check confirmed status for a specific team (not the whole game)
+function updateLineupStatusForTeam(data, teamId) {
+  const teamPlayers = data.filter(p => p.team_id === teamId);
+  const confirmed = teamPlayers.length > 0 && teamPlayers.some(p => p.status === 'confirmed');
+  updateLineupStatus(
+    confirmed ? 'confirmed' : 'projected',
+    confirmed ? 'Official lineup confirmed' : 'Projected lineup'
+  );
 }
 
 // ══════════════════════════════════════════════════════════════
