@@ -4855,7 +4855,7 @@ async function loadPlayerPool(date, slate) {
 
   const [pitcherSalRes, hitterSalRaw, dkPosRaw, rosterPosRaw] = await Promise.all([
     // All SP/RP on this slate
-    sb.from('dk_salaries').select('player_id,name,salary,position,team,dk_slate')
+    sb.from('dk_salaries').select('player_id,name,salary,position,team,dk_slate,dg_id')
       .eq('dk_slate', slate).limit(3000),
     // Hitters via lineup player_ids — current slate only (prevents stale team tags from old entries)
     starterPids.length
@@ -5341,6 +5341,25 @@ async function loadPlayerPool(date, slate) {
     p.opp_team_abbr = _teamIdAbbrMap[oppTeamId] || teamAbbr(isHome ? game.away_team : game.home_team);
   });
 
+  // Filter game strip to only games in this DK slate (uses dk_slate_games table)
+  if (slate && slate !== 'all' && !lateSwapMode) {
+    const dgId = (pitcherSalRes.data || []).find(r => r.dg_id)?.dg_id;
+    if (dgId) {
+      try {
+        const { data: slateGames } = await sb.from('dk_slate_games')
+          .select('away_team,home_team')
+          .eq('dg_id', dgId);
+        if (slateGames && slateGames.length) {
+          const slateMatchups = new Set(slateGames.map(sg => `${sg.away_team}|${sg.home_team}`));
+          _games = _games.filter(g => {
+            const awayAb = teamAbbr(g.away_team) || _teamIdAbbrMap[g.away_team_id] || '';
+            const homeAb = teamAbbr(g.home_team) || _teamIdAbbrMap[g.home_team_id] || '';
+            return slateMatchups.has(`${awayAb}|${homeAb}`);
+          });
+        }
+      } catch(e) { console.warn('[SlateGames] Filter failed:', e); }
+    }
+  }
   buildGameStrip();
 
   // Auto-switch to Pitchers tab if no hitters (lineups not posted yet)

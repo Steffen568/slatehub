@@ -202,6 +202,7 @@ PLAYER_ID_REMAP = {
     1284664 : 682657,   # Angel Martinez (auto-fixed)
     1316803 : 695578,   # James Wood (auto-fixed)
     1318244 : 696285,   # Jacob Young (auto-fixed)
+    1053621 : 671056,   # Ivan Herrera (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids
@@ -269,6 +270,7 @@ def merge_positions(existing_pos, new_pos):
     return '/'.join(sorted(parts, key=lambda p: DK_POS_ORDER.get(p, 99))) or 'UTIL'
 
 all_dg_ids = sorted(classic_dg_ids | showdown_dg_ids)
+all_slate_game_rows = []   # for dk_slate_games table
 
 for dgid in all_dg_ids:
     meta         = dg_meta.get(dgid, {})
@@ -280,6 +282,26 @@ for dgid in all_dg_ids:
         url = f'https://api.draftkings.com/draftgroups/v1/draftgroups/{dgid}/draftables'
         result = fetch_json(url)
         draftables = result.get('draftables', [])
+
+        # Extract unique competitions (games) for dk_slate_games table
+        seen_comps = {}
+        for p in draftables:
+            comp = p.get('competition', {})
+            comp_id = comp.get('competitionId')
+            if not comp_id or comp_id in seen_comps:
+                continue
+            comp_name = comp.get('name', '')  # e.g. "DET @ SD"
+            parts = comp_name.split(' @ ')
+            if len(parts) == 2:
+                seen_comps[comp_id] = {
+                    'dg_id':          dgid,
+                    'competition_id': comp_id,
+                    'dk_slate':       None,  # filled after slate_label resolved
+                    'away_team':      parts[0].strip(),
+                    'home_team':      parts[1].strip(),
+                    'start_time':     comp.get('startTime', ''),
+                    'season':         SEASON,
+                }
 
         # Fetch CSV for this DG to get position info
         # For Showdown: CSV position column is 'CPT' or the real position ('SP','OF', etc.)
@@ -391,8 +413,13 @@ for dgid in all_dg_ids:
             seen_player_dg[key] = row   # store reference for position merging
             count += 1
 
+        # Attach slate label to competition rows and collect
+        for comp_id, game_row in seen_comps.items():
+            game_row['dk_slate'] = slate_label
+            all_slate_game_rows.append(game_row)
+
         extra = f' | cpt_skipped: {cpt_skipped}' if is_showdown else ''
-        print(f"  DG {dgid} [{contest_type}] ({slate_label}): {count} players | name_matched: {name_hit} | dk_id_fallback: {dk_fallback} | no_match: {no_match}{extra}")
+        print(f"  DG {dgid} [{contest_type}] ({slate_label}): {count} players, {len(seen_comps)} games | name_matched: {name_hit} | dk_id_fallback: {dk_fallback} | no_match: {no_match}{extra}")
         time.sleep(0.3)
 
     except Exception as e:
@@ -414,15 +441,12 @@ print(f"Total salary rows (post-dedup): {len(all_salary_rows)}")
 
 # ── STEP 4: Upload to Supabase
 if all_salary_rows:
-    # Delete existing rows for these slate labels + season before inserting fresh data
-    slate_labels = list({r['dk_slate'] for r in all_salary_rows})
+    # Only delete rows for DG IDs that appeared in the current API response.
+    # Locked DGs (no longer in the API) keep their existing data untouched.
     season = all_salary_rows[0]['season']
-    print(f"Clearing old dk_salaries rows for slates {slate_labels} season {season}...")
-    for sl in slate_labels:
-        supabase.table('dk_salaries').delete().eq('dk_slate', sl).eq('season', season).execute()
-    # Also clear any stale showdown rows by dg_id (slate label may have changed between runs)
-    sd_dg_ids = list({r['dg_id'] for r in all_salary_rows if r.get('contest_type') == 'showdown'})
-    for dgid in sd_dg_ids:
+    api_dg_ids = sorted(all_dg_ids)
+    print(f"Clearing dk_salaries for {len(api_dg_ids)} active DG IDs (season {season})...")
+    for dgid in api_dg_ids:
         supabase.table('dk_salaries').delete().eq('dg_id', dgid).eq('season', season).execute()
     print("Cleared. Uploading fresh data...")
     batch_size = 500
@@ -433,6 +457,16 @@ if all_salary_rows:
         uploaded += len(batch)
         print(f"  {uploaded}/{len(all_salary_rows)}")
     print("Done.")
+
+    # Upsert dk_slate_games (game-to-slate mapping)
+    if all_slate_game_rows:
+        print(f"\nUpserting {len(all_slate_game_rows)} slate-game mappings...")
+        for dgid in api_dg_ids:
+            supabase.table('dk_slate_games').delete().eq('dg_id', dgid).eq('season', season).execute()
+        for i in range(0, len(all_slate_game_rows), 500):
+            batch = all_slate_game_rows[i:i+500]
+            supabase.table('dk_slate_games').upsert(batch, on_conflict='dg_id,competition_id').execute()
+        print(f"  Uploaded {len(all_slate_game_rows)} slate-game rows.")
 
     # Sanity check
     print("\nSanity check — top 5 salaries:")
