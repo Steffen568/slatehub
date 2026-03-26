@@ -145,3 +145,19 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### optoSolve_Showdown matched wrong keys from solver result (Session 25)
 **What happened:** `key.startsWith('c')` matched solver metadata like `cpt_count`. `key.startsWith('f')` matched `flex_count`, `feasible`. Also `byId[stringPid]` failed because map keys were numeric `player_id`.
 **Rule:** Use regex `/^([cf])(\d+)$/` to extract PIDs from solver result. Use `String(player_id)` for lookup maps when PIDs come from string sources.
+
+### Odds loader matched zero games — UTC date offset + team name format (Session 26)
+**What happened:** `load_odds.py` loaded DB games for `today` only, but late-night US games have UTC commence times one day ahead (e.g. NYY@SF on Mar 25 local = `2026-03-26T00:05:00Z`). Also, the DB stores short team names ("Yankees") but the lookup was comparing Odds API full names ("New York Yankees") against mapped short names.
+**Rule:** Always load games for today AND tomorrow when matching odds. Build `db_lookup` indexed by both full and short team name formats.
+
+### SD projections leaked across games — no game_pk scoping (Session 26)
+**What happened:** SD projection query filtered by date only, returning all 198 hitter projections from 11 games on the date. Hitters from unrelated games got full projections in the SD pool.
+**Rule:** In SD mode, extract `game_pk` from the slate label (`sd_AWAY@HOME_YYYY-MM-DD`) and scope projection queries with `.eq('game_pk', sdGamePk)`.
+
+### SD exposure settings not binding to settings drawer (Session 26)
+**What happened:** SD optimizer used `optoSettings.exposureMax` (hardcoded 100, no UI binding) instead of `expHitterMax`/`expPitcherMax` which are bound to the settings drawer inputs.
+**Rule:** SD optimizer must use `expHitterMax` and `expPitcherMax` for exposure caps, not `optoSettings.exposureMax`. Check that variable names match between settings drawer `oninput` handlers and optimizer code.
+
+### SD CPT/FLEX exclusion was shared — needed independent sets (Session 26)
+**What happened:** A single `excludedPlayers` Set was used for both CPT and FLEX. Excluding a player in the Utility tab also excluded them from Captain.
+**Rule:** SD mode needs separate `excludedCpt` and `excludedFlex` Sets with a `toggleExcludeSD(e, pid, role)` function. LP builder checks role-specific exclusions independently.

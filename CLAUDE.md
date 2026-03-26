@@ -209,6 +209,27 @@ Three distinct root causes — don't confuse them:
 - `renderSlot(key)` — updates the DOM element in-place (Classic lineup builder).
 - `renderSlot_SD(slotDef, player)` — returns an HTML string. Caller must do `element.outerHTML = renderSlot_SD(...)`.
 
+### Showdown Optimizer — Key Rules (Sessions 25–26)
+
+- **jsLPSolver model property is `opType`** — NOT `optiType`. Wrong name silently defaults to minimization.
+- **SD projections must be scoped to the specific game** via `game_pk` extracted from the slate label (`sd_AWAY@HOME_YYYY-MM-DD`). Without this, projections from all games on the date leak into the pool.
+- **Non-starter pitchers (relievers) must be excluded from SD pool.** Only pitchers with real projections from `player_projections` are starters. Giving relievers salary-scaled baselines produces absurd lineups.
+- **CPT and FLEX exclusion must be independent** — separate `excludedCpt` and `excludedFlex` Sets.
+- **Exposure caps must use `expHitterMax`/`expPitcherMax`** (bound to settings drawer), not `optoSettings.exposureMax`.
+- **Salary cap uses `optoSalaryCap` variable** (configurable via Max Salary setting, default 50000).
+- **Solver result keys**: Use regex `/^([cf])(\d+)$/` to extract player IDs — `startsWith('c')` matches `cpt_count`, `startsWith('f')` matches `feasible`.
+
+### DK CSV Import/Export
+
+- DK uses **different draftable IDs** for CPT vs UTIL slots — same player has two IDs.
+- `importDKTemplate()` parses entries, contests, and builds separate `cptIds`/`utilIds` maps.
+- Contest dashboard lets user assign builds to contests; `exportToDK()` round-robins build lineups into entries.
+
+### Odds Loader (`load_odds.py`)
+
+- **Always load games for today AND tomorrow** — late-night US games have UTC commence times one day ahead.
+- **DB team name format may differ from Odds API** — index `db_lookup` by both full and short name formats.
+
 ---
 
 ## Projection Engine (`compute_projections.py`)
