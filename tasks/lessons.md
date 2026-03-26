@@ -29,6 +29,14 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 **Rule:** For Showdown DGs, each `playerDkId` appears EXACTLY twice — once at 1.5× salary (CPT) and once at base salary (FLEX). To keep only FLEX: group by `playerDkId`, keep the entry with the **lower salary**.
 **Implementation:** Build `flex_draftable_ids` set before the main loop, then skip any draftable whose `draftableId` is not in that set.
 
+### Multi-position eligibility lost when CSV fetch fails
+**What happened:** DK CSV (`getavailableplayerscsv`) has correct multi-position eligibility (e.g. "2B/SS"), but the URL needs auth and often fails silently. Fallback to the draftables API only gives the single primary position. Additionally, the dedup logic was skipping duplicate entries for the same player instead of merging their positions.
+**Rule:** DK lists multi-eligible players as separate draftable entries (same `playerDkId`, different `position`). When deduplicating, merge positions instead of discarding duplicates. Use `merge_positions()` helper at both dedup stages (in-loop and post-loop).
+
+### Salary ID mismatches now auto-fixed by the pipeline
+**What happened:** ID mismatches between `lineups.player_id` and `dk_salaries.player_id` blocked the pipeline from reaching phase 3 (projections). Required manual `PLAYER_ID_REMAP` edits.
+**Rule:** The validation gate in `agent_lineups_dk.py` now auto-fixes mismatches: (1) updates `dk_salaries` rows in Supabase, (2) adds entries to `PLAYER_ID_REMAP` in `load_dk_salaries.py`, (3) re-validates. Only blocks if auto-fix fails.
+
 ### DK DraftGroups `Games` array is always empty from the lobby API
 **What happened:** Tried to extract home/away team names from `dg.get('Games')` to build SD slate labels. It's always `[]`.
 **Rule:** Infer team names from the draftables themselves — collect unique `teamAbbreviation` values from the draftable list after fetching them.
@@ -84,6 +92,20 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 
 ### `renderSlot_SD` returns HTML string — must use `.outerHTML =` not inner update
 **Rule:** Classic `renderSlot(key)` updates the element in-place. SD version `renderSlot_SD(slotDef, player)` returns an HTML string and the caller must do `element.outerHTML = renderSlot_SD(...)`.
+
+### Late-Swap: `lockedPlayers` vs game-lock are different concepts
+**What happened:** The existing `lockedPlayers` Set is used to force-include a player in the optimizer (100% exposure). Game-locking for late swap is different — it freezes a player in their slot because their game has started.
+**Rule:** Use `lateSwapMode` + `isPlayerGameLocked(player)` for game-lock detection. Never conflate with the `lockedPlayers` Set which is the user's force-include feature.
+
+### Late-Swap LP must use remaining budget, not full salary cap
+**Rule:** When building the LP for unlocked slots, the salary constraint must be `remaining_salary = optoSalaryCap - lockedSalary`, and position constraints must only include positions needed for the unlocked slots. Stack constraints must account for locked players already contributing to the stack.
+
+### DK entries CSV format — mixed entry + pool rows
+**What happened:** The DK entries CSV has entry data in columns 0-13 AND player pool data in columns 14+ on the SAME rows. Some rows have both, some have only pool data.
+**Rule:** When exporting late-swapped lineups, walk the original CSV line-by-line and only replace columns 4-13 (the player cells) on entry rows. Preserve everything else exactly as-is. Never rebuild the CSV from scratch — modify in-place.
+
+### Late swap export must preserve original draftable IDs for locked players
+**Rule:** When a player is locked (game started), their original draftable ID from the CSV import must be used in the export. Store `_dkDraftableId` on each player object during import. For swapped players, look up the ID from `dkDraftgroupMap` (populated from the CSV pool section).
 
 ---
 
@@ -161,3 +183,55 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### SD CPT/FLEX exclusion was shared — needed independent sets (Session 26)
 **What happened:** A single `excludedPlayers` Set was used for both CPT and FLEX. Excluding a player in the Utility tab also excluded them from Captain.
 **Rule:** SD mode needs separate `excludedCpt` and `excludedFlex` Sets with a `toggleExcludeSD(e, pid, role)` function. LP builder checks role-specific exclusions independently.
+
+### DK ID mismatch: J.T. Realmuto 592663
+**What happened:** diagnose_salary_mismatch.py found: J.T. Realmuto                      592663  ⚠ ID MISMATCH — DK has id(s): 548255, 548255  salary: $3,700
+**Rule:** Add the wrong_id → correct_mlbam_id mapping to PLAYER_ID_REMAP in load_dk_salaries.py, then re-run load_dk_salaries.py.
+
+### DK ID mismatch: Yohel Pozo 650968
+**What happened:** diagnose_salary_mismatch.py found: Yohel Pozo                         650968  ⚠ ID MISMATCH — DK has id(s): 828445, 828445  salary: $2,200
+**Rule:** Add the wrong_id → correct_mlbam_id mapping to PLAYER_ID_REMAP in load_dk_salaries.py, then re-run load_dk_salaries.py.
+
+### DK ID mismatch: Fernando Tatis Jr. 665487
+**What happened:** diagnose_salary_mismatch.py found: Fernando Tatis Jr.                 665487  ⚠ ID MISMATCH — DK has id(s): 919910, 919910, 919910  salary: $5,600
+**Rule:** Add the wrong_id → correct_mlbam_id mapping to PLAYER_ID_REMAP in load_dk_salaries.py, then re-run load_dk_salaries.py.
+
+### DK ID mismatch: Luis Garcia Jr. 671277
+**What happened:** diagnose_salary_mismatch.py found: Luis Garcia Jr.                    671277  ⚠ ID MISMATCH — DK has id(s): 962605  salary: $3,300
+**Rule:** Add the wrong_id → correct_mlbam_id mapping to PLAYER_ID_REMAP in load_dk_salaries.py, then re-run load_dk_salaries.py.
+
+### DK ID mismatch: Jose Tena 677588
+**What happened:** diagnose_salary_mismatch.py found: Jose Tena                          677588  ⚠ ID MISMATCH — DK has id(s): 1118063  salary: $2,200
+**Rule:** Add the wrong_id → correct_mlbam_id mapping to PLAYER_ID_REMAP in load_dk_salaries.py, then re-run load_dk_salaries.py.
+
+### DK ID mismatch: Miguel Vargas 678246
+**What happened:** diagnose_salary_mismatch.py found: Miguel Vargas                      678246  ⚠ ID MISMATCH — DK has id(s): 1120962  salary: $2,900
+**Rule:** Add the wrong_id → correct_mlbam_id mapping to PLAYER_ID_REMAP in load_dk_salaries.py, then re-run load_dk_salaries.py.
+
+### DK ID mismatch: David Fry 681807
+**What happened:** diagnose_salary_mismatch.py found: David Fry                          681807  ⚠ ID MISMATCH — DK has id(s): 1118963, 1118963  salary: $3,000
+**Rule:** Add the wrong_id → correct_mlbam_id mapping to PLAYER_ID_REMAP in load_dk_salaries.py, then re-run load_dk_salaries.py.
+
+### DK ID mismatch: Angel Martinez 682657
+**What happened:** diagnose_salary_mismatch.py found: Angel Martinez                     682657  ⚠ ID MISMATCH — DK has id(s): 1284664, 1284664  salary: $3,100
+**Rule:** Add the wrong_id → correct_mlbam_id mapping to PLAYER_ID_REMAP in load_dk_salaries.py, then re-run load_dk_salaries.py.
+
+### DK ID mismatch: Pedro Pages 686780
+**What happened:** diagnose_salary_mismatch.py found: Pedro Pages                        686780  ⚠ ID MISMATCH — DK has id(s): 1115760, 1115760  salary: $2,800
+**Rule:** Add the wrong_id → correct_mlbam_id mapping to PLAYER_ID_REMAP in load_dk_salaries.py, then re-run load_dk_salaries.py.
+
+### DK ID mismatch: James Wood 695578
+**What happened:** diagnose_salary_mismatch.py found: James Wood                         695578  ⚠ ID MISMATCH — DK has id(s): 1316803  salary: $5,300
+**Rule:** Add the wrong_id → correct_mlbam_id mapping to PLAYER_ID_REMAP in load_dk_salaries.py, then re-run load_dk_salaries.py.
+
+### DK ID mismatch: Jacob Young 696285
+**What happened:** diagnose_salary_mismatch.py found: Jacob Young                        696285  ⚠ ID MISMATCH — DK has id(s): 1318244  salary: $2,500
+**Rule:** Add the wrong_id → correct_mlbam_id mapping to PLAYER_ID_REMAP in load_dk_salaries.py, then re-run load_dk_salaries.py.
+
+### DK ID mismatch: ── ID MISMATCHES (these need a fix) ──
+**What happened:** diagnose_salary_mismatch.py found: ── ID MISMATCHES (these need a fix) ──
+**Rule:** Add the wrong_id → correct_mlbam_id mapping to PLAYER_ID_REMAP in load_dk_salaries.py, then re-run load_dk_salaries.py.
+
+### Auto-fixed DK ID mismatches: Angel Martinez, David Fry, Fernando Tatis Jr., J.T. Realmuto, Jacob Young, James Wood, Jose Tena, Luis Garcia Jr., Miguel Vargas, Pedro Pages, Yohel Pozo
+**What happened:** Pipeline auto-fixed 11 salary ID mismatch(es) in dk_salaries and added 11 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.

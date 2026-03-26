@@ -53,57 +53,155 @@ def _run_script(script: str, label: str, logger: RunLogger) -> bool:
     return success
 
 
+def _fix_mismatches_in_db(mismatches, sb):
+    """
+    Fix ID mismatches directly in Supabase dk_salaries table.
+    Updates player_id on each mismatched row to match the lineups player_id.
+    Returns number of rows successfully fixed.
+    """
+    fixed = 0
+    seen = set()
+    for m in mismatches:
+        key = (m['lineup_id'], m['dk_id'])
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            sb.table('dk_salaries').update(
+                {'player_id': m['lineup_id']}
+            ).eq('player_id', m['dk_id']).eq('name', m['name']).execute()
+            print(f"    ✓ Fixed {m['name']}: {m['dk_id']} → {m['lineup_id']}")
+            fixed += 1
+        except Exception as e:
+            print(f"    ✗ Failed to fix {m['name']}: {e}")
+    return fixed
+
+
+def _add_to_player_id_remap(mismatches):
+    """
+    Append new entries to PLAYER_ID_REMAP in load_dk_salaries.py so future
+    runs resolve correctly without needing another auto-fix.
+    """
+    remap_file = REPO_ROOT / 'load_dk_salaries.py'
+    content = remap_file.read_text(encoding='utf-8')
+
+    # Deduplicate: only add mappings not already in the file
+    new_entries = {}
+    for m in mismatches:
+        dk_id = m['dk_id']
+        lineup_id = m['lineup_id']
+        # Check if this dk_id is already mapped
+        if str(dk_id) in content.split('PLAYER_ID_REMAP')[1].split('}')[0]:
+            continue
+        new_entries[dk_id] = (lineup_id, m['name'])
+
+    if not new_entries:
+        return 0
+
+    # Find the closing brace of PLAYER_ID_REMAP dict
+    marker = 'PLAYER_ID_REMAP = {'
+    start_idx = content.index(marker)
+    # Find the closing } for this dict
+    brace_depth = 0
+    closing_idx = None
+    for i in range(start_idx + len(marker) - 1, len(content)):
+        if content[i] == '{':
+            brace_depth += 1
+        elif content[i] == '}':
+            brace_depth -= 1
+            if brace_depth == 0:
+                closing_idx = i
+                break
+
+    if closing_idx is None:
+        print("    ⚠ Could not locate PLAYER_ID_REMAP closing brace — skipping file update")
+        return 0
+
+    # Build new lines to insert before the closing brace
+    new_lines = ''
+    for dk_id, (lineup_id, name) in sorted(new_entries.items()):
+        new_lines += f'    {dk_id:<8}: {lineup_id},   # {name} (auto-fixed)\n'
+
+    # Insert before the closing }
+    updated = content[:closing_idx] + new_lines + content[closing_idx:]
+    remap_file.write_text(updated, encoding='utf-8')
+    print(f"    ✓ Added {len(new_entries)} new entry/entries to PLAYER_ID_REMAP")
+    return len(new_entries)
+
+
 def validate_dk_salaries(logger: RunLogger) -> bool:
     """
-    Run diagnose_salary_mismatch.py and parse its output.
-    Returns True if validation passes (0 ID mismatches).
-    Returns False if new mismatches are found — logs lessons and returns failure.
+    Check for salary ID mismatches. If found, auto-fix them in the DB
+    and update PLAYER_ID_REMAP, then re-validate.
+    Returns True if validation passes (0 ID mismatches after fix attempt).
     """
+    # Import the refactored detection function directly (no subprocess)
+    import sys
+    sys.path.insert(0, str(REPO_ROOT))
+    from diagnose_salary_mismatch import find_mismatches
+
+    from dotenv import load_dotenv
+    from supabase import create_client
+    load_dotenv()
+    sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+
     print(f"\n  [Validation Gate] Running salary ID check...")
     start = time.time()
-    env = {**os.environ, 'PYTHONIOENCODING': 'utf-8'}
-    result = subprocess.run(
-        ['py', '-3.12', str(REPO_ROOT / 'diagnose_salary_mismatch.py')],
-        capture_output=True,
-        text=True,
-        encoding='utf-8',
-        cwd=str(REPO_ROOT),
-        env=env,
-    )
+
+    id_mismatches, truly_missing = find_mismatches(sb=sb)
     elapsed = time.time() - start
 
-    mismatch_lines = [
-        line for line in result.stdout.splitlines()
-        if 'ID MISMATCH' in line
-    ]
-
-    if not mismatch_lines:
+    if not id_mismatches:
         print(f"  ✓ Salary Validation — 0 ID mismatches ({elapsed:.1f}s)")
         logger.record('Salary Validation', True, elapsed)
         return True
 
-    # Mismatches found
-    print(f"\n  ⚠ Salary Validation FAILED — {len(mismatch_lines)} ID mismatch(es) found:")
-    for line in mismatch_lines:
-        print(f"    {line.strip()}")
+    # ── Mismatches found — attempt auto-fix ──
+    print(f"\n  ⚠ Found {len(id_mismatches)} ID mismatch(es) — attempting auto-fix...")
+    for m in id_mismatches:
+        print(f"    {m['name']:<28}  lineup_id={m['lineup_id']}  dk_id={m['dk_id']}")
 
-    logger.record('Salary Validation', False, elapsed, f"{len(mismatch_lines)} ID mismatch(es)")
+    # Step 1: Fix rows in Supabase dk_salaries table
+    fixed_db = _fix_mismatches_in_db(id_mismatches, sb)
+    print(f"\n  DB fixes applied: {fixed_db}")
 
-    # Log a lesson for each mismatch (add_lesson deduplicates by title)
-    for line in mismatch_lines:
-        stripped = line.strip()
-        # Line format: "  {name:<28} {id:>12}  ⚠ ID MISMATCH — DK has id(s): {dk_ids} ..."
-        parts = stripped.split('⚠ ID MISMATCH')
-        player_info = parts[0].strip() if parts else stripped
-        player_name = ' '.join(player_info.split()) if player_info else 'unknown'
-        title = f"DK ID mismatch: {player_name}"
+    # Step 2: Add entries to PLAYER_ID_REMAP for future runs
+    added_remap = _add_to_player_id_remap(id_mismatches)
+
+    # Step 3: Re-validate to confirm fix worked
+    print(f"\n  [Validation Gate] Re-validating after auto-fix...")
+    recheck_start = time.time()
+    id_mismatches_2, _ = find_mismatches(sb=sb)
+    recheck_elapsed = time.time() - recheck_start
+    total_elapsed = time.time() - start
+
+    if not id_mismatches_2:
+        print(f"  ✓ Auto-fix successful — 0 ID mismatches remaining ({total_elapsed:.1f}s)")
+        logger.record('Salary Validation (auto-fixed)', True, total_elapsed,
+                       f"Fixed {fixed_db} mismatch(es), added {added_remap} REMAP entry/entries")
+
+        # Log lesson so we have a record of what was auto-fixed
+        names = ', '.join(sorted({m['name'] for m in id_mismatches}))
         logger.add_lesson(
-            title=title,
-            what_happened=f"diagnose_salary_mismatch.py found: {stripped}",
-            rule=(
-                "Add the wrong_id → correct_mlbam_id mapping to PLAYER_ID_REMAP "
-                "in load_dk_salaries.py, then re-run load_dk_salaries.py."
-            ),
+            title=f"Auto-fixed DK ID mismatches: {names}",
+            what_happened=f"Pipeline auto-fixed {fixed_db} salary ID mismatch(es) in dk_salaries and added {added_remap} PLAYER_ID_REMAP entry/entries.",
+            rule="Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.",
+        )
+        return True
+
+    # Auto-fix didn't fully resolve — log failures and block
+    print(f"\n  ✗ Auto-fix incomplete — {len(id_mismatches_2)} mismatch(es) remain:")
+    for m in id_mismatches_2:
+        print(f"    {m['name']:<28}  lineup_id={m['lineup_id']}  dk_id={m['dk_id']}")
+
+    logger.record('Salary Validation', False, total_elapsed,
+                   f"{len(id_mismatches_2)} mismatch(es) remain after auto-fix")
+
+    for m in id_mismatches_2:
+        logger.add_lesson(
+            title=f"DK ID mismatch (auto-fix failed): {m['name']}",
+            what_happened=f"Auto-fix could not resolve: lineup_id={m['lineup_id']} dk_id={m['dk_id']}",
+            rule="Manual investigation needed — check players table or DK API for this player.",
         )
 
     return False
@@ -212,8 +310,8 @@ def run(logger: RunLogger, mode: str, quick: bool = False) -> tuple:
     gate_passed = validate_dk_salaries(logger)
 
     if not gate_passed:
-        print("\n  ✗ Validation gate FAILED — skipping Odds and Weather.")
-        print("  Fix PLAYER_ID_REMAP issues first, then re-run --morning.")
+        print("\n  ✗ Validation gate FAILED — auto-fix could not resolve all mismatches.")
+        print("  Manual investigation needed, then re-run --morning.")
         return logger, False
 
     # Gate passed — run odds + weather

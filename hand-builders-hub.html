@@ -3766,6 +3766,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 .hbh-mode-btn:hover{color:var(--text);}
 .hbh-mode-btn.active{background:#1a2a3d;color:var(--blue);}
 .hbh-mode-btn.active-sd{background:#3d2a00;color:#fbbf24;}
+.hbh-mode-btn.active-ls{background:#1a3d2a;color:#4ade80;}
 .sd-cpt{border-color:rgba(251,191,36,.5)!important;background:rgba(251,191,36,.04)!important;}
 .cpt-label{background:#3d2a00!important;color:#fbbf24!important;}
 .sd-cpt-row{background:rgba(251,191,36,.04);}
@@ -4020,6 +4021,15 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 .lineup-slot.filled{border-color:rgba(74,222,128,.25);background:rgba(74,222,128,.04);}
 .lineup-slot.drag-over{border-color:var(--hi);background:rgba(74,222,128,.12);border-style:dashed;}
 .lineup-slot.drag-invalid{border-color:var(--lo);background:rgba(248,113,113,.08);border-style:dashed;}
+.lineup-slot.game-locked{border-color:rgba(148,163,184,.3);background:rgba(148,163,184,.06);opacity:.7;pointer-events:none;}
+.lineup-slot.game-locked .slot-remove{display:none;}
+.lineup-slot.game-unlocked{border-color:rgba(74,222,128,.4);background:rgba(74,222,128,.06);}
+.slot-lock-icon{font-size:10px;flex-shrink:0;margin-left:auto;}
+.slot-lock-time{font-size:9px;color:var(--muted);flex-shrink:0;margin-left:auto;white-space:nowrap;}
+.lateswap-toggle{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted);cursor:pointer;user-select:none;}
+.lateswap-toggle input[type="checkbox"]{accent-color:var(--hi);cursor:pointer;}
+.lateswap-sal-breakdown{font-size:9px;color:var(--muted);display:none;}
+.lateswap-sal-breakdown.active{display:block;}
 .slot-pos{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:11px;color:var(--muted);width:26px;flex-shrink:0;text-align:center;}
 .slot-empty{flex:1;font-size:10px;color:var(--muted);font-style:italic;}
 .slot-player{flex:1;display:flex;align-items:center;gap:5px;overflow:hidden;min-width:0;}
@@ -4146,7 +4156,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
   <div class="hbh-mode-toggle" style="margin-left:10px;">
     <button class="hbh-mode-btn active" id="btn-mode-classic" onclick="setContestMode('classic')">Classic</button>
     <button class="hbh-mode-btn" id="btn-mode-showdown" onclick="setContestMode('showdown')">Showdown</button>
+    <button class="hbh-mode-btn" id="btn-mode-lateswap" onclick="enterLateSwapMode()">Late Swap</button>
   </div>
+  <input type="file" id="lateswap-csv-input" accept=".csv" style="display:none" onchange="importLateSwapCSV(this.files[0])">
   <a href="index.html" class="hbh-back">← Main View</a>
 </header>
 
@@ -4218,8 +4230,10 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
         </div>
       </div>
       <div class="sal-bar-wrap"><div class="sal-bar-fill" id="sal-bar" style="width:0%;background:var(--hi);"></div></div>
+      <div class="lateswap-sal-breakdown" id="lateswap-sal-info"></div>
       <div class="builder-actions">
-        <button class="bld-btn" style="background:rgba(99,179,237,.1);border-color:rgba(99,179,237,.35);color:#63b3ed;" onclick="generateLineups()">Generate</button>
+        <button class="bld-btn" id="generate-btn" style="background:rgba(99,179,237,.1);border-color:rgba(99,179,237,.35);color:#63b3ed;" onclick="generateLineups()">Generate</button>
+        <button class="bld-btn" id="ls-export-btn" style="display:none;background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportLateSwapCSV()">Export DK CSV</button>
         <button class="bld-btn primary" onclick="saveLineup()">Save Lineup</button>
         <button class="bld-btn" onclick="clearLineup()">Clear</button>
         <label class="bld-btn sd-only" style="display:none;background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.35);color:#fbbf24;cursor:pointer;" title="Import DKEntries.csv for export">
@@ -4242,6 +4256,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     <span class="lineups-section-title">Saved Lineups</span>
     <div style="margin-left:auto;display:flex;gap:6px;">
       <button class="bld-btn" onclick="exportSavedCSV()" title="Export active build to DK CSV">↓ CSV</button>
+      <button class="bld-btn classic-only" id="lateswap-all-btn" style="display:none;background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.35);color:#fbbf24;" onclick="lateSwapAllLineups()" title="Re-optimize unlocked slots in all saved lineups">Late Swap All</button>
+      <button class="bld-btn" id="lateswap-refresh-btn" style="display:none;background:rgba(99,179,237,.1);border-color:rgba(99,179,237,.35);color:#63b3ed;" onclick="refreshLateSwapStatus()" title="Re-check game lock times">Refresh Status</button>
       <button class="bld-btn danger" onclick="clearActiveBuild()">Clear Build</button>
     </div>
   </div>
@@ -4291,6 +4307,10 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <div class="opto-row sd-only" style="display:none"><label>CPT Max Exp%</label><input class="opto-input" id="opto-cpt-max" type="number" min="1" max="100" value="35" oninput="expCptMax=+this.value" title="Max % of lineups any player can appear as Captain"></div>
       <div class="opto-row classic-only"><label>Max/Team</label><input class="opto-input" id="opto-maxteam" type="number" min="3" max="8" value="5" oninput="optoSettings.maxPerTeam=+this.value"></div>
       <div class="opto-row classic-only"><label>Min Conf</label><input class="opto-input" id="opto-conf" type="number" min="0" max="10" value="0" oninput="optoSettings.minConfirmed=+this.value"></div>
+      <div class="opto-row classic-only" style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px;">
+        <label style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);">Late Swap</label>
+      </div>
+      <div class="opto-row classic-only"><label>Auto-Detect Locks</label><input type="checkbox" id="opto-autodetect-locks" checked onchange="lateSwapAutoDetect=this.checked; if(lateSwapMode) refreshLateSwapUI();"></div>
     </div>
     <!-- Stack Rules — rendered by renderStackRules() -->
     <div class="opto-col classic-only" id="opto-stack-col">
@@ -4487,8 +4507,68 @@ let dkDraftgroupMapCPT  = {};      // Showdown: player name → CPT draftgroup I
 let dkDraftgroupMapFLEX = {};      // Showdown: player name → FLEX draftgroup ID
 let activeBuildId = null;     // ID of currently displayed build
 let stackExpCaps    = {};          // "TEAM_N" → max stack exposure % (e.g. "ARI_3" → 20)
+let lateSwapMode    = false;       // late-swap toggle — when ON, optimizer re-optimizes unlocked slots only
+let lateSwapAutoDetect = true;     // auto-detect locks from game_time_utc (vs manual toggle)
+let _lateSwapData   = null;        // parsed DK entries CSV: { entries: [{entryId, contestName, contestId, entryFee, playerCells: [...]}], poolSection: string, header: string }
 
 function isExcluded(p) { return excludedPlayers.has(p.player_id) || teamExcludes.has(p.team); }
+
+// ── LATE SWAP — LOCK DETECTION ──────────────────────────────────────────────
+
+// Map game_pk → game_time_utc Date object (built from _games on each data load)
+let _gameLockTimes = {};   // game_pk → Date
+
+function buildGameLockTimes() {
+  _gameLockTimes = {};
+  _games.forEach(g => {
+    if (g.game_pk && g.game_time_utc) {
+      _gameLockTimes[g.game_pk] = new Date(g.game_time_utc);
+    }
+  });
+}
+
+function isPlayerGameLocked(player) {
+  if (!lateSwapMode) return false;
+  if (!player?.game_pk) return false;
+  const lockTime = _gameLockTimes[player.game_pk];
+  if (!lockTime) return false;
+  return Date.now() >= lockTime.getTime();
+}
+
+function getPlayerLockTime(player) {
+  if (!player?.game_pk) return null;
+  return _gameLockTimes[player.game_pk] || null;
+}
+
+// Partition a lineup object (slot_key → player) into locked/unlocked sets.
+// Returns { lockedSlots: {key: player}, unlockedSlotDefs: [slotDef...],
+//           lockedSalary, remainingBudget, allLocked, noneLocked }
+function partitionLineup(lineupObj) {
+  const lockedSlots      = {};
+  const unlockedSlotDefs = [];
+  let lockedSalary       = 0;
+
+  for (const slotDef of LINEUP_SLOTS) {
+    const p = lineupObj[slotDef.key];
+    if (!p) { unlockedSlotDefs.push(slotDef); continue; }
+    if (isPlayerGameLocked(p)) {
+      lockedSlots[slotDef.key] = p;
+      lockedSalary += p.salary || 0;
+    } else {
+      unlockedSlotDefs.push(slotDef);
+    }
+  }
+
+  const remainingBudget = optoSalaryCap - lockedSalary;
+  return {
+    lockedSlots,
+    unlockedSlotDefs,
+    lockedSalary,
+    remainingBudget,
+    allLocked:   unlockedSlotDefs.length === 0,
+    noneLocked:  Object.keys(lockedSlots).length === 0,
+  };
+}
 
 // ── COLUMN CONFIG ───────────────────────────────────────────────────────────
 // fixed:true columns are always visible and not user-toggleable
@@ -4677,6 +4757,7 @@ async function loadPlayerPool(date, slate) {
         .eq('game_date', effectiveDate)
     : { data: [] };
   _games = games || [];
+  buildGameLockTimes();   // late-swap: cache game_pk → lock time
 
   const gamePks = _games.map(g => g.game_pk);
 
@@ -5934,7 +6015,10 @@ function addToLineup(pid) {
   showToast(`No open ${player.positions.join('/')} slot`);
 }
 
-function removeFromSlot(key) { lineup[key]=null; renderSlot(key); updateTotals(); renderPool(); }
+function removeFromSlot(key) {
+  if (lateSwapMode && lineup[key] && isPlayerGameLocked(lineup[key])) { showToast('Cannot remove — game has started'); return; }
+  lineup[key]=null; renderSlot(key); updateTotals(); renderPool();
+}
 function clearSlot(key) {
   if (_contestMode === 'showdown') {
     lineup[key] = null;
@@ -5954,23 +6038,45 @@ function renderSlot(key) {
   el.setAttribute('ondragleave', 'slotDragLeave(event)');
   el.setAttribute('ondrop',      `dropPlayer(event,'${key}')`);
   if (!p) {
-    el.className='lineup-slot';
+    const lockClass = lateSwapMode ? ' game-unlocked' : '';
+    el.className='lineup-slot' + lockClass;
     el.innerHTML=`<span class="slot-pos">${def.label}</span><span class="slot-empty">Click or drag player</span>`;
     return;
   }
   const tc  = abbrColor(p.team);
   const tag = p.team ? `<span class="team-tag" style="background:${tc.bg};color:${tc.tx};font-size:9px;padding:1px 3px;">${p.team}</span>` : '';
-  el.className='lineup-slot filled';
+
+  // Late-swap lock indicator
+  const gameLocked = isPlayerGameLocked(p);
+  const lockClass  = lateSwapMode ? (gameLocked ? ' game-locked' : ' game-unlocked') : '';
+  let lockIndicator = '';
+  if (lateSwapMode && p) {
+    if (gameLocked) {
+      lockIndicator = '<span class="slot-lock-icon" title="Game started — locked">&#128274;</span>';
+    } else {
+      const lockTime = getPlayerLockTime(p);
+      if (lockTime) {
+        const mins = Math.max(0, Math.round((lockTime.getTime() - Date.now()) / 60000));
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        const timeStr = h > 0 ? `${h}h ${m}m` : `${m}m`;
+        lockIndicator = `<span class="slot-lock-time" title="Locks at ${lockTime.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}">Locks in ${timeStr}</span>`;
+      }
+    }
+  }
+
+  el.className='lineup-slot filled' + lockClass;
   el.innerHTML=`
     <span class="slot-pos">${def.label}</span>
     <div class="slot-player">
       ${tag}
-      ${p.lineup_confirmed?'<span style="color:var(--hi);font-size:9px;">✓</span>':p.in_lineup?'<span style="color:var(--mid);font-size:9px;">~</span>':''}
+      ${p.lineup_confirmed?'<span style="color:var(--hi);font-size:9px;">&#10003;</span>':p.in_lineup?'<span style="color:var(--mid);font-size:9px;">~</span>':''}
       <span class="slot-pname">${p.name}</span>
     </div>
     <span class="slot-psal">${p.salary != null ? '$'+p.salary.toLocaleString() : '—'}</span>
     <span class="slot-pproj">${p.proj_dk_pts!=null?p.proj_dk_pts.toFixed(1)+' pts':'—'}</span>
-    <span class="slot-remove" onclick="removeFromSlot('${key}')" title="Remove">×</span>`;
+    ${lockIndicator}
+    ${gameLocked && lateSwapMode ? '' : `<span class="slot-remove" onclick="removeFromSlot('${key}')" title="Remove">×</span>`}`;
 }
 
 function updateTotals() {
@@ -6067,10 +6173,12 @@ function renderLineupCard(s, i) {
     if (!p) return `<div class="lc-slot-pitcher">${posTag}<span style="grid-column:2/10"></span></div>`;
     const tc = abbrColor(p.team || '');
     const lastName = (p.name || '').split(' ').slice(1).join(' ') || p.name || '—';
-    return `<div class="lc-slot-pitcher">
+    const lockIcon = lateSwapMode && isPlayerGameLocked(p) ? '<span style="font-size:9px;" title="Locked">&#128274;</span>' : '';
+    const lockStyle = lateSwapMode && isPlayerGameLocked(p) ? 'opacity:.55;' : '';
+    return `<div class="lc-slot-pitcher" style="${lockStyle}">
       ${posTag}
       <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team || '—'}</span>
-      <span class="lc-slot-name">${lastName}</span>
+      <span class="lc-slot-name">${lockIcon}${lastName}</span>
       <span class="lc-slot-sal">${fmtSal(p.salary)}</span>
       <span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span>
       <span class="lc-slot-own">${fmtOwn(p.proj_ownership)}</span>
@@ -6087,10 +6195,12 @@ function renderLineupCard(s, i) {
     if (!p) return `<div class="lc-slot-hitter">${posTag}<span style="grid-column:2/10"></span></div>`;
     const tc = abbrColor(p.team || '');
     const lastName = (p.name || '').split(' ').slice(1).join(' ') || p.name || '—';
-    return `<div class="lc-slot-hitter">
+    const lockIcon = lateSwapMode && isPlayerGameLocked(p) ? '<span style="font-size:9px;" title="Locked">&#128274;</span>' : '';
+    const lockStyle = lateSwapMode && isPlayerGameLocked(p) ? 'opacity:.55;' : '';
+    return `<div class="lc-slot-hitter" style="${lockStyle}">
       ${posTag}
       <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team || '—'}</span>
-      <span class="lc-slot-name">${lastName}</span>
+      <span class="lc-slot-name">${lockIcon}${lastName}</span>
       <span class="lc-slot-bo">${p.batting_order ?? '—'}</span>
       <span class="lc-slot-sal">${fmtSal(p.salary)}</span>
       <span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span>
@@ -6921,6 +7031,7 @@ function optoDebug() {
 
 function generateLineups() {
   if (_contestMode === 'showdown') { generateLineups_Showdown(); return; }
+  if (lateSwapMode) { lateSwapAllLineups(); return; }
   const N = optoSettings.numLineups || 1;
 
   // Validate pool
@@ -7012,6 +7123,705 @@ function generateLineups() {
   }
 
   setTimeout(nextChunk, 30);
+}
+
+// ── LATE SWAP ────────────────────────────────────────────────────────────────
+
+function enterLateSwapMode() {
+  // Switch to classic-like mode and prompt CSV upload
+  setContestMode('lateswap');
+  document.getElementById('lateswap-csv-input').click();
+}
+
+function activateLateSwapUI() {
+  lateSwapMode = true;
+  const genBtn = document.getElementById('generate-btn');
+  if (genBtn) genBtn.textContent = 'Late Swap All';
+  const lsExport = document.getElementById('ls-export-btn');
+  if (lsExport) lsExport.style.display = '';
+  const lsAllBtn = document.getElementById('lateswap-all-btn');
+  if (lsAllBtn) lsAllBtn.style.display = '';
+  const lsRefreshBtn = document.getElementById('lateswap-refresh-btn');
+  if (lsRefreshBtn) lsRefreshBtn.style.display = '';
+  refreshLateSwapUI();
+}
+
+// Parse DK Classic entries CSV → import lineups with entry metadata
+function importLateSwapCSV(file) {
+  if (!file) return;
+  document.getElementById('lateswap-csv-input').value = ''; // allow re-upload
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const text = e.target.result;
+    const lines = text.split(/\r?\n/);
+    if (!lines.length) { showToast('Empty CSV file'); return; }
+
+    const header = lines[0];
+    const entries = [];
+    const poolLines = [];           // raw lines from the pool section
+    const dkIdByName = {};          // name → draftableId for all players in CSV
+    const SLOT_MAP = ['sp1','sp2','c','1b','2b','3b','ss','of1','of2','of3']; // columns 4-13
+
+    for (let i = 1; i < lines.length; i++) {
+      const raw = lines[i];
+      if (!raw.trim()) continue;
+
+      // Parse respecting quoted fields (contest names may contain commas)
+      const cols = parseCSVRow(raw);
+      const entryId = (cols[0] || '').trim();
+
+      // Entry row: has numeric entry ID in column 0
+      if (/^\d{5,}$/.test(entryId)) {
+        const contestName = (cols[1] || '').trim();
+        const contestId   = (cols[2] || '').trim();
+        const entryFee    = (cols[3] || '').trim();
+
+        // Parse 10 player cells from columns 4-13
+        const playerCells = [];
+        for (let c = 4; c <= 13; c++) {
+          const cell = (cols[c] || '').trim();
+          const m = cell.match(/^(.+?)\s*\((\d+)\)$/);
+          if (m) {
+            playerCells.push({ name: m[1].trim(), draftableId: m[2], raw: cell });
+          } else {
+            playerCells.push({ name: '', draftableId: '', raw: cell });
+          }
+        }
+
+        entries.push({ entryId, contestName, contestId, entryFee, playerCells });
+      }
+
+      // Pool data: columns 15+ contain player pool info (Position, "Name (ID)", Name, ID, ...)
+      const poolName = (cols[17] || '').trim();
+      const poolId   = (cols[18] || '').trim();
+      if (poolName && /^\d{5,}$/.test(poolId)) {
+        dkIdByName[poolName.toLowerCase()] = poolId;
+        dkIdByName[normName(poolName)]     = poolId;
+      }
+    }
+
+    if (!entries.length) { showToast('No entries found in CSV'); return; }
+
+    // Also index draftable IDs from entry player cells (backup)
+    entries.forEach(entry => {
+      entry.playerCells.forEach(pc => {
+        if (pc.name && pc.draftableId) {
+          dkIdByName[pc.name.toLowerCase()] = pc.draftableId;
+          dkIdByName[normName(pc.name)]     = pc.draftableId;
+        }
+      });
+    });
+
+    // Store the draftgroup map so exports can find IDs for swapped players
+    dkDraftgroupMap = dkIdByName;
+
+    // Stamp dk_id on all pool players
+    [...allHitters, ...allPitchers].forEach(p => {
+      const id = dkIdByName[normName(p.name)] || dkIdByName[(p.name || '').toLowerCase()];
+      if (id) p.dk_id = id;
+    });
+
+    // Build lineup objects from entries by matching player names to our pool
+    const poolLookup = {};
+    [...allHitters, ...allPitchers].forEach(p => {
+      poolLookup[normName(p.name)] = p;
+      poolLookup[(p.name || '').toLowerCase()] = p;
+    });
+
+    const importedLineups = [];
+    let matched = 0, unmatched = 0;
+
+    for (const entry of entries) {
+      const lineupObj = {};
+      entry.playerCells.forEach((pc, idx) => {
+        const slotKey = SLOT_MAP[idx];
+        if (!pc.name) return;
+        const player = poolLookup[normName(pc.name)] || poolLookup[pc.name.toLowerCase()];
+        if (player) {
+          // Clone and stamp the original draftable ID from the CSV
+          lineupObj[slotKey] = { ...player, _dkDraftableId: pc.draftableId, _dkCellName: pc.name };
+          matched++;
+        } else {
+          // Create a stub player so the slot isn't empty
+          lineupObj[slotKey] = {
+            player_id: null, name: pc.name, salary: 0, positions: [],
+            proj_dk_pts: 0, team: '', game_pk: null,
+            _dkDraftableId: pc.draftableId, _dkCellName: pc.name,
+          };
+          unmatched++;
+        }
+      });
+
+      const totProj = Object.values(lineupObj).filter(Boolean)
+        .reduce((s, p) => s + (p.proj_dk_pts || 0), 0);
+
+      importedLineups.push({
+        name: `Entry ${entry.entryId.slice(-4)}`,
+        totProj: +totProj.toFixed(1),
+        lineup: lineupObj,
+        ts: Date.now(),
+        _entryMeta: { entryId: entry.entryId, contestName: entry.contestName, contestId: entry.contestId, entryFee: entry.entryFee },
+      });
+    }
+
+    // Store raw data for export reconstruction
+    _lateSwapData = { entries, header, rawText: text };
+
+    // Create a build with these lineups
+    const buildName = `Late Swap (${entries.length} entries)`;
+    const newBuild = { id: 'build_ls_' + Date.now(), name: buildName, ts: Date.now(), lineups: importedLineups };
+    const allBuilds = getBuilds();
+    allBuilds.push(newBuild);
+    saveBuilds(allBuilds);
+    activeBuildId = newBuild.id;
+
+    // Activate late swap UI
+    activateLateSwapUI();
+    renderBuildTabs();
+    renderSavedCards();
+
+    if (unmatched > 0) {
+      showToast(`Imported ${entries.length} entries (${unmatched} players unmatched — check pool data)`);
+    } else {
+      showToast(`Imported ${entries.length} entries — ${matched} players matched`);
+    }
+  };
+  reader.readAsText(file);
+}
+
+// Parse a CSV row handling quoted fields (contest names may contain commas)
+function parseCSVRow(row) {
+  const cols = [];
+  let cur = '', inQuotes = false;
+  for (let i = 0; i < row.length; i++) {
+    const ch = row[i];
+    if (ch === '"') { inQuotes = !inQuotes; continue; }
+    if (ch === ',' && !inQuotes) { cols.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  cols.push(cur);
+  return cols;
+}
+
+// Export late-swapped lineups back to DK-uploadable CSV format.
+// Strategy: take the original CSV text, find each entry row by entry ID,
+// and replace ONLY columns 4-13 (the 10 player cells) while preserving
+// everything else (trailing pool data columns, formatting, etc.)
+function exportLateSwapCSV() {
+  if (!_lateSwapData) { showToast('No late swap data loaded'); return; }
+
+  const saved = getActiveLineups();
+  if (!saved.length) { showToast('No lineups to export'); return; }
+
+  const SLOT_MAP = ['sp1','sp2','c','1b','2b','3b','ss','of1','of2','of3'];
+
+  // Build a map: entryId → updated player cells
+  const updatedByEntryId = {};
+  let unmatchedCount = 0;
+
+  for (const s of saved) {
+    const meta = s._entryMeta;
+    if (!meta) continue;
+
+    const playerCells = SLOT_MAP.map(slotKey => {
+      const p = s.lineup?.[slotKey];
+      if (!p) return '';
+      const dkId = p._dkDraftableId
+        || dkDraftgroupMap[normName(p.name)]
+        || dkDraftgroupMap[(p.name || '').toLowerCase()]
+        || p.dk_id || '';
+      const displayName = p._dkCellName || p.name || '';
+      if (!dkId) unmatchedCount++;
+      return `${displayName} (${dkId})`;
+    });
+
+    updatedByEntryId[meta.entryId] = playerCells;
+  }
+
+  // Walk through the original CSV line-by-line, replacing player cells on entry rows
+  const origLines = _lateSwapData.rawText.split(/\r?\n/);
+  const outLines = [];
+
+  for (let i = 0; i < origLines.length; i++) {
+    const raw = origLines[i];
+    if (i === 0) { outLines.push(raw); continue; } // header
+
+    const cols = parseCSVRow(raw);
+    const entryId = (cols[0] || '').trim();
+
+    if (/^\d{5,}$/.test(entryId) && updatedByEntryId[entryId]) {
+      // Replace columns 4-13 with updated player cells, keep everything else
+      const updated = updatedByEntryId[entryId];
+      for (let c = 4; c <= 13; c++) {
+        cols[c] = updated[c - 4] || '';
+      }
+      outLines.push(cols.join(','));
+    } else {
+      // Non-entry row or unmodified entry — keep as-is
+      outLines.push(raw);
+    }
+  }
+
+  if (unmatchedCount > 0) {
+    console.warn(`[Late Swap Export] ${unmatchedCount} player(s) missing draftable ID`);
+    showToast(`Warning: ${unmatchedCount} player(s) missing draftable IDs — check console`);
+  }
+
+  const blob = new Blob([outLines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `DKEntries_lateswap_${new Date().toISOString().slice(0,16).replace(':','')}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  showToast(`Exported ${Object.keys(updatedByEntryId).length} entries`);
+}
+
+function refreshLateSwapUI() {
+  // Refresh slot lock indicators in the builder
+  for (const s of LINEUP_SLOTS) renderSlot(s.key);
+  updateTotals();
+
+  // Update salary breakdown display
+  const infoEl = document.getElementById('lateswap-sal-info');
+  if (!infoEl) return;
+  if (!lateSwapMode) { infoEl.className = 'lateswap-sal-breakdown'; return; }
+
+  const filled = Object.values(lineup).filter(Boolean);
+  if (filled.length === 0) { infoEl.className = 'lateswap-sal-breakdown'; return; }
+
+  const part = partitionLineup(lineup);
+  infoEl.className = 'lateswap-sal-breakdown active';
+  if (part.allLocked) {
+    infoEl.innerHTML = 'All games started — no slots available for late swap.';
+  } else if (part.noneLocked) {
+    infoEl.innerHTML = 'No games locked yet — full optimization available.';
+  } else {
+    const lockedN = Object.keys(part.lockedSlots).length;
+    const unlockN = part.unlockedSlotDefs.length;
+    infoEl.innerHTML = `Locked: ${lockedN} players ($${part.lockedSalary.toLocaleString()}) | Unlocked: ${unlockN} slots ($${part.remainingBudget.toLocaleString()} remaining)`;
+  }
+}
+
+async function refreshLateSwapStatus() {
+  // Re-query games table for updated game times, then refresh UI
+  showToast('Refreshing game status...');
+  const effectiveDate = document.getElementById('date-select')?.value;
+  if (!effectiveDate) return;
+  const { data: games } = await sb.from('games')
+    .select('game_pk,game_date,home_team_id,away_team_id,home_team,away_team,home_sp_id,away_sp_id,home_sp_name,away_sp_name,venue_name,venue_id,game_time_utc')
+    .eq('game_date', effectiveDate);
+  _games = games || [];
+  buildGameLockTimes();
+  refreshLateSwapUI();
+  renderSavedCards();
+  showToast('Lock status refreshed');
+}
+
+// Build a late-swap LP model for only the unlocked positions.
+// lockedPids: Set of player_ids that are locked (excluded from pool)
+// unlockedSlotDefs: array of LINEUP_SLOTS entries to fill
+// remainingBudget: salary available for unlocked slots
+// lockedSlots: {key: player} — locked players (for stack counting)
+function lateSwapBuildLP(eligPlayers, unlockedSlotDefs, remainingBudget, lockedPids, lockedSlots, pastSets, perturbedProj, opts) {
+  // Count required positions from unlocked slots
+  const REQ = {};
+  for (const sd of unlockedSlotDefs) {
+    const pos = sd.pos;
+    REQ[pos] = (REQ[pos] || 0) + 1;
+  }
+
+  const totalUnlocked = unlockedSlotDefs.length;
+
+  // Auto-cap minSalary proportionally
+  const topSalTotal = [...eligPlayers].map(p => p.salary || 0)
+    .sort((a, b) => b - a).slice(0, totalUnlocked).reduce((s, v) => s + v, 0);
+  const proportionalMin = Math.floor((optoSettings.minSalary || 48000) * (totalUnlocked / 10));
+  const effectiveMinSal = Math.min(proportionalMin, Math.floor(topSalTotal * 0.95));
+
+  const problem = {
+    optimize: 'proj',
+    opType: 'max',
+    constraints: {
+      total:   { equal: totalUnlocked },
+      sal_max: { max: remainingBudget },
+      sal_min: { min: Math.max(0, effectiveMinSal) },
+    },
+    variables: {},
+    ints: {},
+  };
+
+  // Position slot lower bounds
+  for (const [pos, cnt] of Object.entries(REQ)) {
+    problem.constraints[`pos_${pos}`] = { min: cnt };
+  }
+
+  // Stack constraints — account for locked players already contributing to stacks
+  const lockedMainCount = opts.mainPlayerIds
+    ? Object.values(lockedSlots).filter(p => p && opts.mainPlayerIds.includes(p.player_id)).length
+    : 0;
+  const neededMain = Math.max(0, (opts.mainSize || 0) - lockedMainCount);
+  if (opts.mainPlayerIds && opts.mainPlayerIds.length >= neededMain && neededMain > 0) {
+    problem.constraints.stk_main = { min: neededMain };
+  }
+
+  const lockedSubCount = opts.subTeam
+    ? Object.values(lockedSlots).filter(p => p && optoTeamKey(p) === opts.subTeam && !optoIsPitcher(p)).length
+    : 0;
+  const neededSub = Math.max(0, (opts.subSize || 0) - lockedSubCount);
+  if (opts.subTeam && neededSub > 0) {
+    problem.constraints.stk_sub = { min: neededSub };
+  }
+
+  // Per-team max — account for locked players already on each team
+  const lockedTeamCounts = {};
+  Object.values(lockedSlots).forEach(p => {
+    if (p) { const tk = optoTeamKey(p); if (tk) lockedTeamCounts[tk] = (lockedTeamCounts[tk] || 0) + 1; }
+  });
+  const teams = [...new Set(eligPlayers.map(p => optoTeamKey(p)).filter(Boolean))];
+  for (const t of teams) {
+    const maxFromUnlocked = Math.max(0, (optoSettings.maxPerTeam || 5) - (lockedTeamCounts[t] || 0));
+    problem.constraints[`tm_${t}`] = { max: maxFromUnlocked };
+  }
+
+  // Diversity constraints
+  pastSets.forEach((pidSet, idx) => {
+    if (pidSet.size > 0) {
+      problem.constraints[`dv_${idx}`] = { max: totalUnlocked - Math.min(optoSettings.minUnique || 3, totalUnlocked) };
+    }
+  });
+
+  const playerCache = new Map(eligPlayers.map(p => {
+    const positions = optoGetPositions(p);
+    const isPitcher = positions.some(pos => ['SP','RP','P'].includes(pos));
+    const teamKey   = optoTeamKey(p);
+    return [p.player_id, { positions, isPitcher, teamKey }];
+  }));
+
+  const mainSet = new Set(opts.mainPlayerIds || []);
+
+  for (const p of eligPlayers) {
+    const pid = p.player_id;
+    if (lockedPids.has(pid)) continue;   // locked players can't fill unlocked slots
+
+    const key = `p${pid}`;
+    const { positions, isPitcher, teamKey } = playerCache.get(pid);
+
+    // Only include players whose position is needed in unlocked slots
+    const eligPos = positions.filter(pos => REQ[pos] !== undefined);
+    if (eligPos.length === 0) continue;
+
+    const varDef = {
+      proj:    perturbedProj?.get(pid) ?? projOverrides[pid] ?? p.proj_dk_pts ?? 0,
+      sal_max: p.salary || 0,
+      sal_min: p.salary || 0,
+      total:   1,
+    };
+
+    const frac = (isPitcher || eligPos.length === 1) ? 1 : 1 / eligPos.length;
+    for (const pos of eligPos) {
+      varDef[`pos_${pos}`] = frac;
+    }
+
+    if (teamKey) varDef[`tm_${teamKey}`] = 1;
+    if (mainSet.has(pid)) varDef.stk_main = 1;
+    if (opts.subTeam && optoTeamKey(p) === opts.subTeam && !isPitcher) varDef.stk_sub = 1;
+
+    // Force-include (from user's "lock" feature — different from game-lock)
+    if (lockedPlayers.has(pid)) {
+      problem.constraints[`lk_${key}`] = { equal: 1 };
+      varDef[`lk_${key}`] = 1;
+    }
+
+    pastSets.forEach((pidSet, idx) => {
+      if (pidSet.has(pid)) varDef[`dv_${idx}`] = 1;
+    });
+
+    varDef[`bd_${key}`] = 1;
+    problem.constraints[`bd_${key}`] = { max: 1 };
+
+    problem.variables[key] = varDef;
+    problem.ints[key]      = 1;
+  }
+
+  return problem;
+}
+
+// Assemble a late-swap result: place solved players into unlocked slots only.
+// lockedSlots preserved, unlocked slots filled via bipartite matching.
+function lateSwapAssembleLineup(selectedIds, eligPlayers, lockedSlots, unlockedSlotDefs) {
+  const result = { ...lockedSlots };   // start with locked players in their slots
+  const players = eligPlayers.filter(p => selectedIds.includes(p.player_id));
+
+  // Separate SPs from hitters for unlocked slots
+  const unlockedSPSlots     = unlockedSlotDefs.filter(s => s.pos === 'SP');
+  const unlockedHitterSlots = unlockedSlotDefs.filter(s => s.pos !== 'SP');
+
+  // Fill unlocked SP slots
+  const sps = players.filter(p => optoIsPitcher(p)).sort((a, b) => (b.proj_dk_pts || 0) - (a.proj_dk_pts || 0));
+  let spIdx = 0;
+  for (const sd of unlockedSPSlots) {
+    result[sd.key] = sps[spIdx++] || null;
+  }
+
+  // Fill unlocked hitter slots via bipartite matching
+  const hitters = players.filter(p => !optoIsPitcher(p));
+  const slotMatch = {};
+
+  function augment(hitter, tried) {
+    const positions = optoGetPositions(hitter);
+    for (const sd of unlockedHitterSlots) {
+      if (tried.has(sd.key) || !positions.includes(sd.pos)) continue;
+      tried.add(sd.key);
+      if (!slotMatch[sd.key] || augment(slotMatch[sd.key], tried)) {
+        slotMatch[sd.key] = hitter;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  const sorted = [...hitters].sort((a, b) => {
+    const aC = unlockedHitterSlots.filter(s => optoGetPositions(a).includes(s.pos)).length;
+    const bC = unlockedHitterSlots.filter(s => optoGetPositions(b).includes(s.pos)).length;
+    return aC - bC;
+  });
+  for (const h of sorted) augment(h, new Set());
+  for (const sd of unlockedHitterSlots) result[sd.key] = slotMatch[sd.key] || null;
+
+  return result;
+}
+
+// Core late-swap search for a single lineup — mirrors optoFindBest but for partial lineups.
+function lateSwapFindBest(lineupObj, pastLineups, capExcluded, stackAppearCount, totalN) {
+  const part = partitionLineup(lineupObj);
+
+  if (part.allLocked) return null;   // nothing to swap
+  if (part.remainingBudget <= 0) return null;   // salary impossible
+
+  const lockedPids = new Set(Object.values(part.lockedSlots).filter(Boolean).map(p => p.player_id));
+
+  // If nothing is locked, delegate to the regular optimizer
+  if (part.noneLocked) {
+    return optoFindBest(optoPickRule(0, totalN), pastLineups, capExcluded, stackAppearCount, totalN);
+  }
+
+  const allElig = [
+    ...allHitters.filter(h => !isExcluded(h) && !capExcluded.has(h.player_id) && (h.salary || 0) > 0),
+    ...allPitchers.filter(p => !isExcluded(p) && !capExcluded.has(p.player_id) && (p.salary || 0) > 0),
+  ];
+
+  const DIVERSITY_WINDOW = 20;
+  const recentPast = pastLineups.slice(-DIVERSITY_WINDOW);
+  const pastSets = recentPast.map(saved =>
+    new Set(Object.values(saved.lineup || {}).filter(Boolean).map(p => p.player_id))
+  );
+  const eligById = new Map(allElig.map(p => [p.player_id, p]));
+
+  const rule = optoPickRule(0, totalN);
+  const randPct = optoSettings.randPct || 0;
+
+  // Rank teams
+  const allTeams    = [...new Set(allHitters.map(h => optoTeamKey(h)).filter(Boolean))];
+  const teamScores  = Object.fromEntries(allTeams.map(t => [t, optoTeamScore(t)]));
+  const rankedTeams = [...allTeams].sort((a, b) => teamScores[b] - teamScores[a]);
+
+  const mainPrefs = optoSettings.teamStacks.filter(ts => ts.role === 'main').map(ts => ts.team);
+  const mainCandidates = (mainPrefs.length > 0
+    ? mainPrefs
+    : rankedTeams.slice(0, 10).filter(t =>
+        allHitters.filter(h => optoTeamKey(h) === t && !isExcluded(h)).length >= rule.primarySize
+      )
+  );
+
+  const windows = optoStackWindows(rule);
+  const subPrefs = optoSettings.teamStacks.filter(ts => ts.role === 'sub').map(ts => ts.team);
+  function getSubCandidates(mainTeam) {
+    if (rule.subSize === 0) return [null];
+    if (subPrefs.length > 0) return subPrefs.filter(t => t !== mainTeam);
+    return rankedTeams
+      .filter(t => t !== mainTeam && allHitters.filter(h => optoTeamKey(h) === t && !isExcluded(h)).length >= rule.subSize)
+      .slice(0, 8);
+  }
+
+  function trySolve(mainTeam, window, subTeam, perturbedProj) {
+    const teamHitters = allHitters.filter(h => optoTeamKey(h) === mainTeam && !isExcluded(h));
+    const mainPlayerIds = window.length === 0
+      ? teamHitters.map(h => h.player_id)
+      : teamHitters.filter(h => h.batting_order != null && window.includes(h.batting_order)).map(h => h.player_id);
+    if (mainPlayerIds.length < rule.primarySize) return null;
+
+    const problem = lateSwapBuildLP(allElig, part.unlockedSlotDefs, part.remainingBudget, lockedPids, part.lockedSlots, pastSets, perturbedProj, {
+      mainTeam, mainPlayerIds, mainSize: rule.primarySize,
+      subTeam,  subSize: rule.subSize,
+    });
+
+    const ids = optoSolve(problem);
+    if (!ids || ids.length !== part.unlockedSlotDefs.length) return null;
+
+    const assembled = lateSwapAssembleLineup(ids, allElig, part.lockedSlots, part.unlockedSlotDefs);
+    const score = Object.values(assembled).filter(Boolean).reduce((s, p) =>
+      s + (projOverrides[p.player_id] ?? p?.proj_dk_pts ?? 0), 0);
+    assembled._score = score; assembled._mainTeam = mainTeam; assembled._subTeam = subTeam;
+    return { score, lineup: assembled };
+  }
+
+  let bestScore  = -Infinity;
+  let bestLineup = null;
+
+  if (randPct > 0) {
+    const shuffledMain = [...mainCandidates].sort(() => Math.random() - 0.5);
+    const makePerturbedProj = () => new Map(allElig.map(p => {
+      const base = projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
+      return [p.player_id, base * (1 + (Math.random() * 2 - 1) * randPct / 100)];
+    }));
+
+    outer:
+    for (const mainTeam of shuffledMain) {
+      const subPool = getSubCandidates(mainTeam);
+      for (let t = 0; t < 4; t++) {
+        const window  = windows[Math.floor(Math.random() * windows.length)];
+        const subTeam = subPool[Math.floor(Math.random() * subPool.length)] ?? null;
+        const res = trySolve(mainTeam, window, subTeam, makePerturbedProj());
+        if (res) { bestLineup = res.lineup; break outer; }
+      }
+    }
+
+    // Fallback: no-stack solve
+    if (!bestLineup) {
+      const prob = lateSwapBuildLP(allElig, part.unlockedSlotDefs, part.remainingBudget, lockedPids, part.lockedSlots, pastSets, makePerturbedProj(), {
+        mainTeam: null, mainPlayerIds: [], mainSize: 0, subTeam: null, subSize: 0,
+      });
+      const ids = optoSolve(prob);
+      if (ids && ids.length === part.unlockedSlotDefs.length) {
+        bestLineup = lateSwapAssembleLineup(ids, allElig, part.lockedSlots, part.unlockedSlotDefs);
+        bestLineup._score = Object.values(bestLineup).filter(Boolean).reduce((s, p) => s + (p?.proj_dk_pts ?? 0), 0);
+      }
+    }
+  } else {
+    const MAX_SOLVES = 60;
+    let solves = 0;
+    outer: for (const mainTeam of mainCandidates) {
+      for (const window of windows) {
+        for (const subTeam of getSubCandidates(mainTeam)) {
+          if (solves++ >= MAX_SOLVES) break outer;
+          const res = trySolve(mainTeam, window, subTeam, null);
+          if (res && res.score > bestScore) { bestScore = res.score; bestLineup = res.lineup; }
+        }
+      }
+    }
+  }
+
+  return bestLineup;
+}
+
+// Late Swap All — re-optimize all lineups in the active build
+function lateSwapAllLineups() {
+  if (_contestMode === 'showdown') { showToast('Late swap is Classic mode only'); return; }
+  if (!lateSwapMode) { showToast('Enter Late Swap mode first'); return; }
+
+  const saved = getActiveLineups();
+  if (!saved.length) { showToast('No saved lineups to late-swap'); return; }
+  if (typeof solver === 'undefined') { showToast('LP solver not loaded'); return; }
+
+  // Check if there are any unlocked slots at all
+  let anyUnlocked = false;
+  for (const s of saved) {
+    const part = partitionLineup(s.lineup || {});
+    if (!part.allLocked) { anyUnlocked = true; break; }
+  }
+  if (!anyUnlocked) { showToast('All games have started — no slots to swap'); return; }
+
+  showToast(`Late-swapping ${saved.length} lineup(s)...`);
+
+  const N = saved.length;
+  const spIdSet          = new Set(allPitchers.map(p => p.player_id));
+  const appearCount      = {};
+  const stackAppearCount = {};
+  const hitterSlotKeys   = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
+
+  // Count initial exposure from ALL players (locked + unlocked) across all lineups
+  // Locked appearances count toward exposure caps
+  saved.forEach(s => {
+    Object.values(s.lineup || {}).forEach(p => {
+      if (p?.player_id) appearCount[p.player_id] = (appearCount[p.player_id] || 0) + 1;
+    });
+  });
+
+  const reOptimized = [];
+  let swapped = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < saved.length; i++) {
+    const entry = saved[i];
+    const part = partitionLineup(entry.lineup || {});
+
+    if (part.allLocked) {
+      reOptimized.push(entry);
+      skipped++;
+      continue;
+    }
+
+    // Subtract current unlocked player appearances (they'll be replaced)
+    const oldUnlockedPids = [];
+    for (const sd of part.unlockedSlotDefs) {
+      const p = entry.lineup?.[sd.key];
+      if (p?.player_id) {
+        oldUnlockedPids.push(p.player_id);
+        appearCount[p.player_id] = Math.max(0, (appearCount[p.player_id] || 0) - 1);
+      }
+    }
+
+    // Build cap-excluded set from current exposure
+    const capExcluded = new Set();
+    Object.entries(appearCount).forEach(([pid, cnt]) => {
+      const isSP = spIdSet.has(+pid);
+      const cap  = isSP ? expPitcherMax : expHitterMax;
+      if (cap < 100) {
+        const globalMax = Math.max(1, Math.ceil(N * cap / 100));
+        if (cnt >= globalMax) capExcluded.add(+pid);
+      }
+    });
+    Object.entries(expTargets).forEach(([pid, capPct]) => {
+      const playerMax = Math.max(1, Math.ceil(N * capPct / 100));
+      if ((appearCount[+pid] || 0) >= playerMax) capExcluded.add(+pid);
+    });
+
+    const newLineup = lateSwapFindBest(entry.lineup, reOptimized, capExcluded, stackAppearCount, N);
+
+    if (newLineup) {
+      // Stamp draftable IDs on newly swapped players for DK export
+      for (const sd of part.unlockedSlotDefs) {
+        const p = newLineup[sd.key];
+        if (p && !p._dkDraftableId) {
+          const dkId = dkDraftgroupMap[normName(p.name)] || dkDraftgroupMap[(p.name || '').toLowerCase()] || p.dk_id || '';
+          if (dkId) { p._dkDraftableId = dkId; p._dkCellName = p.name; }
+        }
+        if (p?.player_id) appearCount[p.player_id] = (appearCount[p.player_id] || 0) + 1;
+      }
+
+      // Track stack appearances
+      const teamCounts = {};
+      hitterSlotKeys.forEach(k => { const p = newLineup[k]; if (p?.team) teamCounts[p.team] = (teamCounts[p.team] || 0) + 1; });
+      Object.entries(teamCounts).forEach(([team, cnt]) => {
+        for (let s = 2; s <= cnt; s++) { const k = `${team}_${s}`; stackAppearCount[k] = (stackAppearCount[k] || 0) + 1; }
+      });
+
+      const totProj = Object.values(newLineup).filter(v => v && typeof v === 'object' && v.proj_dk_pts)
+        .reduce((s, p) => s + (p.proj_dk_pts || 0), 0);
+      reOptimized.push({ ...entry, lineup: newLineup, totProj: +totProj.toFixed(1), name: entry.name });
+      swapped++;
+    } else {
+      // Couldn't solve — restore old exposure and keep original
+      oldUnlockedPids.forEach(pid => { appearCount[pid] = (appearCount[pid] || 0) + 1; });
+      reOptimized.push(entry);
+      skipped++;
+    }
+  }
+
+  // Save results
+  updateActiveBuild(reOptimized.slice(0, 150));
+  renderSavedCards();
+  showToast(`Late swap complete: ${swapped} swapped, ${skipped} unchanged`);
 }
 
 // ── TEAM STACK PREFERENCES ────────────────────────────────────────────────────
@@ -7142,6 +7952,7 @@ function dkIdFor(p) {
 
 function exportCSV() {
   if (_contestMode === 'showdown') { exportCSV_Showdown(); return; }
+  if (lateSwapMode && _lateSwapData) { exportLateSwapCSV(); return; }
   if (Object.values(lineup).filter(Boolean).length < 10) { showToast('Fill all 10 slots to export'); return; }
   if (!Object.keys(dkDraftgroupMap).length) {
     showToast('⚠ Upload your DK entries CSV first so we have the correct draftgroup IDs');
@@ -7158,6 +7969,7 @@ function exportCSV() {
 
 function exportSavedCSV() {
   if (_contestMode === 'showdown') { exportSavedCSV_Showdown(); return; }
+  if (lateSwapMode && _lateSwapData) { exportLateSwapCSV(); return; }
   const saved = getActiveLineups();
   if (!saved.length) { showToast('No saved lineups to export'); return; }
   if (!Object.keys(dkDraftgroupMap).length) {
@@ -7228,19 +8040,38 @@ function computeSimplePMS(spInfo, hesScore) {
 
 function setContestMode(mode) {
   _contestMode = mode;
-  document.getElementById('btn-mode-classic').classList.toggle('active',   mode === 'classic');
-  document.getElementById('btn-mode-classic').classList.remove('active-sd');
-  document.getElementById('btn-mode-showdown').classList.toggle('active-sd', mode === 'showdown');
-  document.getElementById('btn-mode-showdown').classList.remove('active');
-  // Show/hide settings rows
-  document.querySelectorAll('.classic-only').forEach(el => el.style.display = mode === 'classic' ? '' : 'none');
+  // If leaving late swap mode, turn it off
+  if (mode !== 'lateswap') {
+    lateSwapMode = false;
+    const genBtn = document.getElementById('generate-btn');
+    if (genBtn) genBtn.textContent = 'Generate';
+    const lsExport = document.getElementById('ls-export-btn');
+    if (lsExport) lsExport.style.display = 'none';
+    const lsAllBtn = document.getElementById('lateswap-all-btn');
+    if (lsAllBtn) lsAllBtn.style.display = 'none';
+    const lsRefreshBtn = document.getElementById('lateswap-refresh-btn');
+    if (lsRefreshBtn) lsRefreshBtn.style.display = 'none';
+    const infoEl = document.getElementById('lateswap-sal-info');
+    if (infoEl) infoEl.className = 'lateswap-sal-breakdown';
+  }
+  // Tab button styling — clear all, then set active
+  const btnC = document.getElementById('btn-mode-classic');
+  const btnS = document.getElementById('btn-mode-showdown');
+  const btnL = document.getElementById('btn-mode-lateswap');
+  [btnC, btnS, btnL].forEach(b => { if(b) { b.classList.remove('active','active-sd','active-ls'); }});
+  if (mode === 'classic')   btnC.classList.add('active');
+  if (mode === 'showdown')  btnS.classList.add('active-sd');
+  if (mode === 'lateswap')  btnL.classList.add('active-ls');
+  // Show/hide settings rows — late swap uses classic layout
+  const isClassicLike = mode === 'classic' || mode === 'lateswap';
+  document.querySelectorAll('.classic-only').forEach(el => el.style.display = isClassicLike ? '' : 'none');
   document.querySelectorAll('.sd-only').forEach(el => el.style.display = mode === 'showdown' ? '' : 'none');
   // Update pool tabs labels + pos filters
   const tabH = document.querySelector('.pool-tab[data-tab="hitters"]');
   const tabP = document.querySelector('.pool-tab[data-tab="pitchers"]');
   if (tabH) tabH.textContent = mode === 'showdown' ? 'Captains' : 'Hitters';
   if (tabP) tabP.textContent = mode === 'showdown' ? 'Utility'  : 'Pitchers';
-  _updatePosFilters(mode);
+  _updatePosFilters(mode === 'lateswap' ? 'classic' : mode);
   // Rebuild lineup slots
   buildSlots();
   renderBuildTabs();

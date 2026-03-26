@@ -191,6 +191,17 @@ PLAYER_ID_REMAP = {
     1053355: 672580,   # Maikel Garcia
     1169451: 677951,   # Bobby Witt Jr.
     1115762: 686469,   # Vinnie Pasquantino
+    548255  : 592663,   # J.T. Realmuto (auto-fixed)
+    828445  : 650968,   # Yohel Pozo (auto-fixed)
+    919910  : 665487,   # Fernando Tatis Jr. (auto-fixed)
+    962605  : 671277,   # Luis Garcia Jr. (auto-fixed)
+    1115760 : 686780,   # Pedro Pages (auto-fixed)
+    1118063 : 677588,   # Jose Tena (auto-fixed)
+    1118963 : 681807,   # David Fry (auto-fixed)
+    1120962 : 678246,   # Miguel Vargas (auto-fixed)
+    1284664 : 682657,   # Angel Martinez (auto-fixed)
+    1316803 : 695578,   # James Wood (auto-fixed)
+    1318244 : 696285,   # Jacob Young (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids
@@ -247,7 +258,15 @@ if ambiguous_names:
 print("\nFetching salaries from DraftKings...")
 
 all_salary_rows = []
-seen_player_dg  = set()
+seen_player_dg  = {}   # (dk_player_id, dgid) → row dict (merge positions from duplicate entries)
+
+# DK position sort order (matches DK convention)
+DK_POS_ORDER = {'C':0, '1B':1, '2B':2, '3B':3, 'SS':4, 'OF':5, 'SP':6, 'RP':7, 'UTIL':8}
+def merge_positions(existing_pos, new_pos):
+    """Merge two position strings (e.g. '3B' + '2B' → '2B/3B') preserving DK order."""
+    parts = set(existing_pos.split('/')) | set(new_pos.split('/'))
+    parts.discard('')
+    return '/'.join(sorted(parts, key=lambda p: DK_POS_ORDER.get(p, 99))) or 'UTIL'
 
 all_dg_ids = sorted(classic_dg_ids | showdown_dg_ids)
 
@@ -314,11 +333,14 @@ for dgid in all_dg_ids:
 
             position = csv_pos or api_pos
 
-            # Skip if already seen this player in this DG
+            # Multi-position merge: DK lists multi-eligible players as separate draftable
+            # entries (same playerDkId, different positions). Merge instead of skipping.
             key = (dk_player_id, dgid)
             if key in seen_player_dg:
+                if position:
+                    existing_row = seen_player_dg[key]
+                    existing_row['position'] = merge_positions(existing_row['position'], position)
                 continue
-            seen_player_dg.add(key)
 
             # Resolve to MLBAM ID — priority order:
             # 1. Hardcoded DK→MLBAM override
@@ -353,7 +375,7 @@ for dgid in all_dg_ids:
             # Final remap: catches wrong IDs sourced from our players table or DK fallback
             player_id = PLAYER_ID_REMAP.get(player_id, player_id)
 
-            all_salary_rows.append({
+            row = {
                 'player_id':    player_id,
                 'season':       SEASON,
                 'dk_player_id': dk_player_id,
@@ -364,7 +386,9 @@ for dgid in all_dg_ids:
                 'dk_slate':     slate_label,
                 'contest_type': contest_type,
                 'dg_id':        dgid,
-            })
+            }
+            all_salary_rows.append(row)
+            seen_player_dg[key] = row   # store reference for position merging
             count += 1
 
         extra = f' | cpt_skipped: {cpt_skipped}' if is_showdown else ''
@@ -376,11 +400,15 @@ for dgid in all_dg_ids:
 
 print(f"\nTotal salary rows (pre-dedup): {len(all_salary_rows)}")
 
-# Deduplicate by (player_id, dg_id) — keep last occurrence.
+# Deduplicate by (player_id, dg_id) — merge positions from duplicate entries.
 # A player can appear twice in the same DG when DK lists them under multiple positions.
 seen = {}
 for r in all_salary_rows:
-    seen[(r['player_id'], r['dg_id'])] = r
+    key = (r['player_id'], r['dg_id'])
+    if key in seen:
+        seen[key]['position'] = merge_positions(seen[key]['position'], r['position'])
+    else:
+        seen[key] = r
 all_salary_rows = list(seen.values())
 print(f"Total salary rows (post-dedup): {len(all_salary_rows)}")
 

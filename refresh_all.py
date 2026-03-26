@@ -118,7 +118,7 @@ if MORNING:
                 logger.record('Agent 3 — Projections', False, 0.0, str(e))
         else:
             print("\n  PROJECTIONS SKIPPED — DK validation gate failed.")
-            print("  Fix PLAYER_ID_REMAP issues first, then re-run --morning.")
+            print("  Auto-fix could not resolve all mismatches — manual investigation needed, then re-run --morning.")
 
     except Exception as e:
         print(f"\n  ERROR in morning pipeline: {e}")
@@ -145,7 +145,7 @@ if FULL:
                 logger.record('Agent 3 — Projections', False, 0.0, str(e))
         else:
             print("\n  PROJECTIONS SKIPPED — DK validation gate failed.")
-            print("  Fix PLAYER_ID_REMAP issues first, then re-run --morning or --full.")
+            print("  Auto-fix could not resolve all mismatches — manual investigation needed, then re-run --morning or --full.")
 
     except Exception as e:
         print(f"\n  ERROR in full pipeline: {e}")
