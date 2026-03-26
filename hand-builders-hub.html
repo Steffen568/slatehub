@@ -4964,7 +4964,7 @@ async function loadPlayerPool(date, slate) {
     const lu = lineupMap[pid];
     if (lu?.team_id) {
       const teamAb = teamIdToAbbr[lu.team_id];
-      if (teamAb && slateTeams.size > 0 && !slateTeams.has(teamAb)) continue;
+      if (!lateSwapMode && teamAb && slateTeams.size > 0 && !slateTeams.has(teamAb)) continue;
     }
     if (!salByPid[pid]) {
       const luName = lu?.player_name?.toLowerCase();
@@ -5278,7 +5278,7 @@ async function loadPlayerPool(date, slate) {
 
       // Skip pitchers whose team is not on this slate
       const pitTeam = salRow?.team || (teamId && teamIdToAbbr[teamId]) || '';
-      if (slateTeams.size > 0 && pitTeam && !slateTeams.has(pitTeam)) return;
+      if (!lateSwapMode && slateTeams.size > 0 && pitTeam && !slateTeams.has(pitTeam)) return;
 
       allPitchers.push({
         player_id:        proj.player_id,
@@ -5356,7 +5356,8 @@ async function loadPlayerPool(date, slate) {
   });
 
   // Filter games to only those on the selected slate (prevents off-slate games in the strip)
-  if (slateTeams.size > 0) {
+  // Skip in late swap mode — locked games must remain visible for late swap lineups
+  if (slateTeams.size > 0 && !lateSwapMode) {
     _games = _games.filter(g => {
       const homeAb = teamAbbr(g.home_team) || _teamIdAbbrMap[g.home_team_id] || '';
       const awayAb = teamAbbr(g.away_team) || _teamIdAbbrMap[g.away_team_id] || '';
