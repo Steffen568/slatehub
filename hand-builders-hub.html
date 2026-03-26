@@ -5217,6 +5217,10 @@ async function loadPlayerPool(date, slate) {
       const teamId  = spIdToTeamId[proj.player_id] || null;
       const hesInfo = proj.game_pk ? gameHesMap[proj.game_pk] : null;
 
+      // Skip pitchers whose team is not on this slate
+      const pitTeam = salRow?.team || (teamId && teamIdToAbbr[teamId]) || '';
+      if (slateTeams.size > 0 && pitTeam && !slateTeams.has(pitTeam)) return;
+
       allPitchers.push({
         player_id:        proj.player_id,
         dk_id:            salRow?.player_id || null,
@@ -5292,6 +5296,14 @@ async function loadPlayerPool(date, slate) {
     p.opp_team_abbr = _teamIdAbbrMap[oppTeamId] || teamAbbr(isHome ? game.away_team : game.home_team);
   });
 
+  // Filter games to only those on the selected slate (prevents off-slate games in the strip)
+  if (slateTeams.size > 0) {
+    _games = _games.filter(g => {
+      const homeAb = teamAbbr(g.home_team) || _teamIdAbbrMap[g.home_team_id] || '';
+      const awayAb = teamAbbr(g.away_team) || _teamIdAbbrMap[g.away_team_id] || '';
+      return slateTeams.has(homeAb) || slateTeams.has(awayAb);
+    });
+  }
   buildGameStrip();
 
   // Auto-switch to Pitchers tab if no hitters (lineups not posted yet)
