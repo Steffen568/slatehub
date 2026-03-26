@@ -226,8 +226,9 @@ def _save_lineup_state(state: dict):
         print(f"  WARNING: Could not write lineup_state.json: {e}")
 
 
-def _update_lineup_confirmation(state: dict):
-    """Query Supabase for today's confirmed lineups and update state file."""
+def _update_lineup_confirmation(state: dict) -> int:
+    """Query Supabase for today's confirmed lineups and update state file.
+    Returns the number of NEWLY confirmed games (0 if nothing changed)."""
     try:
         import os
         from dotenv import load_dotenv
@@ -272,8 +273,11 @@ def _update_lineup_confirmation(state: dict):
         if all_pks and all(pk in confirmed_set for pk in all_pks):
             print(f"  ✓ All lineups confirmed — quick poll skipped next run")
 
+        return len(new_pks)
+
     except Exception as e:
         print(f"  WARNING: Lineup state check failed: {e}")
+        return 0
 
 
 def run(logger: RunLogger, mode: str, quick: bool = False) -> tuple:
@@ -290,9 +294,10 @@ def run(logger: RunLogger, mode: str, quick: bool = False) -> tuple:
         state = _load_lineup_state()
         for script, label in QUICK_SCRIPTS:
             _run_script(script, label, logger)
-        _update_lineup_confirmation(state)
+        new_confirms = _update_lineup_confirmation(state)
         _save_lineup_state(state)
-        return logger, True
+        # Return new_confirms count as third element so caller can trigger projections
+        return logger, True, new_confirms
 
     # Full pipeline: schedule → dk_slates → dk_salaries → [gate] → odds → weather
     dk_salary_loaded = False
