@@ -4095,6 +4095,15 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 .build-tab-name{outline:none;background:transparent;border:none;color:inherit;font:inherit;cursor:text;min-width:50px;max-width:100px;}
 .build-tab-close{font-size:13px;line-height:1;color:var(--muted);cursor:pointer;padding:0 1px;}
 .build-tab-close:hover{color:#f87171;}
+.contest-dash{border-top:1px solid var(--border);padding:8px 12px;flex-shrink:0;display:none;}
+.contest-dash.visible{display:block;}
+.contest-dash-title{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text2);margin-bottom:6px;display:flex;align-items:center;gap:8px;}
+.contest-row{display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);font-size:11px;font-family:'Barlow Condensed',sans-serif;}
+.contest-row:last-child{border-bottom:none;}
+.contest-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);}
+.contest-fee{color:var(--hi);font-weight:700;min-width:35px;text-align:right;}
+.contest-entries{color:var(--muted);font-size:10px;min-width:20px;text-align:center;}
+.contest-assign{font-size:10px;padding:2px 4px;border-radius:3px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-family:inherit;cursor:pointer;min-width:80px;}
 .exp-tab-bar{display:flex;gap:2px;padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0;}
 .exp-tab{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;padding:3px 10px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .12s;}
 .exp-tab.active{background:var(--s3);color:var(--text2);border-color:var(--border2);}
@@ -4216,7 +4225,6 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
         <label class="bld-btn sd-only" style="display:none;background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.35);color:#fbbf24;cursor:pointer;" title="Import DKEntries.csv for export">
           DK CSV <input type="file" accept=".csv" style="display:none" onchange="importDKTemplate(this.files[0])">
         </label>
-        <button class="bld-btn sd-only" style="display:none;background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportToDK()" id="dk-export-btn" disabled title="Generate lineups first">Export DK</button>
         <label class="bld-btn" style="cursor:pointer;" title="Upload your DK entries CSV — lineups will be filled in automatically">
           ↑ DK Template
           <input type="file" accept=".csv" style="display:none;" onchange="fillDKTemplate(event)">
@@ -4238,6 +4246,13 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     </div>
   </div>
   <div class="build-tabs-bar" id="build-tabs-bar"></div>
+  <div class="contest-dash" id="contest-dash">
+    <div class="contest-dash-title">
+      <span>Contest Assignments</span>
+      <button class="bld-btn" style="margin-left:auto;background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportToDK()">Export DK</button>
+    </div>
+    <div id="contest-list"></div>
+  </div>
   <div class="lineups-body">
     <div class="lineups-saved-col">
       <div class="lineups-grid saved-list" id="saved-list"></div>
@@ -4268,6 +4283,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <div class="opto-col-title">Global Settings</div>
       <div class="opto-row"><label># Lineups</label><input class="opto-input" id="opto-num" type="number" min="1" max="150" value="1" oninput="optoSettings.numLineups=+this.value"></div>
       <div class="opto-row"><label>Min Salary</label><input class="opto-input" id="opto-minsal" type="number" step="100" value="48000" oninput="optoSettings.minSalary=+this.value"></div>
+      <div class="opto-row"><label>Max Salary</label><input class="opto-input" id="opto-maxsal" type="number" step="100" value="50000" oninput="optoSalaryCap=+this.value"></div>
       <div class="opto-row"><label>Min Unique</label><input class="opto-input" id="opto-unique" type="number" min="0" max="8" value="3" oninput="optoSettings.minUnique=+this.value"></div>
       <div class="opto-row"><label>Randomness %</label><input class="opto-input" id="opto-randpct" type="number" min="0" max="30" value="10" title="Adds ±N% noise to projections — produces diverse lineups quickly. 0=off (exhaustive), 5-15=recommended for 20+ lineups" oninput="optoSettings.randPct=+this.value"></div>
       <div class="opto-row"><label>Hitter Max Exp%</label><input class="opto-input" id="opto-expmax-hit" type="number" min="1" max="100" value="100" oninput="expHitterMax=+this.value"></div>
@@ -4463,8 +4479,10 @@ let expTargets      = {};          // player_id → manual max exposure % (0–1
 let expHitterMax    = 100;         // global hitter exposure cap %
 let expPitcherMax   = 100;         // global pitcher exposure cap %
 let expCptMax       = 35;          // Showdown: max % any player can appear as CPT
+let optoSalaryCap   = 50000;       // global salary cap (both classic + SD)
 let _contestMode    = 'classic';   // 'classic' | 'showdown'
-let _dkTemplate     = null;        // Parsed DKEntries.csv: { entries: [], cptIds: {name→id}, utilIds: {name→id} }
+let _dkTemplate     = null;        // Parsed DKEntries.csv: { entries: [], contests: [], cptIds: {}, utilIds: {} }
+let _contestAssignments = {};      // contestId → buildId
 let dkDraftgroupMapCPT  = {};      // Showdown: player name → CPT draftgroup ID
 let dkDraftgroupMapFLEX = {};      // Showdown: player name → FLEX draftgroup ID
 let activeBuildId = null;     // ID of currently displayed build
@@ -6021,6 +6039,7 @@ function renderSavedCards() {
   const hasBuilds = getBuilds().length > 0;
   if (section) section.style.display = hasBuilds ? '' : 'none';
   renderBuildTabs();
+  renderContestDash();
   if (!list) return;
   list.innerHTML = saved.map((s, i) => renderLineupCard(s, i)).join('');
   renderExposure();
@@ -6537,7 +6556,7 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
     opType: 'max',
     constraints: {
       total:   { equal: 10 },
-      sal_max: { max: 50000 },
+      sal_max: { max: optoSalaryCap },
       sal_min: { min: effectiveMinSal },
     },
     variables: {},
@@ -7344,8 +7363,7 @@ function updateTotals_SD() {
   }
   const salEl  = document.getElementById('total-salary');
   const projEl = document.getElementById('total-proj');
-  const cap = 50000;
-  if (salEl)  { salEl.textContent  = '$'+sal.toLocaleString(); salEl.style.color  = sal > cap ? 'var(--red)' : 'var(--hi)'; }
+  if (salEl)  { salEl.textContent  = '$'+sal.toLocaleString(); salEl.style.color  = sal > optoSalaryCap ? 'var(--red)' : 'var(--hi)'; }
   if (projEl) { projEl.textContent = proj.toFixed(1); }
 }
 
@@ -7452,7 +7470,7 @@ function optoBuildLP_Showdown(pool, rule, cptCount, totalGenerated) {
     ints: {},
   };
 
-  const cap = 50000;
+  const cap = optoSalaryCap;
   model.constraints['salary'] = { max: cap };
   // Exactly 1 CPT
   model.constraints['cpt_count'] = { equal: 1 };
@@ -7682,45 +7700,79 @@ function importDKTemplate(file) {
     const text = e.target.result;
     const rows = text.split('\n').map(r => r.split(','));
     const entries = [];
-    const cptIds = {};   // normalized name → DK draftable ID (CPT slot)
-    const utilIds = {};  // normalized name → DK draftable ID (UTIL slot)
+    const cptIds = {};
+    const utilIds = {};
+    const contestMap = {};  // contestId → { contestId, contestName, entryFee, entryCount }
 
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
-      // Entry rows: have Entry ID in col A
       if (r[0] && /^\d+$/.test(r[0].trim())) {
-        entries.push({
-          entryId: r[0].trim(),
-          contestName: r[1] || '',
-          contestId: r[2] || '',
-          entryFee: r[3] || '',
-        });
+        const entryId = r[0].trim();
+        const contestName = (r[1] || '').trim();
+        const contestId = (r[2] || '').trim();
+        const entryFee = (r[3] || '').trim();
+        entries.push({ entryId, contestName, contestId, entryFee });
+        if (contestId) {
+          if (!contestMap[contestId]) {
+            contestMap[contestId] = { contestId, contestName, entryFee, entryCount: 0 };
+          }
+          contestMap[contestId].entryCount++;
+        }
       }
-      // Player pool on right side: col 13 = Name, col 14 = ID, col 15 = Roster Position (CPT/UTIL)
-      // CSV columns L=11, M=12, N=13(Name), O=14(ID), P=15(RosterPos)
       const name = (r[13] || '').trim();
       const dkId = (r[14] || '').trim();
       const rosterPos = (r[15] || '').trim();
       if (name && dkId && /^\d+$/.test(dkId)) {
         const nName = normName(name);
         const lName = name.toLowerCase();
-        if (rosterPos === 'CPT') {
-          cptIds[nName] = dkId;
-          cptIds[lName] = dkId;
-        } else if (rosterPos === 'UTIL') {
-          utilIds[nName] = dkId;
-          utilIds[lName] = dkId;
-        }
+        if (rosterPos === 'CPT') { cptIds[nName] = dkId; cptIds[lName] = dkId; }
+        else if (rosterPos === 'UTIL') { utilIds[nName] = dkId; utilIds[lName] = dkId; }
       }
     }
 
-    _dkTemplate = { entries, cptIds, utilIds };
-    const btn = document.getElementById('dk-export-btn');
-    if (btn) btn.disabled = false;
-    showToast(`DK CSV imported: ${entries.length} entries, ${Object.keys(cptIds).length/2} CPT IDs, ${Object.keys(utilIds).length/2} UTIL IDs`);
-    console.log('[DK Import] entries:', entries.length, 'cptIds:', Object.keys(cptIds).length/2, 'utilIds:', Object.keys(utilIds).length/2);
+    const contests = Object.values(contestMap);
+    _dkTemplate = { entries, contests, cptIds, utilIds };
+    _contestAssignments = {};
+    showToast(`DK CSV imported: ${contests.length} contests, ${entries.length} entries`);
+    renderContestDash();
   };
   reader.readAsText(file);
+}
+
+function renderContestDash() {
+  const dash = document.getElementById('contest-dash');
+  const list = document.getElementById('contest-list');
+  if (!dash || !list) return;
+  if (!_dkTemplate || !_dkTemplate.contests.length) { dash.classList.remove('visible'); return; }
+  dash.classList.add('visible');
+
+  const builds = getBuilds();
+  const contests = _dkTemplate.contests;
+
+  list.innerHTML = contests.map(c => {
+    const assigned = _contestAssignments[c.contestId] || '';
+    const opts = builds.map(b => {
+      const sel = b.id === assigned ? ' selected' : '';
+      return `<option value="${b.id}"${sel}>${b.name} (${b.lineups.length})</option>`;
+    }).join('');
+    const shortName = c.contestName.length > 50 ? c.contestName.slice(0, 47) + '...' : c.contestName;
+    const statusIcon = assigned ? '<span style="color:var(--hi);margin-right:3px;">&#10003;</span>' : '';
+    return `<div class="contest-row">
+      ${statusIcon}<span class="contest-name" title="${c.contestName.replace(/"/g,'&quot;')}">${shortName}</span>
+      <span class="contest-fee">${c.entryFee}</span>
+      <span class="contest-entries">${c.entryCount}x</span>
+      <select class="contest-assign" onchange="assignContest('${c.contestId}',this.value)">
+        <option value="">— none —</option>
+        ${opts}
+      </select>
+    </div>`;
+  }).join('');
+}
+
+function assignContest(contestId, buildId) {
+  if (buildId) { _contestAssignments[contestId] = buildId; }
+  else { delete _contestAssignments[contestId]; }
+  renderContestDash();
 }
 
 function lookupDkId(playerName, role) {
@@ -7729,54 +7781,70 @@ function lookupDkId(playerName, role) {
   return map[playerName.toLowerCase()] || map[normName(playerName)] || null;
 }
 
+function lineupToEntryRow(entry, lu) {
+  const lineup = lu.lineup || {};
+  const unmatchedPlayers = [];
+  const cptPlayer = lineup.cpt;
+  const cptId = cptPlayer ? lookupDkId(cptPlayer.name, 'cpt') : '';
+  if (cptPlayer && !cptId) unmatchedPlayers.push(cptPlayer.name + ' (CPT)');
+  const flexIds = [];
+  for (let f = 1; f <= 5; f++) {
+    const fp = lineup[`flex${f}`];
+    const fId = fp ? lookupDkId(fp.name, 'util') : '';
+    if (fp && !fId) unmatchedPlayers.push(fp.name + ' (UTIL)');
+    flexIds.push(fId || '');
+  }
+  const row = `${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},${cptId || ''},${flexIds.join(',')}`;
+  return { row, unmatched: unmatchedPlayers };
+}
+
 function exportToDK() {
   if (!_dkTemplate) { showToast('Import DK CSV first'); return; }
 
-  // Get active build lineups
   const builds = getBuilds();
-  const activeBuild = builds.find(b => b.id === activeBuildId);
-  if (!activeBuild || !activeBuild.lineups.length) { showToast('No lineups to export'); return; }
+  const hasAssignments = Object.keys(_contestAssignments).length > 0;
 
-  const lineups = activeBuild.lineups;
-  const entries = _dkTemplate.entries;
-
-  if (lineups.length > entries.length) {
-    showToast(`Warning: ${lineups.length} lineups but only ${entries.length} DK entries — extra lineups will be skipped`);
+  if (!hasAssignments) {
+    showToast('Assign builds to contests first');
+    return;
   }
 
-  // Build CSV header
   const csvRows = ['Entry ID,Contest Name,Contest ID,Entry Fee,CPT,UTIL,UTIL,UTIL,UTIL,UTIL'];
   const unmatchedPlayers = new Set();
+  let filled = 0, skipped = 0;
 
-  const count = Math.min(lineups.length, entries.length);
-  for (let i = 0; i < count; i++) {
-    const lu = lineups[i];
-    const entry = entries[i];
-    const lineup = lu.lineup || {};
+  // Group entries by contest
+  const entriesByContest = {};
+  for (const entry of _dkTemplate.entries) {
+    if (!entriesByContest[entry.contestId]) entriesByContest[entry.contestId] = [];
+    entriesByContest[entry.contestId].push(entry);
+  }
 
-    // CPT
-    const cptPlayer = lineup.cpt;
-    const cptId = cptPlayer ? lookupDkId(cptPlayer.name, 'cpt') : '';
-    if (cptPlayer && !cptId) unmatchedPlayers.add(cptPlayer.name + ' (CPT)');
-
-    // FLEX 1-5
-    const flexIds = [];
-    for (let f = 1; f <= 5; f++) {
-      const fp = lineup[`flex${f}`];
-      const fId = fp ? lookupDkId(fp.name, 'util') : '';
-      if (fp && !fId) unmatchedPlayers.add(fp.name + ' (UTIL)');
-      flexIds.push(fId || '');
+  for (const [contestId, buildId] of Object.entries(_contestAssignments)) {
+    const build = builds.find(b => b.id === buildId);
+    if (!build || !build.lineups.length) continue;
+    const entries = entriesByContest[contestId] || [];
+    for (let i = 0; i < entries.length; i++) {
+      const lu = build.lineups[i % build.lineups.length];  // round-robin if more entries than lineups
+      const { row, unmatched } = lineupToEntryRow(entries[i], lu);
+      csvRows.push(row);
+      unmatched.forEach(n => unmatchedPlayers.add(n));
+      filled++;
     }
+  }
 
-    csvRows.push(`${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},${cptId || ''},${flexIds.join(',')}`);
+  // Also include unassigned entries as empty rows so the CSV stays complete
+  for (const entry of _dkTemplate.entries) {
+    if (_contestAssignments[entry.contestId]) continue;  // already handled
+    csvRows.push(`${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},,,,,,`);
+    skipped++;
   }
 
   if (unmatchedPlayers.size > 0) {
     console.warn('[DK Export] Unmatched players:', [...unmatchedPlayers]);
-    showToast(`Warning: ${unmatchedPlayers.size} players could not be matched to DK IDs — check console`);
+    showToast(`Warning: ${unmatchedPlayers.size} unmatched players — check console`);
   }
 
-  // Download
   const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -7784,8 +7852,7 @@ function exportToDK() {
   a.download = `DKEntries_filled_${new Date().toISOString().slice(0,16).replace(':','')}.csv`;
   a.click();
   URL.revokeObjectURL(url);
-
-  showToast(`Exported ${count} lineups to DK CSV!`);
+  showToast(`Exported ${filled} entries filled, ${skipped} unassigned left empty`);
 }
 
 // ── SD LINEUP CARD ────────────────────────────────────────────────────────────
