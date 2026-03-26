@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Phase 6 — Weather data for all games (MLB + Spring Training + WBC)"""
+import sys
+sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
 
 import os, requests
 from datetime import date, timedelta
@@ -13,42 +15,50 @@ WX  = os.environ["VISUAL_CROSSING_KEY"]
 # ── ALL venues (MLB regular season + Spring Training + WBC sites)
 # venue_id : "City, State" for weather API lookup
 OUTDOOR_VENUES = {
-    # ── MLB Regular Season ──────────────────────────────────────────
-    5    : "Anaheim, CA",          # Angel Stadium
-    4    : "Oakland, CA",          # Oakland Coliseum
-    2    : "Phoenix, AZ",          # Chase Field (retractable - skip if needed)
-    17   : "Atlanta, GA",          # Truist Park
-    2392 : "Cumberland, GA",       # Truist Park alt
-    3    : "Baltimore, MD",        # Camden Yards
+    # ── MLB Regular Season (venue_ids from actual games table) ──────
+    1    : "Anaheim, CA",          # Angel Stadium
+    2    : "Baltimore, MD",        # Oriole Park at Camden Yards
+    4    : "Chicago, IL",          # Rate Field (Guaranteed Rate Field)
+    7    : "Kansas City, MO",      # Kauffman Stadium
+    14   : "Toronto, ON",          # Rogers Centre
+    15   : "Phoenix, AZ",          # Chase Field (retractable)
+    17   : "Chicago, IL",          # Wrigley Field
+    22   : "Los Angeles, CA",      # Dodger Stadium
+    32   : "Milwaukee, WI",        # American Family Field
+    680  : "Seattle, WA",          # T-Mobile Park
+    2392 : "Houston, TX",          # Daikin Park (Minute Maid renamed)
+    2395 : "San Francisco, CA",    # Oracle Park
+    2529 : "Sacramento, CA",       # Sutter Health Park (Athletics)
+    2602 : "Cincinnati, OH",       # Great American Ball Park
+    2680 : "San Diego, CA",        # Petco Park
+    2681 : "Philadelphia, PA",     # Citizens Bank Park
+    2889 : "St. Louis, MO",        # Busch Stadium
+    3289 : "New York, NY",         # Citi Field
+    3309 : "Washington, DC",       # Nationals Park
+    4169 : "Miami, FL",            # loanDepot park
+    4705 : "Cumberland, GA",       # Truist Park
+    5325 : "Arlington, TX",        # Globe Life Field
+    5355 : "Las Vegas, NV",        # Las Vegas Ballpark (Athletics)
+    # Legacy IDs (may still appear in historical data)
+    3    : "Baltimore, MD",        # Camden Yards legacy
+    5    : "Anaheim, CA",          # Angel Stadium legacy
+    8    : "New York, NY",         # Yankee Stadium
     11   : "Boston, MA",           # Fenway Park
-    19   : "Chicago, IL",          # Wrigley Field
-    18   : "Chicago, IL",          # Guaranteed Rate Field
-    12   : "Cincinnati, OH",       # Great American Ball Park
-    5150 : "Cleveland, OH",        # Progressive Field
-    22   : "Cleveland, OH",        # Progressive Field alt
+    12   : "Cincinnati, OH",       # Great American Ball Park legacy
+    13   : "Los Angeles, CA",      # Dodger Stadium legacy
+    16   : "Pittsburgh, PA",       # PNC Park
+    18   : "Chicago, IL",          # Guaranteed Rate Field legacy
+    19   : "Chicago, IL",          # Wrigley Field legacy
     20   : "Denver, CO",           # Coors Field
     23   : "Detroit, MI",          # Comerica Park
-    24   : "Houston, TX",          # Minute Maid Park
-    7    : "Kansas City, MO",      # Kauffman Stadium
-    13   : "Los Angeles, CA",      # Dodger Stadium
-    1    : "New York, NY",         # Yankee Stadium
-    3289 : "New York, NY",         # Citi Field
-    14   : "Oakland, CA",          # Oakland Coliseum alt
-    15   : "Philadelphia, PA",     # Citizens Bank Park
-    16   : "Pittsburgh, PA",       # PNC Park
-    2889 : "Arlington, TX",        # Globe Life Field
-    2680 : "San Diego, CA",        # Petco Park
-    26   : "San Francisco, CA",    # Oracle Park
-    2681 : "Seattle, WA",          # T-Mobile Park
-    29   : "St. Louis, MO",        # Busch Stadium
+    24   : "Houston, TX",          # Minute Maid Park legacy
+    26   : "San Francisco, CA",    # Oracle Park legacy
+    29   : "St. Louis, MO",        # Busch Stadium legacy
+    30   : "Toronto, ON",          # Rogers Centre legacy
     2756 : "St. Petersburg, FL",   # Tropicana Field
-    30   : "Toronto, ON",          # Rogers Centre
-    3313 : "Washington, DC",       # Nationals Park
-    32   : "Miami, FL",            # loanDepot park
-    4169 : "Milwaukee, WI",        # American Family Field
-    5325 : "Minneapolis, MN",      # Target Field
-    2395 : "New York, NY",         # Citi Field alt
-    4705 : "Sacramento, CA",       # Sutter Health Park (Athletics)
+    3313 : "Washington, DC",       # Nationals Park legacy
+    5150 : "Cleveland, OH",        # Progressive Field
+    5349 : "Minneapolis, MN",      # Target Field
 
     # ── Spring Training — Grapefruit League (Florida) ────────────────
     2520 : "Jupiter, FL",           # Roger Dean Chevrolet Stadium (Marlins/Cardinals)
