@@ -4152,6 +4152,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
   <div class="hbh-selectors">
     <select class="hbh-select" id="date-select"><option>Loading…</option></select>
     <select class="hbh-select" id="slate-select"><option>Select slate</option></select>
+    <button class="hbh-mode-btn" onclick="refreshPlayerData()" title="Refresh projections, lineups, and player data without reloading the page" style="font-size:11px;padding:3px 8px;">Refresh Data</button>
   </div>
   <div class="hbh-mode-toggle" style="margin-left:10px;">
     <button class="hbh-mode-btn active" id="btn-mode-classic" onclick="setContestMode('classic')">Classic</button>
@@ -4297,16 +4298,16 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     <!-- Global Settings -->
     <div class="opto-col">
       <div class="opto-col-title">Global Settings</div>
-      <div class="opto-row"><label># Lineups</label><input class="opto-input" id="opto-num" type="number" min="1" max="150" value="1" oninput="optoSettings.numLineups=+this.value"></div>
-      <div class="opto-row"><label>Min Salary</label><input class="opto-input" id="opto-minsal" type="number" step="100" value="48000" oninput="optoSettings.minSalary=+this.value"></div>
-      <div class="opto-row"><label>Max Salary</label><input class="opto-input" id="opto-maxsal" type="number" step="100" value="50000" oninput="optoSalaryCap=+this.value"></div>
-      <div class="opto-row"><label>Min Unique</label><input class="opto-input" id="opto-unique" type="number" min="0" max="8" value="3" oninput="optoSettings.minUnique=+this.value"></div>
-      <div class="opto-row"><label>Randomness %</label><input class="opto-input" id="opto-randpct" type="number" min="0" max="30" value="10" title="Adds ±N% noise to projections — produces diverse lineups quickly. 0=off (exhaustive), 5-15=recommended for 20+ lineups" oninput="optoSettings.randPct=+this.value"></div>
-      <div class="opto-row"><label>Hitter Max Exp%</label><input class="opto-input" id="opto-expmax-hit" type="number" min="1" max="100" value="100" oninput="expHitterMax=+this.value"></div>
-      <div class="opto-row classic-only"><label>Pitcher Max Exp%</label><input class="opto-input" id="opto-expmax-pit" type="number" min="1" max="100" value="100" oninput="expPitcherMax=+this.value"></div>
-      <div class="opto-row sd-only" style="display:none"><label>CPT Max Exp%</label><input class="opto-input" id="opto-cpt-max" type="number" min="1" max="100" value="35" oninput="expCptMax=+this.value" title="Max % of lineups any player can appear as Captain"></div>
-      <div class="opto-row classic-only"><label>Max/Team</label><input class="opto-input" id="opto-maxteam" type="number" min="3" max="8" value="5" oninput="optoSettings.maxPerTeam=+this.value"></div>
-      <div class="opto-row classic-only"><label>Min Conf</label><input class="opto-input" id="opto-conf" type="number" min="0" max="10" value="0" oninput="optoSettings.minConfirmed=+this.value"></div>
+      <div class="opto-row"><label># Lineups</label><input class="opto-input" id="opto-num" type="number" min="1" max="150" value="1" oninput="optoSettings.numLineups=+this.value;saveSettings()"></div>
+      <div class="opto-row"><label>Min Salary</label><input class="opto-input" id="opto-minsal" type="number" step="100" value="48000" oninput="optoSettings.minSalary=+this.value;saveSettings()"></div>
+      <div class="opto-row"><label>Max Salary</label><input class="opto-input" id="opto-maxsal" type="number" step="100" value="50000" oninput="optoSalaryCap=+this.value;saveSettings()"></div>
+      <div class="opto-row"><label>Min Unique</label><input class="opto-input" id="opto-unique" type="number" min="0" max="8" value="3" oninput="optoSettings.minUnique=+this.value;saveSettings()"></div>
+      <div class="opto-row"><label>Randomness %</label><input class="opto-input" id="opto-randpct" type="number" min="0" max="30" value="10" title="Adds ±N% noise to projections — produces diverse lineups quickly. 0=off (exhaustive), 5-15=recommended for 20+ lineups" oninput="optoSettings.randPct=+this.value;saveSettings()"></div>
+      <div class="opto-row"><label>Hitter Max Exp%</label><input class="opto-input" id="opto-expmax-hit" type="number" min="1" max="100" value="100" oninput="expHitterMax=+this.value;saveSettings()"></div>
+      <div class="opto-row classic-only"><label>Pitcher Max Exp%</label><input class="opto-input" id="opto-expmax-pit" type="number" min="1" max="100" value="100" oninput="expPitcherMax=+this.value;saveSettings()"></div>
+      <div class="opto-row sd-only" style="display:none"><label>CPT Max Exp%</label><input class="opto-input" id="opto-cpt-max" type="number" min="1" max="100" value="35" oninput="expCptMax=+this.value;saveSettings()" title="Max % of lineups any player can appear as Captain"></div>
+      <div class="opto-row classic-only"><label>Max/Team</label><input class="opto-input" id="opto-maxteam" type="number" min="3" max="8" value="5" oninput="optoSettings.maxPerTeam=+this.value;saveSettings()"></div>
+      <div class="opto-row classic-only"><label>Min Conf</label><input class="opto-input" id="opto-conf" type="number" min="0" max="10" value="0" oninput="optoSettings.minConfirmed=+this.value;saveSettings()"></div>
       <div class="opto-row classic-only" style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px;">
         <label style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);">Late Swap</label>
       </div>
@@ -4637,8 +4638,56 @@ const optoSettings = {
   teamOverrides: {},
 };
 
+// ── SETTINGS PERSISTENCE ────────────────────────────────────────────────────
+const SETTINGS_KEY = 'hbh_settings';
+
+function saveSettings() {
+  const s = {
+    numLineups:   optoSettings.numLineups,
+    minSalary:    optoSettings.minSalary,
+    minUnique:    optoSettings.minUnique,
+    maxPerTeam:   optoSettings.maxPerTeam,
+    minConfirmed: optoSettings.minConfirmed,
+    randPct:      optoSettings.randPct,
+    stackRules:   optoSettings.stackRules,
+    teamStacks:   optoSettings.teamStacks,
+    expHitterMax,
+    expPitcherMax,
+    expCptMax,
+    optoSalaryCap,
+    projOverrides,
+    expTargets,
+    stackExpCaps,
+  };
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch(e) {}
+}
+
+function restoreSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (s.numLineups != null)   { optoSettings.numLineups   = s.numLineups;   const el = document.getElementById('opto-num');       if (el) el.value = s.numLineups; }
+    if (s.minSalary != null)    { optoSettings.minSalary    = s.minSalary;    const el = document.getElementById('opto-minsal');    if (el) el.value = s.minSalary; }
+    if (s.minUnique != null)    { optoSettings.minUnique    = s.minUnique;    const el = document.getElementById('opto-unique');    if (el) el.value = s.minUnique; }
+    if (s.maxPerTeam != null)   { optoSettings.maxPerTeam   = s.maxPerTeam;   const el = document.getElementById('opto-maxteam');   if (el) el.value = s.maxPerTeam; }
+    if (s.minConfirmed != null) { optoSettings.minConfirmed = s.minConfirmed; const el = document.getElementById('opto-conf');      if (el) el.value = s.minConfirmed; }
+    if (s.randPct != null)      { optoSettings.randPct      = s.randPct;      const el = document.getElementById('opto-randpct');   if (el) el.value = s.randPct; }
+    if (s.expHitterMax != null) { expHitterMax  = s.expHitterMax;  const el = document.getElementById('opto-expmax-hit'); if (el) el.value = s.expHitterMax; }
+    if (s.expPitcherMax != null){ expPitcherMax = s.expPitcherMax; const el = document.getElementById('opto-expmax-pit'); if (el) el.value = s.expPitcherMax; }
+    if (s.expCptMax != null)    { expCptMax     = s.expCptMax;     const el = document.getElementById('opto-cpt-max');    if (el) el.value = s.expCptMax; }
+    if (s.optoSalaryCap != null){ optoSalaryCap = s.optoSalaryCap; const el = document.getElementById('opto-maxsal');    if (el) el.value = s.optoSalaryCap; }
+    if (s.stackRules)    optoSettings.stackRules  = s.stackRules;
+    if (s.teamStacks)    optoSettings.teamStacks  = s.teamStacks;
+    if (s.projOverrides) projOverrides = s.projOverrides;
+    if (s.expTargets)    expTargets    = s.expTargets;
+    if (s.stackExpCaps)  stackExpCaps  = s.stackExpCaps;
+  } catch(e) {}
+}
+
 // ── INIT ────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
+  restoreSettings();
   buildSlots();
   renderSavedCards();
   await loadDates();
@@ -4656,6 +4705,16 @@ async function batchIn(table, select, column, ids, extra) {
     if (data) out = out.concat(data);
   }
   return out;
+}
+
+// ── REFRESH DATA (no page reload) ────────────────────────────────────────────
+async function refreshPlayerData() {
+  const date  = document.getElementById('date-select')?.value || 'all';
+  const slate = document.getElementById('slate-select')?.value;
+  if (!slate) { showToast('Select a slate first'); return; }
+  showToast('Refreshing data...');
+  await loadPlayerPool(date, slate);
+  showToast('Data refreshed — projections & lineups updated');
 }
 
 // ── DATE PARSING ─────────────────────────────────────────────────────────────
@@ -5652,7 +5711,7 @@ function savePlayerProj(pid, input) {
   const val = parseFloat(input.value);
   if (!isNaN(val) && val >= 0) projOverrides[pid] = val;
   else delete projOverrides[pid];
-  renderPool();
+  saveSettings(); renderPool();
 }
 function editPlayerExp(pid, td) {
   const cur = expTargets[pid] ?? '';
@@ -5667,7 +5726,7 @@ function savePlayerExp(pid, input) {
   const val = parseInt(input.value);
   if (!isNaN(val) && val >= 0 && val <= 100) expTargets[pid] = val;
   else delete expTargets[pid];
-  renderPool();
+  saveSettings(); renderPool();
 }
 
 // ── LOCK / EXCLUDE ────────────────────────────────────────────────────────────
@@ -6360,6 +6419,7 @@ function setStackExpCap(key, val) {
   const n = parseInt(val);
   if (!isNaN(n) && n >= 1 && n <= 100) stackExpCaps[key] = n;
   else delete stackExpCaps[key];
+  saveSettings();
 }
 
 function renderStackExposure() {
@@ -6575,19 +6635,19 @@ function renderStackRuleCard(rule, i) {
 function setStackRuleField(i, field, value) {
   if (!optoSettings.stackRules[i]) return;
   optoSettings.stackRules[i][field] = value;
-  renderStackRules();
+  saveSettings(); renderStackRules();
 }
 function addStackRule() {
   optoSettings.stackRules.push({
     primarySize: 4, primaryBOSpots: [], primaryConsec: true,
     subSize: 2, subBOSpots: [], subConsec: false, exposure: 100,
   });
-  renderStackRules();
+  saveSettings(); renderStackRules();
 }
 function removeStackRule(i) {
   if (optoSettings.stackRules.length <= 1) return;
   optoSettings.stackRules.splice(i, 1);
-  renderStackRules();
+  saveSettings(); renderStackRules();
 }
 function toggleBOSpot(ruleIdx, field, spot) {
   const rule = optoSettings.stackRules[ruleIdx];
@@ -7862,12 +7922,12 @@ function addTeamStack() {
   if (!team) { showToast('Select a team first'); return; }
   optoSettings.teamStacks.push({ team, role: _newTeamStackRole, exposure: exp });
   document.getElementById('new-ts-team').value = '';
-  renderTeamStacks();
+  saveSettings(); renderTeamStacks();
 }
 
 function removeTeamStack(i) {
   optoSettings.teamStacks.splice(i, 1);
-  renderTeamStacks();
+  saveSettings(); renderTeamStacks();
 }
 
 function renderTeamStacks() {
