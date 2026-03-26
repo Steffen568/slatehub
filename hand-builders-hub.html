@@ -4953,19 +4953,8 @@ async function loadPlayerPool(date, slate) {
   // Skip in SD mode — all SD players are already in salByPid via pitcherSalRes; running this
   // loop in SD mode adds players from OTHER games on the same date (via dkSalFallback) and
   // causes cross-game contamination in the pool.
-  // Also skip players whose team is not on this slate — prevents late-game players from
-  // bleeding into an afternoon or early slate pool.
-  const slateTeams = new Set(
-    [...(pitcherSalRes.data || []), ...hitterSalRaw]
-      .map(r => r.team).filter(Boolean)
-  );
   for (const pid of (_contestMode === 'showdown' ? [] : starterPids)) {
-    // Skip players not on this slate's teams
     const lu = lineupMap[pid];
-    if (lu?.team_id) {
-      const teamAb = teamIdToAbbr[lu.team_id];
-      if (!lateSwapMode && teamAb && slateTeams.size > 0 && !slateTeams.has(teamAb)) continue;
-    }
     if (!salByPid[pid]) {
       const luName = lu?.player_name?.toLowerCase();
       const nameSal = luName
@@ -5276,10 +5265,6 @@ async function loadPlayerPool(date, slate) {
       const teamId  = spIdToTeamId[proj.player_id] || null;
       const hesInfo = proj.game_pk ? gameHesMap[proj.game_pk] : null;
 
-      // Skip pitchers whose team is not on this slate
-      const pitTeam = salRow?.team || (teamId && teamIdToAbbr[teamId]) || '';
-      if (!lateSwapMode && slateTeams.size > 0 && pitTeam && !slateTeams.has(pitTeam)) return;
-
       allPitchers.push({
         player_id:        proj.player_id,
         dk_id:            salRow?.player_id || null,
@@ -5355,15 +5340,6 @@ async function loadPlayerPool(date, slate) {
     p.opp_team_abbr = _teamIdAbbrMap[oppTeamId] || teamAbbr(isHome ? game.away_team : game.home_team);
   });
 
-  // Filter games to only those on the selected slate (prevents off-slate games in the strip)
-  // Skip in late swap mode — locked games must remain visible for late swap lineups
-  if (slateTeams.size > 0 && !lateSwapMode) {
-    _games = _games.filter(g => {
-      const homeAb = teamAbbr(g.home_team) || _teamIdAbbrMap[g.home_team_id] || '';
-      const awayAb = teamAbbr(g.away_team) || _teamIdAbbrMap[g.away_team_id] || '';
-      return slateTeams.has(homeAb) || slateTeams.has(awayAb);
-    });
-  }
   buildGameStrip();
 
   // Auto-switch to Pitchers tab if no hitters (lineups not posted yet)
@@ -7212,7 +7188,9 @@ function generateLineups() {
 // ── LATE SWAP ────────────────────────────────────────────────────────────────
 
 function enterLateSwapMode() {
-  // Switch to classic-like mode and prompt CSV upload
+  // Set lateSwapMode BEFORE setContestMode triggers loadPlayerPool —
+  // otherwise the slate team filters remove locked games and their players
+  lateSwapMode = true;
   setContestMode('lateswap');
   document.getElementById('lateswap-csv-input').click();
 }
