@@ -7488,14 +7488,17 @@ function importLateSwapCSV(file) {
         const entryFee    = (cols[3] || '').trim();
 
         // Parse 10 player cells from columns 4-13
+        // DK marks locked players with "(LOCKED)" suffix: "Name (12345) (LOCKED)"
         const playerCells = [];
         for (let c = 4; c <= 13; c++) {
           const cell = (cols[c] || '').trim();
-          const m = cell.match(/^(.+?)\s*\((\d+)\)$/);
+          const cleaned = cell.replace(/\s*\(LOCKED\)\s*$/i, '');
+          const isLocked = cell !== cleaned;
+          const m = cleaned.match(/^(.+?)\s*\((\d+)\)$/);
           if (m) {
-            playerCells.push({ name: m[1].trim(), draftableId: m[2], raw: cell });
+            playerCells.push({ name: m[1].trim(), draftableId: m[2], raw: cell, locked: isLocked });
           } else {
-            playerCells.push({ name: '', draftableId: '', raw: cell });
+            playerCells.push({ name: '', draftableId: '', raw: cell, locked: false });
           }
         }
 
