@@ -4846,16 +4846,9 @@ async function loadPlayerPool(date, slate) {
     teamGameMap[g.away_team_id] = g.game_pk;
   });
 
-  // 2. Lineups — prefer SlateHub localStorage cache (populated when user clicks games there)
-  //    Fall back to direct Supabase query only if cache is empty/stale.
+  // 2. Lineups — always fetch fresh from Supabase (localStorage cache was stale-prone)
   let lineupRaw = [];
-  try {
-    const cached = JSON.parse(localStorage.getItem('sh_hbh_lineup') || 'null');
-    if (cached && cached.date === effectiveDate && cached.players.length > 0) {
-      lineupRaw = cached.players;
-    }
-  } catch(e) {}
-  if (!lineupRaw.length && gamePks.length) {
+  if (gamePks.length) {
     lineupRaw = await batchIn('lineups','player_id,player_name,team_id,batting_order,position,game_pk,status','game_pk',gamePks);
   }
   const lineupMap = {};
