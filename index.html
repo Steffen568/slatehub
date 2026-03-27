@@ -4875,6 +4875,7 @@ async function leLoadRealLineup(teamId) {
     .from('rosters')
     .select('player_id, player_name, position, position_type, bats')
     .eq('team_id', teamId)
+    .eq('on_40_man', true)
     .neq('position_type', 'Pitcher');
 
   const makePObj = p => ({
@@ -6284,6 +6285,7 @@ async function showPitcherPicker(teamId) {
   const { data: pitchers } = await sb.from('rosters')
     .select('player_id, player_name, throws')
     .eq('team_id', teamId)
+    .eq('on_40_man', true)
     .eq('position_type', 'Pitcher')
     .order('player_name');
 
@@ -7202,7 +7204,8 @@ async function loadBullpen(teamId, gameDate) {
     .from('rosters')
     .select('player_id')
     .in('player_id', allRelieverIds)
-    .eq('team_id', teamId);
+    .eq('team_id', teamId)
+    .eq('on_40_man', true);
 
   const rosterSet = new Set((rosterData || []).map(r => r.player_id));
   // Fall back to all relievers if roster filter removes everyone (ST edge case)

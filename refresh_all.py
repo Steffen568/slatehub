@@ -110,6 +110,9 @@ if STATS:
 
 # ── MORNING (9:00 AM) ─────────────────────────────────────────────────────────
 if MORNING:
+    # Refresh yesterday's results before main pipeline
+    run_script('load_bullpen.py',            'Bullpen — morning refresh', logger)
+    run_script('load_game_logs.py --days 3', 'Game Logs — morning refresh', logger)
     try:
         # Agent 1 (stats) and Agent 2 (lineups/DK) run simultaneously
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
@@ -136,6 +139,8 @@ if MORNING:
 
 # ── FULL — runs everything ────────────────────────────────────────────────────
 if FULL:
+    # Bullpen first — refresh reliever appearances
+    run_script('load_bullpen.py', 'Bullpen — full refresh', logger)
     try:
         # Agent 1 and Agent 2 start simultaneously
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
