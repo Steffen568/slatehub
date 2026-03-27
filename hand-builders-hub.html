@@ -7051,6 +7051,10 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set(), stackAppearCou
     const ids = optoSolve(problem);
     if (!ids || ids.length !== 10) return null;
 
+    // Post-solve salary guard — LP solver can return slightly infeasible integer solutions
+    const totSal = ids.reduce((s, id) => s + (eligById.get(id)?.salary || 0), 0);
+    if (totSal > optoSalaryCap) { console.warn(`[Opto] Rejected lineup: $${totSal} > cap $${optoSalaryCap}`); return null; }
+
     const score = ids.reduce((s, id) => {
       const p = eligById.get(id);
       return s + (projOverrides[id] ?? p?.proj_dk_pts ?? 0);
@@ -7091,8 +7095,11 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set(), stackAppearCou
       const prob = optoBuildLP(allElig, { mainTeam: null, mainPlayerIds: [], mainSize: 0, subTeam: null, subSize: 0 }, pastSets, makePerturbedProj());
       const ids  = optoSolve(prob);
       if (ids && ids.length === 10) {
-        bestLineup = optoAssembleLineup(ids, allElig);
-        bestLineup._score = ids.reduce((s, id) => s + (eligById.get(id)?.proj_dk_pts ?? 0), 0);
+        const fbSal = ids.reduce((s, id) => s + (eligById.get(id)?.salary || 0), 0);
+        if (fbSal <= optoSalaryCap) {
+          bestLineup = optoAssembleLineup(ids, allElig);
+          bestLineup._score = ids.reduce((s, id) => s + (eligById.get(id)?.proj_dk_pts ?? 0), 0);
+        }
       }
     }
   } else {
