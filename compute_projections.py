@@ -55,8 +55,8 @@ LINEUP_PA = {1: 4.72, 2: 4.68, 3: 4.58, 4: 4.51, 5: 4.45,
 LEAGUE_AVG_PA = 4.3
 
 # Sample size thresholds — current-season data excluded from Marcel until reached
-MIN_PA_BATTER  = 50   # ~2 weeks of games for a regular starter
-MIN_IP_PITCHER = 15   # ~3 starts for a SP
+MIN_PA_BATTER  = 75   # ~3 weeks of games for a regular starter
+MIN_IP_PITCHER = 25   # ~4-5 starts for a SP
 
 # Run and RBI opportunity multipliers by batting order position
 LINEUP_R_MULT   = {1: 1.25, 2: 1.20, 3: 1.10, 4: 1.00, 5: 0.95,
