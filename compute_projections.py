@@ -54,6 +54,10 @@ LINEUP_PA = {1: 4.72, 2: 4.68, 3: 4.58, 4: 4.51, 5: 4.45,
              6: 4.38, 7: 4.25, 8: 4.10, 9: 3.85}
 LEAGUE_AVG_PA = 4.3
 
+# Sample size thresholds — current-season data excluded from Marcel until reached
+MIN_PA_BATTER  = 50   # ~2 weeks of games for a regular starter
+MIN_IP_PITCHER = 15   # ~3 starts for a SP
+
 # Run and RBI opportunity multipliers by batting order position
 LINEUP_R_MULT   = {1: 1.25, 2: 1.20, 3: 1.10, 4: 1.00, 5: 0.95,
                    6: 0.90, 7: 0.85, 8: 0.80, 9: 0.75}
@@ -90,12 +94,17 @@ def round2(val):
 def compute_true_talent(stats_by_season: dict, current_season: int) -> dict:
     """
     Marcel-weighted wOBA + xwOBA luck correction.
-    stats_by_season: {2025: row, 2024: row, 2023: row}  (None if missing)
+    stats_by_season: {2026: row, 2025: row, 2024: row}  (None if missing)
     Returns: {'woba': float, 'k_pct': float, 'bb_pct': float,
               'iso': float, 'sb_pa': float, 'avg': float}
     """
+    # Check if current season has enough PA to be meaningful
+    curr = stats_by_season.get(current_season)
+    curr_pa = safe(curr.get('pa'), 0) if curr else 0
+    use_current = curr_pa >= MIN_PA_BATTER
+
     seasons_weights = [
-        (current_season,     5),
+        (current_season,     5 if use_current else 0),
         (current_season - 1, 4),
         (current_season - 2, 3),
     ]
@@ -105,6 +114,8 @@ def compute_true_talent(stats_by_season: dict, current_season: int) -> dict:
         num = regression_pa * league_avg
         den = float(regression_pa)
         for yr, wt in seasons_weights:
+            if wt == 0:
+                continue
             row = stats_by_season.get(yr)
             if not row:
                 continue
@@ -118,9 +129,8 @@ def compute_true_talent(stats_by_season: dict, current_season: int) -> dict:
 
     base_woba = marcel_stat('woba', LEAGUE_AVG_WOBA)
 
-    # Luck correction: regress 50% toward xwOBA for the most recent season
-    curr = stats_by_season.get(current_season)
-    if curr:
+    # Luck correction: regress 50% toward xwOBA — only if current season has enough PA
+    if use_current and curr:
         xwoba = safe(curr.get('xwoba'))
         woba  = safe(curr.get('woba'))
         if xwoba and woba:
@@ -343,7 +353,7 @@ def compute_opp_lineup_quality(lineups: list, batter_stats: dict,
                     wrc = safe(split.get('wrc_plus'))
             if wrc is None:
                 stats = batter_stats.get(pid, {})
-                curr  = stats.get(2025) or stats.get(2024) or stats.get(2023)
+                curr  = stats.get(SEASON) or stats.get(SEASON-1) or stats.get(SEASON-2)
                 if curr:
                     wrc = safe(curr.get('wrc_plus'))
 
@@ -414,8 +424,13 @@ def compute_pitcher_true_talent(stats_by_season: dict, current_season: int) -> d
 
     Returns: {era_anchor, k_pct, bb_pct, ip_per_gs}
     """
+    # Check if current season has enough IP to be meaningful
+    curr = stats_by_season.get(current_season)
+    curr_ip = safe(curr.get('ip'), 0) if curr else 0
+    use_current = curr_ip >= MIN_IP_PITCHER
+
     seasons_weights = [
-        (current_season,     5),
+        (current_season,     5 if use_current else 0),
         (current_season - 1, 4),
         (current_season - 2, 3),
     ]
@@ -424,6 +439,8 @@ def compute_pitcher_true_talent(stats_by_season: dict, current_season: int) -> d
         num = regression_ip * league_avg
         den = float(regression_ip)
         for yr, wt in seasons_weights:
+            if wt == 0:
+                continue
             row = stats_by_season.get(yr)
             if not row:
                 continue
@@ -451,9 +468,11 @@ def compute_pitcher_true_talent(stats_by_season: dict, current_season: int) -> d
     # back toward the 22.5% league mean.
     marcel_k = clip(ip_weighted('k_pct', LEAGUE_AVG_K_PCT, regression_ip=200), 0.10, 0.40)
 
-    # SwStr% from most recent season with data (stabilizes fastest, use current)
+    # SwStr% from most recent season with sufficient data (stabilizes fastest)
     swstr_xk = None
-    for yr in [current_season, current_season - 1, current_season - 2]:
+    swstr_seasons = [current_season, current_season - 1, current_season - 2] if use_current \
+                    else [current_season - 1, current_season - 2]
+    for yr in swstr_seasons:
         row = stats_by_season.get(yr)
         if not row:
             continue
@@ -472,7 +491,9 @@ def compute_pitcher_true_talent(stats_by_season: dict, current_season: int) -> d
 
     # ── IP per GS — most recent season with ≥5 starts ─────────────────────────
     ip_per_gs = 5.1  # 2023-24 league avg (down from 5.5 older era)
-    for yr in [current_season, current_season - 1, current_season - 2]:
+    ipgs_seasons = [current_season, current_season - 1, current_season - 2] if use_current \
+                   else [current_season - 1, current_season - 2]
+    for yr in ipgs_seasons:
         row = stats_by_season.get(yr)
         if not row:
             continue
@@ -751,7 +772,7 @@ def fetch_today_data(target_date: str) -> dict:
         chunk = player_ids[i:i+500]
         rows = sb.table('batter_stats').select(
             'player_id,season,pa,woba,xwoba,k_pct,bb_pct,iso,avg,sb,hard_hit_pct,barrel_pct,avg_ev,wrc_plus,full_name,team'
-        ).in_('player_id', chunk).in_('season', [2023, 2024, 2025]).execute().data or []
+        ).in_('player_id', chunk).in_('season', [SEASON, SEASON-1, SEASON-2]).execute().data or []
         batter_stats_rows.extend(rows)
 
     # Build batter_stats lookup: {player_id: {season: row}}
@@ -772,15 +793,15 @@ def fetch_today_data(target_date: str) -> dict:
     pitcher_stats_all = {}   # {player_id: {season: row}}        — for pitcher Marcel
     if sp_ids:
         rows = sb.table('pitcher_stats').select(
-            'player_id,season,ip,g,gs,xfip,stuff_plus,k_pct,bb_pct,era,fip,siera,full_name,stats_level'
-        ).in_('player_id', list(sp_ids)).in_('season', [2023, 2024, 2025]).execute().data or []
+            'player_id,season,ip,g,gs,xfip,stuff_plus,k_pct,bb_pct,era,fip,siera,full_name,stats_level,swstr_pct'
+        ).in_('player_id', list(sp_ids)).in_('season', [SEASON, SEASON-1, SEASON-2]).execute().data or []
         for r in rows:
             pid = r['player_id']
             yr  = r['season']
             pitcher_stats_all.setdefault(pid, {})[yr] = r
         # Build current-season map (fallback to most recent) for batter tier-2 mult
         for pid, seasons in pitcher_stats_all.items():
-            pitcher_stats[pid] = seasons.get(2025) or seasons.get(2024) or seasons.get(2023)
+            pitcher_stats[pid] = seasons.get(SEASON) or seasons.get(SEASON-1) or seasons.get(SEASON-2)
 
     # Bullpen quality — IP-weighted composite per team
     # Step 1: get pitcher player_ids on each team from rosters
@@ -803,7 +824,7 @@ def fetch_today_data(target_date: str) -> dict:
             chunk = all_rp_ids[i:i+500]
             chunk_rows = sb.table('pitcher_stats').select(
                 'player_id,ip,g,gs,xfip,k_pct,bb_pct'
-            ).in_('player_id', chunk).eq('season', 2025).lte('gs', 2).gte('g', 5).execute().data or []
+            ).in_('player_id', chunk).eq('season', SEASON).lte('gs', 2).gte('g', 5).execute().data or []
             rp_stat_rows.extend(chunk_rows)
 
     # Step 3: index reliever rows by player_id for lookup
@@ -973,7 +994,7 @@ def run():
                 'avg'   : 0.248,
             }
         else:
-            talent = compute_true_talent(stats_by_yr, 2025)
+            talent = compute_true_talent(stats_by_yr, SEASON)
         base_woba = talent['woba']
 
         # ── Tier 2
@@ -1011,7 +1032,7 @@ def run():
         stat_line = project_stat_line(talent, final_woba, proj_pa, batting_order)
 
         # Name/team from most recent stats row; fall back to lineup name for no-stats players
-        curr_stats = stats_by_yr.get(2025) or stats_by_yr.get(2024) or stats_by_yr.get(2023)
+        curr_stats = stats_by_yr.get(SEASON) or stats_by_yr.get(SEASON-1) or stats_by_yr.get(SEASON-2)
 
         records.append({
             'player_id'    : player_id,
@@ -1101,7 +1122,7 @@ def run():
             sp_hand = game.get('home_sp_hand' if is_home else 'away_sp_hand')
             opp_team_id = game.get('away_team_id' if is_home else 'home_team_id')
 
-            talent = compute_pitcher_true_talent(stats_by_yr, 2025)
+            talent = compute_pitcher_true_talent(stats_by_yr, SEASON)
 
             # Opposing lineup quality: PA-weighted wRC+ vs pitcher hand (70%)
             # blended with Vegas implied for opp team (30%) as calibration
@@ -1126,7 +1147,7 @@ def run():
                     if stat_line.get(k) is not None:
                         stat_line[k] = round(stat_line[k] * milb_discount, 2)
 
-            curr = stats_by_yr.get(2025) or stats_by_yr.get(2024) or stats_by_yr.get(2023)
+            curr = stats_by_yr.get(SEASON) or stats_by_yr.get(SEASON-1) or stats_by_yr.get(SEASON-2)
             full_name = (curr or {}).get('full_name') or next(
                 (r.get('full_name') for r in stats_by_yr.values() if r.get('full_name')), '?'
             )
