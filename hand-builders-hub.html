@@ -5342,23 +5342,31 @@ async function loadPlayerPool(date, slate) {
   });
 
   // Filter game strip to only games in this DK slate (uses dk_slate_games table)
+  // Match by slate label + start_time date to avoid cross-day DG collisions
   if (slate && slate !== 'all' && !lateSwapMode) {
-    const dgId = (pitcherSalRes.data || []).find(r => r.dg_id)?.dg_id;
-    if (dgId) {
-      try {
-        const { data: slateGames } = await sb.from('dk_slate_games')
-          .select('away_team,home_team')
-          .eq('dg_id', dgId);
-        if (slateGames && slateGames.length) {
-          const slateMatchups = new Set(slateGames.map(sg => `${sg.away_team}|${sg.home_team}`));
+    try {
+      const { data: slateGames } = await sb.from('dk_slate_games')
+        .select('away_team, home_team, start_time')
+        .eq('dk_slate', slate);
+      if (slateGames && slateGames.length) {
+        // Filter dk_slate_games rows to only those whose ET game date matches effectiveDate
+        const matchingRows = slateGames.filter(sg => {
+          if (!sg.start_time) return false;
+          const utc = new Date(sg.start_time);
+          const etMs = utc.getTime() - 4 * 3600000;
+          const etDate = new Date(etMs).toISOString().split('T')[0];
+          return etDate === effectiveDate;
+        });
+        if (matchingRows.length) {
+          const slateMatchups = new Set(matchingRows.map(sg => `${sg.away_team}|${sg.home_team}`));
           _games = _games.filter(g => {
             const awayAb = teamAbbr(g.away_team) || _teamIdAbbrMap[g.away_team_id] || '';
             const homeAb = teamAbbr(g.home_team) || _teamIdAbbrMap[g.home_team_id] || '';
             return slateMatchups.has(`${awayAb}|${homeAb}`);
           });
         }
-      } catch(e) { console.warn('[SlateGames] Filter failed:', e); }
-    }
+      }
+    } catch(e) { console.warn('[SlateGames] Filter failed:', e); }
   }
   buildGameStrip();
 
