@@ -18,19 +18,21 @@ STATE_FILE = Path(__file__).parent / 'lineup_state.json'
 
 # Full morning pipeline — validation gate runs between index 2 and 3
 LINEUP_DK_SCRIPTS_PRE_GATE = [
-    ('load_schedule.py',    'Schedule & Lineups'),
-    ('load_dk_slates.py',   'DK Slates'),
-    ('load_dk_salaries.py', 'DK Salaries'),
+    ('load_schedule.py',      'Schedule & Lineups'),
+    ('load_lineups_rg.py',    'RotoGrinders Projected Lineups'),
+    ('load_dk_slates.py',     'DK Slates'),
+    ('load_dk_salaries.py',   'DK Salaries'),
 ]
 LINEUP_DK_SCRIPTS_POST_GATE = [
     ('load_odds.py',    'Odds'),
     ('load_weather.py', 'Weather'),
 ]
 
-# Quick mode: only schedule + weather
+# Quick mode: only schedule + weather + projected lineups
 QUICK_SCRIPTS = [
-    ('load_schedule.py', 'Schedule & Lineups'),
-    ('load_weather.py',  'Weather'),
+    ('load_schedule.py',      'Schedule & Lineups'),
+    ('load_lineups_rg.py',    'RotoGrinders Projected Lineups'),
+    ('load_weather.py',       'Weather'),
 ]
 
 

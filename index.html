@@ -1809,9 +1809,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     <div class="col-team-bar" id="yearSelectorBar" style="justify-content:center;gap:6px;padding:5px 16px;">
       <div class="ssb-lbl" style="margin-right:4px;">Stats</div>
       <div class="ssb-btns" id="yearButtons">
-        <button class="ssb-btn active" onclick="selectStatYear(this,'2025')" title="Full 2025 season">2025</button>
+        <button class="ssb-btn active" onclick="selectStatYear(this,'2026')" title="2026 season">2026</button>
+        <button class="ssb-btn" onclick="selectStatYear(this,'2025')" title="Full 2025 season">2025</button>
         <button class="ssb-btn" onclick="selectStatYear(this,'3yr')" title="3-year rolling average (2023-2025)">3-Year</button>
-        <button class="ssb-btn" onclick="selectStatYear(this,'2026')" title="2026 season — available after Opening Day">2026</button>
       </div>
     </div>
     <div class="panel-hdr" id="hitterPanelHdr" style="position:relative;">
@@ -3479,9 +3479,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     <div class="col-team-bar" id="pitcherYearSelectorBar" style="justify-content:center;gap:6px;padding:5px 16px;">
       <div class="ssb-lbl" style="margin-right:4px;">Stats</div>
       <div class="ssb-btns" id="pitcherYearButtons">
-        <button class="ssb-btn active" onclick="selectPitcherYear(this,'2025')" title="Full 2025 season">2025</button>
+        <button class="ssb-btn active" onclick="selectPitcherYear(this,'2026')" title="2026 season">2026</button>
+        <button class="ssb-btn" onclick="selectPitcherYear(this,'2025')" title="Full 2025 season">2025</button>
         <button class="ssb-btn" onclick="selectPitcherYear(this,'3yr')" title="3-year rolling average (2023-2025)">3-Year</button>
-        <button class="ssb-btn" onclick="selectPitcherYear(this,'2026')" title="2026 season — available after Opening Day">2026</button>
       </div>
     </div>
     <div class="panel-hdr" style="position:relative;">
@@ -3962,15 +3962,14 @@ let currentPitcherVAA    = null;  // estimated VAA (deg, negative) from loadArse
 let _cachedBatterStats   = {};    // player_id -> batter_stats row (for PMS)
 let _cachedBatterSplits  = {};    // player_id -> { L: split, R: split } (for PMS)
 let _projCache           = {};    // rowId -> player_projections row
-let activeStatYear       = 'current';  // 'current', '2025', '3yr'
-let activePitcherYear    = '2025';     // '2025', '3yr', '2026'
+let activeStatYear       = '2026';     // '2026', '2025', '3yr'
+let activePitcherYear    = '2026';     // '2026', '2025', '3yr'
 let activeBullpenTeamId  = null;
 
 function selectPitcherYear(btn, year) {
   document.querySelectorAll('#pitcherYearButtons .ssb-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   activePitcherYear = year;
-  if (year === '2026') return;
   if (!activeGame) return;
   const isHome = activePitcherTeamId === activeGame.home_team_id;
   // Prefer the manually-picked pitcher over the projected starter
@@ -3990,14 +3989,6 @@ function selectStatYear(btn, year) {
   activeStatYear = year;
 
 
-  // 2026 not available until Opening Day — clear stats but don't block future tab switches
-  if (year === '2026') {
-    document.querySelectorAll('[id^="row"]').forEach(rowEl => {
-      rowEl.querySelectorAll('.br-stat-val').forEach(el => el.textContent = '--');
-      rowEl.querySelectorAll('.br-split-val').forEach(el => el.textContent = '--');
-    });
-    return; // skip the fetch, state is already set above
-  }
 
   if (!cachedLineupData || !activeLineupTeamId) return;
   const players = cachedLineupData
@@ -7955,10 +7946,10 @@ async function loadBatterHands(playerIds, lineupPlayers) {
   });
 }
 
-async function loadBatterStats(playerIds, lineupPlayers, year = 'current') {
+async function loadBatterStats(playerIds, lineupPlayers, year = '2026') {
   // Map year selector to season(s)
   const is3yr  = year === '3yr';
-  const season = year === '2026' ? 2026 : year === '2025' ? 2025 : year === '2023' ? 2023 : year === '2024' ? 2024 : 2025;
+  const season = year === '2026' ? 2026 : year === '2025' ? 2025 : year === '2024' ? 2024 : year === '2023' ? 2023 : 2026;
   // Fetch season stats, splits, and DK salaries in parallel
   // For 3yr: fetch all three seasons and average them
   const _BSTATS_COLS = 'player_id, full_name, wrc_plus, woba, avg, obp, slg, ops, barrel_pct, hard_hit_pct, xwoba, sprint_speed, k_pct, bb_pct, iso, pull_pct, oppo_pct, gb_pct, fb_pct, ld_pct, avg_ev, hr, rbi, swstr_pct, o_swing_pct';
