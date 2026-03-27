@@ -5033,8 +5033,13 @@ async function loadPlayerPool(date, slate) {
     buildGameStrip(); return;
   }
 
-  // Build abbr → team_id from hitter lineup cross-ref (lineup has team_id; dk_salaries has team abbr)
+  // Build abbr → team_id: seed from games table first (always correct), then overlay from salary+lineup cross-ref
   const abbrToTeamId = {};
+  _games.forEach(g => {
+    const ha = teamAbbr(g.home_team), aa = teamAbbr(g.away_team);
+    if (ha && g.home_team_id) abbrToTeamId[ha] = g.home_team_id;
+    if (aa && g.away_team_id) abbrToTeamId[aa] = g.away_team_id;
+  });
   starterPids.forEach(pid => {
     const lu  = lineupMap[pid];
     const sal = salByPid[pid];
