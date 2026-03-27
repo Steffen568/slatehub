@@ -8219,8 +8219,9 @@ function lateSwapAllLineups() {
         for (let s = 2; s <= cnt; s++) { const k = `${team}_${s}`; stackAppearCount[k] = (stackAppearCount[k] || 0) + 1; }
       });
 
-      const totProj = Object.values(newLineup).filter(v => v && typeof v === 'object' && v.proj_dk_pts)
-        .reduce((s, p) => s + (p.proj_dk_pts || 0), 0);
+      const luPlayers = Object.entries(newLineup).filter(([k,v]) => v && typeof v === 'object' && v.name);
+      const totProj = luPlayers.reduce((s, [k,p]) => s + (p.proj_dk_pts || 0), 0);
+      if (i === 0) console.log('[LS-All] Lineup 0 players:', luPlayers.map(([k,p]) => `${k}:${p.name}=${p.proj_dk_pts}`));
       reOptimized.push({ ...entry, lineup: newLineup, totProj: +totProj.toFixed(1), name: entry.name });
       swapped++;
     } else {
