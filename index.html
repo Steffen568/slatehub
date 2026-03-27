@@ -7176,10 +7176,12 @@ async function loadBullpen(teamId, gameDate) {
     container.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:20px;text-align:center;">Loading bullpen...</div>';
   }
 
-  // Date range: 7 days back from game date
+  // Date range: 7 days before today (exclude today — avoids blank "rest day" confusion)
   const gd   = new Date(gameDate + 'T12:00:00');
-  const from = new Date(gd); from.setDate(from.getDate() - 7);
+  const yesterday = new Date(gd); yesterday.setDate(yesterday.getDate() - 1);
+  const from = new Date(yesterday); from.setDate(from.getDate() - 6);
   const fromStr = from.toISOString().split('T')[0];
+  gameDate = yesterday.toISOString().split('T')[0];
 
   // Fetch recent appearances for this team
   const { data: apps, error } = await sb
