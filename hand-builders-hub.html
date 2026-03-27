@@ -4813,7 +4813,10 @@ async function loadSlates(date) {
 
   sel.innerHTML = matching.map(({ slate: s }) => `<option value="${s}">${s}</option>`).join('');
   sel.addEventListener('change', () => loadPlayerPool(date, sel.value));
-  await loadPlayerPool(date, matching[0].slate);
+  // Skip loadPlayerPool in late-swap mode — buildPoolFromCSV will handle the pool
+  if (!lateSwapMode) {
+    await loadPlayerPool(date, matching[0].slate);
+  }
 }
 
 // ── PLAYER POOL LOADING ──────────────────────────────────────────────────────
