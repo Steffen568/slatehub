@@ -7259,12 +7259,144 @@ function activateLateSwapUI() {
   refreshLateSwapUI();
 }
 
+// ── BUILD PLAYER POOL FROM CSV (late-swap mode) ──────────────────────────────
+// Replaces loadPlayerPool() when in late-swap mode.  The DK entries CSV is the
+// authoritative source for the player pool (salary, position, team, draftableId).
+// Supabase provides enrichment only: projections + lineup confirmation.
+async function buildPoolFromCSV(csvPool, date) {
+  document.getElementById('pool-list').innerHTML = '<div class="pool-empty">Loading…</div>';
+
+  // 1. Load games for this date
+  const { data: games } = date && date !== 'all'
+    ? await sb.from('games')
+        .select('game_pk,game_date,home_team_id,away_team_id,home_team,away_team,home_sp_id,away_sp_id,home_sp_name,away_sp_name,venue_name,venue_id,game_time_utc')
+        .eq('game_date', date)
+    : { data: [] };
+  _games = games || [];
+  buildGameLockTimes();
+
+  const gamePks = _games.map(g => g.game_pk);
+
+  // Build team abbr → team_id and team_id → game_pk maps from games table
+  const abbrToTeamId = {};
+  const teamGameMap = {};
+  _games.forEach(g => {
+    const awayAb = teamAbbr(g.away_team);
+    const homeAb = teamAbbr(g.home_team);
+    if (awayAb && g.away_team_id) abbrToTeamId[awayAb] = g.away_team_id;
+    if (homeAb && g.home_team_id) abbrToTeamId[homeAb] = g.home_team_id;
+    if (g.home_team_id) teamGameMap[g.home_team_id] = g.game_pk;
+    if (g.away_team_id) teamGameMap[g.away_team_id] = g.game_pk;
+  });
+
+  // 2. Fetch projections + lineups for enrichment
+  let projections = [], lineupRows = [];
+  if (gamePks.length) {
+    [projections, lineupRows] = await Promise.all([
+      batchIn('player_projections',
+        'player_id,full_name,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,game_pk,team,position',
+        'game_pk', gamePks),
+      batchIn('lineups',
+        'player_id,batting_order,team_id,player_name,status',
+        'game_pk', gamePks),
+    ]);
+  }
+
+  // Build lookup maps — name-based for matching CSV players
+  const projByName = {};
+  projections.forEach(p => {
+    if (p.full_name) {
+      const key = normName(p.full_name);
+      // Disambiguate: if duplicate name, prefer entry with matching team
+      if (!projByName[key]) projByName[key] = p;
+    }
+  });
+
+  const luByName = {};
+  lineupRows.forEach(lu => {
+    if (lu.player_name) luByName[normName(lu.player_name)] = lu;
+  });
+
+  // 3. Build allHitters and allPitchers from CSV pool data
+  allHitters = [];
+  allPitchers = [];
+  const seen = new Set(); // deduplicate (csvPool has both normName and lowercase keys)
+
+  for (const [key, csv] of Object.entries(csvPool)) {
+    const nn = normName(csv.name);
+    if (seen.has(nn)) continue;
+    seen.add(nn);
+
+    const rawPos = (csv.position || '').split('/').map(p => mlbPosToDK(p.trim())).filter(p => p && p !== 'UTIL');
+    const positions = rawPos.length ? rawPos : ['UTIL'];
+    const isPitcher = positions.some(p => ['SP','RP','P'].includes(p));
+    const teamId = abbrToTeamId[csv.team] || null;
+    const gamePk = teamId ? teamGameMap[teamId] : null;
+
+    const proj = projByName[nn] || null;
+    const lu   = luByName[nn]   || null;
+
+    // Disambiguate projection: if proj team doesn't match CSV team, try to find better match
+    let bestProj = proj;
+    if (proj && csv.team && proj.team && teamAbbr(proj.team) !== csv.team) {
+      const alt = projections.find(p => normName(p.full_name) === nn && teamAbbr(p.team) === csv.team);
+      if (alt) bestProj = alt;
+    }
+
+    const base = {
+      player_id:        bestProj?.player_id || lu?.player_id || null,
+      name:             csv.name,
+      positions,
+      salary:           csv.salary || 0,
+      team_id:          teamId,
+      team:             csv.team || '',
+      game_pk:          gamePk,
+      in_lineup:        lu != null,
+      lineup_confirmed: lu?.status === 'confirmed',
+      batting_order:    lu?.batting_order ?? null,
+      proj_dk_pts:      bestProj?.proj_dk_pts ?? 0,
+      proj_floor:       bestProj?.proj_floor ?? null,
+      proj_ceiling:     bestProj?.proj_ceiling ?? null,
+      proj_ownership:   bestProj?.proj_ownership ?? null,
+      dk_id:            csv.draftableId || null,
+    };
+
+    if (isPitcher) {
+      allPitchers.push({ ...base,
+        proj_hr: null, proj_r: null, proj_rbi: null, proj_sb: null,
+        proj_ip: null, proj_ks: null, proj_er: null, win_prob: null,
+        stats_level: 'MLB', wrc_plus: null, woba: null, iso: null,
+        sp_name: null, sp_grade: null, hes: null, pms: null,
+        xfip: null, k_pct: null, stuff_plus: null, location_plus: null,
+        pitching_plus: null, era: null, sp_grade_self: null,
+      });
+    } else {
+      allHitters.push({ ...base,
+        proj_hr: null, proj_r: null, proj_rbi: null, proj_sb: null,
+        proj_ip: null, proj_ks: null, proj_er: null, win_prob: null,
+        wrc_plus: null, woba: null, iso: null,
+        sp_name: null, sp_grade: null, hes: null, pms: null,
+      });
+    }
+  }
+
+  // Build _teamIdAbbrMap for game strip rendering
+  _teamIdAbbrMap = {};
+  [...allHitters, ...allPitchers].forEach(p => {
+    if (p.team_id && p.team) _teamIdAbbrMap[p.team_id] = p.team;
+  });
+
+  console.log(`[buildPoolFromCSV] ${allHitters.length} hitters, ${allPitchers.length} pitchers from CSV pool`);
+  buildGameStrip();
+  renderPool();
+}
+
 // Parse DK Classic entries CSV → import lineups with entry metadata
 function importLateSwapCSV(file) {
   if (!file) return;
   document.getElementById('lateswap-csv-input').value = ''; // allow re-upload
   const reader = new FileReader();
-  reader.onload = function(e) {
+  reader.onload = async function(e) {
     const text = e.target.result;
     const lines = text.split(/\r?\n/);
     if (!lines.length) { showToast('Empty CSV file'); return; }
@@ -7336,21 +7468,15 @@ function importLateSwapCSV(file) {
     // Store the draftgroup map so exports can find IDs for swapped players
     dkDraftgroupMap = dkIdByName;
 
-    // Stamp dk_id on all pool players + patch salary/position from CSV pool data
+    // Build the full player pool from CSV data (authoritative source for late-swap)
+    const effectiveDate = document.getElementById('date-select')?.value || 'all';
+    await buildPoolFromCSV(_csvPoolData, effectiveDate);
+
+    // Stamp dk_id from entry cells onto pool players (backup IDs from CSV entries section)
     [...allHitters, ...allPitchers].forEach(p => {
-      const id = dkIdByName[normName(p.name)] || dkIdByName[(p.name || '').toLowerCase()];
-      if (id) p.dk_id = id;
-      // Patch missing salary/position from CSV pool section (covers locked games whose DG was removed from DK API)
-      if (_csvPoolData && (!p.salary || p.salary === 0)) {
-        const csvP = _csvPoolData[normName(p.name)] || _csvPoolData[(p.name || '').toLowerCase()];
-        if (csvP) {
-          if (csvP.salary) p.salary = csvP.salary;
-          if (csvP.position && (!p.positions || !p.positions.length)) {
-            p.positions = csvP.position.split('/').map(pos => mlbPosToDK(pos.trim())).filter(Boolean);
-          }
-          if (csvP.team && !p.team) p.team = csvP.team;
-          if (csvP.draftableId) p.dk_id = csvP.draftableId;
-        }
+      if (!p.dk_id) {
+        const id = dkIdByName[normName(p.name)] || dkIdByName[(p.name || '').toLowerCase()];
+        if (id) p.dk_id = id;
       }
     });
 

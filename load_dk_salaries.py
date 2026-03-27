@@ -8,7 +8,7 @@ import os
 import io
 import csv
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from supabase import create_client
 from dotenv import load_dotenv
 
@@ -203,6 +203,20 @@ PLAYER_ID_REMAP = {
     1316803 : 695578,   # James Wood (auto-fixed)
     1318244 : 696285,   # Jacob Young (auto-fixed)
     1053621 : 671056,   # Ivan Herrera (auto-fixed)
+    467793  : 808652,   # Carlos Santana (auto-fixed)
+    503373  : 691777,   # Max Muncy (auto-fixed)
+    608070  : 681459,   # Jose Ramirez (auto-fixed)
+    657863  : 621566,   # Matt Olson (auto-fixed)
+    665489  : 115223,   # Vladimir Guerrero Jr. (auto-fixed)
+    669257  : 446920,   # Will Smith (auto-fixed)
+    672356  : 699087,   # Gabriel Arias (auto-fixed)
+    676609  : 691606,   # Jose Caballero (auto-fixed)
+    677594  : 451219,   # Julio Rodriguez (auto-fixed)
+    828962  : 700951,   # Lane Thomas (auto-fixed)
+    872787  : 660821,   # Jesus Sanchez (auto-fixed)
+    1316799 : 691777,   # Max Muncy (auto-fixed)
+    1396147 : 673784,   # Cole Young (auto-fixed)
+    1452073 : 814526,   # Jacob Wilson (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids
@@ -271,6 +285,7 @@ def merge_positions(existing_pos, new_pos):
 
 all_dg_ids = sorted(classic_dg_ids | showdown_dg_ids)
 all_slate_game_rows = []   # for dk_slate_games table
+dg_earliest_start = {}     # dgid → earliest competition startTime (UTC datetime)
 
 for dgid in all_dg_ids:
     meta         = dg_meta.get(dgid, {})
@@ -413,6 +428,20 @@ for dgid in all_dg_ids:
             seen_player_dg[key] = row   # store reference for position merging
             count += 1
 
+        # Track earliest competition start time per DG (for in-progress guard)
+        for comp_id, game_info in seen_comps.items():
+            st = game_info.get('start_time', '')
+            if st:
+                try:
+                    raw = st.replace('Z', '+00:00') if st.endswith('Z') else st
+                    if '+' not in raw and not raw.endswith('+00:00'):
+                        raw = raw + '+00:00'
+                    t = datetime.fromisoformat(raw)
+                    if dgid not in dg_earliest_start or t < dg_earliest_start[dgid]:
+                        dg_earliest_start[dgid] = t
+                except Exception:
+                    pass
+
         # Attach slate label to competition rows and collect
         for comp_id, game_row in seen_comps.items():
             game_row['dk_slate'] = slate_label
@@ -443,10 +472,18 @@ print(f"Total salary rows (post-dedup): {len(all_salary_rows)}")
 if all_salary_rows:
     # Only delete rows for DG IDs that appeared in the current API response.
     # Locked DGs (no longer in the API) keep their existing data untouched.
+    # Guard: skip delete for DGs whose earliest game has already started — upsert only.
     season = all_salary_rows[0]['season']
     api_dg_ids = sorted(all_dg_ids)
-    print(f"Clearing dk_salaries for {len(api_dg_ids)} active DG IDs (season {season})...")
-    for dgid in api_dg_ids:
+    now_utc = datetime.now(timezone.utc)
+    started_dg_ids = {dgid for dgid, t in dg_earliest_start.items() if t <= now_utc}
+    safe_dg_ids = [dgid for dgid in api_dg_ids if dgid not in started_dg_ids]
+
+    if started_dg_ids:
+        print(f"  ⚠ {len(started_dg_ids)} DG(s) have in-progress games — skipping delete (upsert only): {sorted(started_dg_ids)}")
+
+    print(f"Clearing dk_salaries for {len(safe_dg_ids)} of {len(api_dg_ids)} active DG IDs (season {season})...")
+    for dgid in safe_dg_ids:
         supabase.table('dk_salaries').delete().eq('dg_id', dgid).eq('season', season).execute()
     print("Cleared. Uploading fresh data...")
     batch_size = 500
@@ -461,7 +498,7 @@ if all_salary_rows:
     # Upsert dk_slate_games (game-to-slate mapping)
     if all_slate_game_rows:
         print(f"\nUpserting {len(all_slate_game_rows)} slate-game mappings...")
-        for dgid in api_dg_ids:
+        for dgid in safe_dg_ids:
             supabase.table('dk_slate_games').delete().eq('dg_id', dgid).eq('season', season).execute()
         for i in range(0, len(all_slate_game_rows), 500):
             batch = all_slate_game_rows[i:i+500]

@@ -177,14 +177,28 @@ print(f"  Loaded {len(db_games)} games from DB")
 
 # Build lookup: (away_abbr, home_abbr) -> game_pk
 db_lookup = {}
+db_game_times = {}   # game_pk → datetime (UTC) for in-progress detection
 for g in db_games:
     away = norm_abbr(teamAbbr_from_full(g['away_team']))
     home = norm_abbr(teamAbbr_from_full(g['home_team']))
     db_lookup[(away, home)] = g['game_pk']
+    if g.get('game_time_utc'):
+        try:
+            raw = g['game_time_utc']
+            if raw.endswith('Z'):
+                raw = raw[:-1] + '+00:00'
+            elif '+' not in raw and raw[-1] != 'Z':
+                raw = raw + '+00:00'
+            db_game_times[g['game_pk']] = datetime.fromisoformat(raw)
+        except Exception:
+            pass
+
+now_utc = datetime.now(timezone.utc)
 
 # ── STEP 5: Update games table with dk_slate
 matched   = 0
 unmatched = 0
+skipped   = 0
 updates   = []
 
 for comp_id, dk_game in slate_games.items():
@@ -193,13 +207,18 @@ for comp_id, dk_game in slate_games.items():
     game_pk = db_lookup.get((away, home))
 
     if game_pk:
+        # Guard: don't overwrite dk_slate for games that have already started
+        gt = db_game_times.get(game_pk)
+        if gt and gt <= now_utc:
+            skipped += 1
+            continue
         updates.append({'game_pk': game_pk, 'dk_slate': dk_game['dk_slate']})
         matched += 1
     else:
         print(f"  UNMATCHED: {dk_game['away']} @ {dk_game['home']} ({dk_game['dk_slate']})")
         unmatched += 1
 
-print(f"\nMatched: {matched} | Unmatched: {unmatched}")
+print(f"\nMatched: {matched} | Unmatched: {unmatched} | Skipped (in progress): {skipped}")
 
 if updates:
     print(f"Updating {len(updates)} games with dk_slate...")
