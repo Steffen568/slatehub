@@ -507,62 +507,19 @@ def fetch_ownership_data(target_date, game_pk_filter=None, slate_filter=None):
     }
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Score + upload for a single slate ─────────────────────────────────────────
 
-def run():
+def run_single_slate(target_date, slate_filter=None, game_pk_filter=None):
     """
-    Usage:
-      py -3.12 compute_ownership.py
-      py -3.12 compute_ownership.py --date 2026-03-26
-      py -3.12 compute_ownership.py --slate early
-      py -3.12 compute_ownership.py --games 748230,748231
-      py -3.12 compute_ownership.py --teams NYY,BOS,HOU,LAA
-      py -3.12 compute_ownership.py --date 2026-03-19 --teams NYY,BOS
-
-    --slate  [main|early|afternoon|late]  Filter to players on this DK slate
-    --games  748230,748231                Explicit game_pks (spring training / custom)
-    --teams  NYY,BOS                      Team abbreviations → auto-resolve game_pks
-
-    Priority: --games > --teams > --slate > all games on date
+    Compute and upload ownership for one slate (or one explicit set of games).
+    Returns number of records written, or 0 if no data.
     """
-    def arg_val(flag):
-        """Return the value after a flag, or None."""
-        if flag in sys.argv:
-            idx = sys.argv.index(flag)
-            return sys.argv[idx + 1] if idx + 1 < len(sys.argv) else None
-        return None
-
-    target_date  = arg_val('--date') or str(date.today())
-    slate_filter = arg_val('--slate')   # e.g. 'main', 'early'
-    games_arg    = arg_val('--games')   # e.g. '748230,748231'
-    teams_arg    = arg_val('--teams')   # e.g. 'NYY,BOS,HOU,LAA'
-
-    # Build game_pk_filter from explicit args
-    game_pk_filter = None
-    if games_arg:
-        game_pk_filter = {int(g.strip()) for g in games_arg.split(',') if g.strip()}
-        print(f"  Filter: --games ({len(game_pk_filter)} game_pks)")
-    elif teams_arg:
-        teams = [t.strip() for t in teams_arg.split(',') if t.strip()]
-        game_pk_filter = resolve_teams_to_game_pks(target_date, teams)
-        if not game_pk_filter:
-            print(f"  WARNING: No games found on {target_date} for teams: {teams}")
-        else:
-            print(f"  Filter: --teams {teams} → {len(game_pk_filter)} game(s)")
-
-    slate_label = f" [{slate_filter} slate]" if slate_filter else \
-                  f" [{len(game_pk_filter)} games]" if game_pk_filter else ""
-
-    print(f"\n{'='*55}")
-    print(f"  Ownership Engine — {target_date}{slate_label}")
-    print(f"{'='*55}")
-
     data = fetch_ownership_data(target_date,
                                 game_pk_filter=game_pk_filter,
                                 slate_filter=slate_filter)
     if not data or not data.get('proj_rows'):
-        print("  No projections found — run compute_projections.py first.")
-        return
+        print("  No projections found for this slate.")
+        return 0
 
     proj_rows       = data['proj_rows']
     salary_map      = data['salary_map']
@@ -697,7 +654,101 @@ def run():
                 print(f"    {r['name']:27s}  {r['own_pct']:5.1f}%  "
                       f"${r['salary']:,}  {r['proj_pts'] or 0:.1f} pts")
 
-    print(f"\n  Done. {len(records)} ownership projections written.\n")
+    print(f"\n  Done. {len(records)} ownership projections written.")
+    return len(records)
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def run():
+    """
+    Usage:
+      py -3.12 compute_ownership.py
+      py -3.12 compute_ownership.py --date 2026-03-26
+      py -3.12 compute_ownership.py --slate early
+      py -3.12 compute_ownership.py --games 748230,748231
+      py -3.12 compute_ownership.py --teams NYY,BOS,HOU,LAA
+      py -3.12 compute_ownership.py --date 2026-03-19 --teams NYY,BOS
+
+    --slate  [main|early|afternoon|late]  Filter to players on this DK slate
+    --games  748230,748231                Explicit game_pks (spring training / custom)
+    --teams  NYY,BOS                      Team abbreviations → auto-resolve game_pks
+
+    Priority: --games > --teams > --slate > auto-detect all slates
+    When no filter is given, auto-detects all classic slates from dk_salaries
+    and runs ownership independently for each slate.
+    """
+    def arg_val(flag):
+        """Return the value after a flag, or None."""
+        if flag in sys.argv:
+            idx = sys.argv.index(flag)
+            return sys.argv[idx + 1] if idx + 1 < len(sys.argv) else None
+        return None
+
+    target_date  = arg_val('--date') or str(date.today())
+    slate_filter = arg_val('--slate')   # e.g. 'main', 'early'
+    games_arg    = arg_val('--games')   # e.g. '748230,748231'
+    teams_arg    = arg_val('--teams')   # e.g. 'NYY,BOS,HOU,LAA'
+
+    # Build game_pk_filter from explicit args
+    game_pk_filter = None
+    if games_arg:
+        game_pk_filter = {int(g.strip()) for g in games_arg.split(',') if g.strip()}
+        print(f"  Filter: --games ({len(game_pk_filter)} game_pks)")
+    elif teams_arg:
+        teams = [t.strip() for t in teams_arg.split(',') if t.strip()]
+        game_pk_filter = resolve_teams_to_game_pks(target_date, teams)
+        if not game_pk_filter:
+            print(f"  WARNING: No games found on {target_date} for teams: {teams}")
+        else:
+            print(f"  Filter: --teams {teams} → {len(game_pk_filter)} game(s)")
+
+    # ── Explicit filter: run once for that filter ─────────────────────────────
+    if slate_filter or game_pk_filter:
+        label = f" [{slate_filter} slate]" if slate_filter else \
+                f" [{len(game_pk_filter)} games]"
+        print(f"\n{'='*55}")
+        print(f"  Ownership Engine — {target_date}{label}")
+        print(f"{'='*55}")
+        n = run_single_slate(target_date,
+                             slate_filter=slate_filter,
+                             game_pk_filter=game_pk_filter)
+        if n == 0:
+            print("  No projections found — run compute_projections.py first.")
+        return
+
+    # ── No filter: auto-detect all classic slates and run each ────────────────
+    print(f"\n{'='*55}")
+    print(f"  Ownership Engine — {target_date} (auto-detect slates)")
+    print(f"{'='*55}")
+
+    # Query distinct classic slates from dk_salaries for this season
+    sal_rows = (sb.table('dk_salaries')
+                  .select('dk_slate')
+                  .eq('season', SEASON)
+                  .eq('contest_type', 'classic')
+                  .limit(5000)
+                  .execute().data or [])
+    slates = sorted({r['dk_slate'] for r in sal_rows if r.get('dk_slate')})
+
+    if not slates:
+        print("  No classic slates found in dk_salaries. Running for all games...")
+        run_single_slate(target_date)
+        return
+
+    print(f"  Found {len(slates)} classic slate(s): {slates}\n")
+
+    total_records = 0
+    for slate in slates:
+        print(f"\n{'─'*55}")
+        print(f"  ▸ Slate: {slate}")
+        print(f"{'─'*55}")
+        n = run_single_slate(target_date, slate_filter=slate)
+        total_records += n
+
+    print(f"\n{'='*55}")
+    print(f"  All slates complete. {total_records} total records written.")
+    print(f"{'='*55}\n")
 
 
 if __name__ == '__main__':
