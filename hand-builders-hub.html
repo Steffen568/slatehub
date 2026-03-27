@@ -4894,6 +4894,31 @@ async function loadPlayerPool(date, slate) {
   const rosterPosMap = {};
   rosterPosRaw.forEach(r => { if (r.player_id && r.position) rosterPosMap[r.player_id] = r.position; });
 
+  // ── Filter games/lineups to only teams on the selected slate ──────────────
+  // Without this, players from non-slate games leak into the pool via the
+  // lineup-starter fallback path (they get stub salary entries and show up).
+  if (_contestMode !== 'showdown') {
+    const slateTeams = new Set();
+    (pitcherSalRes.data || []).forEach(r => { if (r.team) slateTeams.add(r.team); });
+    if (slateTeams.size > 0) {
+      _games = _games.filter(g => {
+        const ha = teamAbbr(g.home_team), aa = teamAbbr(g.away_team);
+        return slateTeams.has(ha) || slateTeams.has(aa);
+      });
+      const slateGamePks = new Set(_games.map(g => g.game_pk));
+      lineupRaw = lineupRaw.filter(r => slateGamePks.has(r.game_pk));
+      // Rebuild lineupMap and starterPids from filtered lineups
+      Object.keys(lineupMap).forEach(k => delete lineupMap[k]);
+      lineupRaw.forEach(r => { if (r.player_id) lineupMap[r.player_id] = r; });
+      starterPids.length = 0;
+      lineupRaw.filter(r => r.batting_order != null).forEach(r => { if (r.player_id) starterPids.push(r.player_id); });
+      // Rebuild teamGameMap
+      Object.keys(teamGameMap).forEach(k => delete teamGameMap[k]);
+      _games.forEach(g => { teamGameMap[g.home_team_id] = g.game_pk; teamGameMap[g.away_team_id] = g.game_pk; });
+      buildGameLockTimes();
+    }
+  }
+
   // Build DK position map + salary fallback from any historical slate
   // Position: gives correct DK eligibility (e.g. 2B/SS, 1B/3B, OF) before today's salaries load
   // Salary fallback: used for players in today's lineup but not yet in today's slate's dk_salaries
