@@ -3919,11 +3919,16 @@ function getSlatesForGame(g) {
   // Check dk_slate_games map first — a game can be on multiple slates
   const awayAb = teamAbbr(g.away_team) || '';
   const homeAb = teamAbbr(g.home_team) || '';
-  const key = `${awayAb}|${homeAb}`;
-  if (slateGameMap[key] && slateGameMap[key].size > 0) {
-    return slateGameMap[key];
+  const key = `${g.game_date}|${awayAb}|${homeAb}`;
+  const allSlates = slateGameMap[key];
+  if (allSlates && allSlates.size > 0) {
+    // Return only classic slates (not showdown sd_ prefixed ones)
+    const classicSlates = new Set([...allSlates].filter(s => !s.startsWith('sd_')));
+    if (classicSlates.size > 0) return classicSlates;
+    // Game is showdown-only — no classic slate, only visible on "all"
+    return new Set();
   }
-  // Fallback to time-based bucketing
+  // No dk_slate_games data at all — fallback to time-based bucketing
   if (!g.game_time_utc) return new Set(['main']);
   const utcHour = new Date(g.game_time_utc).getUTCHours();
   const etHour = ((utcHour - 4) + 24) % 24;
@@ -3934,9 +3939,9 @@ function getSlatesForGame(g) {
 }
 
 function buildSlateButtons(games) {
+  // Collect all classic slates present for today's games
   const slatesPresent = new Set();
   games.forEach(g => getSlatesForGame(g).forEach(s => slatesPresent.add(s)));
-  // Filter out showdown slates from the button bar
   const slateOrder  = ['all', 'early', 'afternoon', 'main', 'late'];
   const slateLabels = { all:'All', early:'Early', afternoon:'Afternoon', main:'Main', late:'Late' };
 
@@ -5316,12 +5321,18 @@ async function loadGames() {
   allGames = data;
 
   // Load dk_slate_games for accurate multi-slate filtering
+  // Include start_time so we can match rows to the correct game date
   const { data: sgRows } = await sb.from('dk_slate_games')
-    .select('dk_slate, away_team, home_team')
+    .select('dk_slate, away_team, home_team, start_time')
     .eq('season', new Date().getFullYear());
-  slateGameMap = {};
+  slateGameMap = {};  // "DATE|AWAY|HOME" → Set of slate labels
   (sgRows || []).forEach(r => {
-    const key = `${r.away_team}|${r.home_team}`;
+    if (!r.start_time) return;
+    // Convert UTC start_time to ET game date (UTC-4 during EDT)
+    const utc = new Date(r.start_time);
+    const etMs = utc.getTime() - 4 * 3600000;
+    const etDate = new Date(etMs).toISOString().split('T')[0];
+    const key = `${etDate}|${r.away_team}|${r.home_team}`;
     if (!slateGameMap[key]) slateGameMap[key] = new Set();
     slateGameMap[key].add(r.dk_slate);
   });
