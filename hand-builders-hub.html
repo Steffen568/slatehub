@@ -7829,6 +7829,31 @@ function lateSwapBuildLP(eligPlayers, unlockedSlotDefs, remainingBudget, lockedP
     return [p.player_id, { positions, isPitcher, teamKey }];
   }));
 
+  // PvH constraints (same logic as optoBuildLP)
+  const pvhPairs = [];
+  if (pvhOff) {
+    for (const p of eligPlayers) {
+      const { isPitcher } = playerCache.get(p.player_id);
+      if (!isPitcher || !p.game_pk || lockedPids.has(p.player_id)) continue;
+      const game = _games.find(g => g.game_pk === p.game_pk);
+      if (!game) continue;
+      const oppTeamId = (p.team_id === game.home_team_id) ? game.away_team_id : game.home_team_id;
+      const oppTeamKey = oppTeamId ? (_teamIdAbbrMap[oppTeamId] || '') : null;
+      if (oppTeamKey) pvhPairs.push({ spPid: p.player_id, oppTeamKey });
+    }
+    // Also check locked SPs — their opposing hitters should be excluded too
+    Object.values(lockedSlots).forEach(p => {
+      if (!p || !p.game_pk) return;
+      const { isPitcher } = playerCache.get(p.player_id) || {};
+      if (!isPitcher) return;
+      const game = _games.find(g => g.game_pk === p.game_pk);
+      if (!game) return;
+      const oppTeamId = (p.team_id === game.home_team_id) ? game.away_team_id : game.home_team_id;
+      const oppTeamKey = oppTeamId ? (_teamIdAbbrMap[oppTeamId] || '') : null;
+      if (oppTeamKey) pvhPairs.push({ spPid: '__locked__', oppTeamKey }); // locked SP — just exclude opp hitters
+    });
+  }
+
   const mainSet = new Set(opts.mainPlayerIds || []);
 
   for (const p of eligPlayers) {
@@ -7874,8 +7899,24 @@ function lateSwapBuildLP(eligPlayers, unlockedSlotDefs, remainingBudget, lockedP
     varDef[`bd_${key}`] = 1;
     problem.constraints[`bd_${key}`] = { max: 1 };
 
+    // PvH: tag variable for SP-vs-opposing-team constraints
+    for (let pi = 0; pi < pvhPairs.length; pi++) {
+      const { spPid, oppTeamKey } = pvhPairs[pi];
+      const cKey = `pvh_${pi}`;
+      if (pid === spPid) varDef[cKey] = 1;
+      if (!isPitcher && teamKey === oppTeamKey) varDef[cKey] = 1;
+    }
+
     problem.variables[key] = varDef;
     problem.ints[key]      = 1;
+  }
+
+  // Register PvH constraints
+  for (let pi = 0; pi < pvhPairs.length; pi++) {
+    const { spPid } = pvhPairs[pi];
+    // Locked SPs: just block opposing hitters entirely (max 0)
+    // Unlocked SPs: SP + opposing hitters ≤ 1
+    problem.constraints[`pvh_${pi}`] = { max: spPid === '__locked__' ? 0 : 1 };
   }
 
   return problem;
@@ -7927,7 +7968,7 @@ function lateSwapAssembleLineup(selectedIds, eligPlayers, lockedSlots, unlockedS
 }
 
 // Core late-swap search for a single lineup — mirrors optoFindBest but for partial lineups.
-function lateSwapFindBest(lineupObj, pastLineups, capExcluded, stackAppearCount, totalN) {
+function lateSwapFindBest(lineupObj, pastLineups, capExcluded, stackAppearCount, totalN, lineupIdx = 0) {
   const part = partitionLineup(lineupObj);
 
   if (part.allLocked) return null;   // nothing to swap
@@ -7937,7 +7978,7 @@ function lateSwapFindBest(lineupObj, pastLineups, capExcluded, stackAppearCount,
 
   // If nothing is locked, delegate to the regular optimizer
   if (part.noneLocked) {
-    return optoFindBest(optoPickRule(0, totalN), pastLineups, capExcluded, stackAppearCount, totalN);
+    return optoFindBest(optoPickRule(lineupIdx, totalN), pastLineups, capExcluded, stackAppearCount, totalN);
   }
 
   const allElig = [
@@ -7952,7 +7993,7 @@ function lateSwapFindBest(lineupObj, pastLineups, capExcluded, stackAppearCount,
   );
   const eligById = new Map(allElig.map(p => [p.player_id, p]));
 
-  const rule = optoPickRule(0, totalN);
+  const rule = optoPickRule(lineupIdx, totalN);
   const randPct = optoSettings.randPct || 0;
 
   // Rank teams
@@ -7960,13 +8001,25 @@ function lateSwapFindBest(lineupObj, pastLineups, capExcluded, stackAppearCount,
   const teamScores  = Object.fromEntries(allTeams.map(t => [t, optoTeamScore(t)]));
   const rankedTeams = [...allTeams].sort((a, b) => teamScores[b] - teamScores[a]);
 
+  // Build set of teams at their stack exposure cap (mirrors optoFindBest logic)
+  const cappedStackTeams = new Set();
+  Object.entries(stackExpCaps).forEach(([key, capPct]) => {
+    const parts = key.split('_');
+    const size  = +parts[parts.length - 1];
+    const team  = parts.slice(0, -1).join('_');
+    if (size <= rule.primarySize) {
+      const maxCount = Math.max(1, Math.ceil(totalN * capPct / 100));
+      if ((stackAppearCount[key] || 0) >= maxCount) cappedStackTeams.add(team);
+    }
+  });
+
   const mainPrefs = optoSettings.teamStacks.filter(ts => ts.role === 'main').map(ts => ts.team);
   const mainCandidates = (mainPrefs.length > 0
     ? mainPrefs
     : rankedTeams.slice(0, 10).filter(t =>
         allHitters.filter(h => optoTeamKey(h) === t && !isExcluded(h)).length >= rule.primarySize
       )
-  );
+  ).filter(t => !cappedStackTeams.has(t));
 
   const windows = optoStackWindows(rule);
   const subPrefs = optoSettings.teamStacks.filter(ts => ts.role === 'sub').map(ts => ts.team);
@@ -8121,7 +8174,7 @@ function lateSwapAllLineups() {
       if ((appearCount[+pid] || 0) >= playerMax) capExcluded.add(+pid);
     });
 
-    const newLineup = lateSwapFindBest(entry.lineup, reOptimized, capExcluded, stackAppearCount, N);
+    const newLineup = lateSwapFindBest(entry.lineup, reOptimized, capExcluded, stackAppearCount, N, i);
 
     if (newLineup) {
       // Stamp draftable IDs on newly swapped players for DK export
