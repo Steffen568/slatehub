@@ -4306,7 +4306,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <div class="opto-row"><label>Hitter Max Exp%</label><input class="opto-input" id="opto-expmax-hit" type="number" min="1" max="100" value="100" oninput="expHitterMax=+this.value;saveSettings()"></div>
       <div class="opto-row classic-only"><label>Pitcher Max Exp%</label><input class="opto-input" id="opto-expmax-pit" type="number" min="1" max="100" value="100" oninput="expPitcherMax=+this.value;saveSettings()"></div>
       <div class="opto-row sd-only" style="display:none"><label>CPT Max Exp%</label><input class="opto-input" id="opto-cpt-max" type="number" min="1" max="100" value="35" oninput="expCptMax=+this.value;saveSettings()" title="Max % of lineups any player can appear as Captain"></div>
-      <div class="opto-row classic-only"><label>Max/Team</label><input class="opto-input" id="opto-maxteam" type="number" min="3" max="8" value="5" oninput="optoSettings.maxPerTeam=+this.value;saveSettings()"></div>
+      <div class="opto-row classic-only"><label>Max/Team</label><input class="opto-input" id="opto-maxteam" type="number" min="3" max="6" value="5" oninput="optoSettings.maxPerTeam=Math.min(+this.value,6);this.value=optoSettings.maxPerTeam;saveSettings()"></div>
       <div class="opto-row classic-only"><label>Min Conf</label><input class="opto-input" id="opto-conf" type="number" min="0" max="10" value="0" oninput="optoSettings.minConfirmed=+this.value;saveSettings()"></div>
       <div class="opto-row classic-only" style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px;">
         <label style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);">Late Swap</label>
@@ -6793,9 +6793,11 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
   }
 
   // Per-team max players constraint (normalized key so pitchers + hitters share it)
+  const maxTeam = Math.min(optoSettings.maxPerTeam || 5, 6);
   const teams = [...new Set(eligPlayers.map(p => optoTeamKey(p)).filter(Boolean))];
   for (const t of teams) {
-    problem.constraints[`tm_${t}`] = { max: optoSettings.maxPerTeam || 5 };
+    problem.constraints[`tm_${t}`]  = { max: maxTeam };           // total (pitcher + hitters) ≤ 6
+    problem.constraints[`tmh_${t}`] = { max: Math.min(maxTeam, 5) }; // hitters only ≤ 5
   }
 
   // Diversity constraints — each past lineup contributes one constraint
@@ -6841,7 +6843,10 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
     }
 
     // Team cap (normalized key so pitchers and hitters share the same constraint)
-    if (teamKey) varDef[`tm_${teamKey}`] = 1;
+    if (teamKey) {
+      varDef[`tm_${teamKey}`] = 1;
+      if (!isPitcher) varDef[`tmh_${teamKey}`] = 1;  // hitter-only cap (max 5)
+    }
 
     // Main stack membership
     if (mainSet.has(pid)) varDef.stk_main = 1;
@@ -7605,14 +7610,24 @@ function lateSwapBuildLP(eligPlayers, unlockedSlotDefs, remainingBudget, lockedP
   }
 
   // Per-team max — account for locked players already on each team
+  const maxTeam = Math.min(optoSettings.maxPerTeam || 5, 6);
   const lockedTeamCounts = {};
+  const lockedTeamHitterCounts = {};
   Object.values(lockedSlots).forEach(p => {
-    if (p) { const tk = optoTeamKey(p); if (tk) lockedTeamCounts[tk] = (lockedTeamCounts[tk] || 0) + 1; }
+    if (p) {
+      const tk = optoTeamKey(p);
+      if (tk) {
+        lockedTeamCounts[tk] = (lockedTeamCounts[tk] || 0) + 1;
+        if (!optoIsPitcher(p)) lockedTeamHitterCounts[tk] = (lockedTeamHitterCounts[tk] || 0) + 1;
+      }
+    }
   });
   const teams = [...new Set(eligPlayers.map(p => optoTeamKey(p)).filter(Boolean))];
   for (const t of teams) {
-    const maxFromUnlocked = Math.max(0, (optoSettings.maxPerTeam || 5) - (lockedTeamCounts[t] || 0));
+    const maxFromUnlocked = Math.max(0, maxTeam - (lockedTeamCounts[t] || 0));
     problem.constraints[`tm_${t}`] = { max: maxFromUnlocked };
+    const maxHittersFromUnlocked = Math.max(0, Math.min(maxTeam, 5) - (lockedTeamHitterCounts[t] || 0));
+    problem.constraints[`tmh_${t}`] = { max: maxHittersFromUnlocked };
   }
 
   // Diversity constraints
@@ -7654,7 +7669,10 @@ function lateSwapBuildLP(eligPlayers, unlockedSlotDefs, remainingBudget, lockedP
       varDef[`pos_${pos}`] = frac;
     }
 
-    if (teamKey) varDef[`tm_${teamKey}`] = 1;
+    if (teamKey) {
+      varDef[`tm_${teamKey}`] = 1;
+      if (!isPitcher) varDef[`tmh_${teamKey}`] = 1;
+    }
     if (mainSet.has(pid)) varDef.stk_main = 1;
     if (opts.subTeam && optoTeamKey(p) === opts.subTeam && !isPitcher) varDef.stk_sub = 1;
 
