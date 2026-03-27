@@ -4038,6 +4038,7 @@ function selectTeam(btn, side) {
   const mbPitcher = document.getElementById('mbPitcher');
   if (mbTeams)   mbTeams.textContent   = `${batTeam} vs ${pitTeam}`;
   if (mbPitcher) mbPitcher.textContent = oppSpNm ? oppSpNm : '—';
+  updateImpliedDisplay();
 }
 let activePitcherTeamId = null;
 
@@ -5578,8 +5579,51 @@ async function selectGameByPk(gamePk) {
     activeBullpenTeamId = game.home_team_id,
     loadStartingPitcher(game.away_sp_id, game.away_sp_name, away),
     loadBullpen(game.away_team_id, game.game_date),
+    loadGameOdds(gamePk),
   ]);
   _tourHookGameSelect();
+}
+
+// ── GAME ODDS (implied runs display) ──────────────────────────────────────────
+async function loadGameOdds(gamePk) {
+  _activeOdds = null;
+  const mbImplied = document.getElementById('mbImplied');
+  try {
+    const { data } = await sb
+      .from('game_odds')
+      .select('home_implied,away_implied,game_total')
+      .eq('game_pk', gamePk)
+      .maybeSingle();
+    _activeOdds = data || null;
+  } catch (e) {
+    console.warn('[loadGameOdds] error:', e.message);
+  }
+  updateImpliedDisplay();
+}
+
+function updateImpliedDisplay() {
+  const el = document.getElementById('mbImplied');
+  if (!el) return;
+  if (!_activeOdds || !activeGame) { el.textContent = '—'; el.style.color = 'var(--muted)'; return; }
+
+  // Determine which team is selected (home batting = home implied)
+  const teamBtns = document.querySelectorAll('#teamCycleButtons .ssb-btn');
+  let side = 'home';
+  if (teamBtns.length >= 2 && teamBtns[1].classList.contains('active')) side = 'away';
+
+  const implied = side === 'home' ? _activeOdds.home_implied : _activeOdds.away_implied;
+  if (implied != null) {
+    el.textContent = parseFloat(implied).toFixed(1);
+    // Color code: high implied = green, low = muted
+    const val = parseFloat(implied);
+    if (val >= 5.0) el.style.color = '#4ade80';
+    else if (val >= 4.5) el.style.color = '#fbbf24';
+    else if (val >= 3.5) el.style.color = 'var(--muted)';
+    else el.style.color = '#60a5fa';
+  } else {
+    el.textContent = '—';
+    el.style.color = 'var(--muted)';
+  }
 }
 
 // ── WEATHER
@@ -5591,6 +5635,7 @@ let _activeSplits       = {};     // { L: vsLHH row, R: vsRHH row }
 let _activeArsenal      = [];     // pitch_arsenal rows for current SP
 let _activeWeather      = null;   // weather row for active game
 let _activeParkFactors  = null;   // park_factors row for active game
+let _activeOdds         = null;   // game_odds row for active game
 
 // ── Venue coordinates for radar embed (venue_id → [lat, lon, indoor])
 const VENUE_COORDS = {
