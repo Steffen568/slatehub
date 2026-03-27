@@ -6838,6 +6838,22 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
     return [p.player_id, { positions, isPitcher, teamKey }];
   }));
 
+  // PvH constraints: if pvhOff=true, prevent drafting hitters who face a selected SP
+  // For each SP, find the opposing team and create pairwise exclusion constraints
+  const pvhPairs = []; // [{spKey, oppTeamKey}]
+  if (pvhOff) {
+    for (const p of eligPlayers) {
+      const { isPitcher, teamKey } = playerCache.get(p.player_id);
+      if (!isPitcher || !p.game_pk) continue;
+      const game = _games.find(g => g.game_pk === p.game_pk);
+      if (!game) continue;
+      // Find opposing team_id, then its team key
+      const oppTeamId = (p.team_id === game.home_team_id) ? game.away_team_id : game.home_team_id;
+      const oppTeamKey = oppTeamId ? (_teamIdAbbrMap[oppTeamId] || '') : null;
+      if (oppTeamKey) pvhPairs.push({ spPid: p.player_id, oppTeamKey });
+    }
+  }
+
   // Build one binary variable per eligible player
   const mainSet = new Set(opts.mainPlayerIds || []);
 
@@ -6892,8 +6908,21 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
     varDef[`bd_${key}`] = 1;
     problem.constraints[`bd_${key}`] = { max: 1 };
 
+    // PvH: tag this player's variable for each relevant SP-vs-team constraint
+    for (let pi = 0; pi < pvhPairs.length; pi++) {
+      const { spPid, oppTeamKey } = pvhPairs[pi];
+      const cKey = `pvh_${pi}`;
+      if (pid === spPid) varDef[cKey] = 1;                       // this IS the SP
+      if (!isPitcher && teamKey === oppTeamKey) varDef[cKey] = 1; // hitter on opposing team
+    }
+
     problem.variables[key] = varDef;
     problem.ints[key]      = 1;
+  }
+
+  // Register PvH constraints: SP + any opposing hitter ≤ 1
+  for (let pi = 0; pi < pvhPairs.length; pi++) {
+    problem.constraints[`pvh_${pi}`] = { max: 1 };
   }
 
   return problem;
