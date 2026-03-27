@@ -4406,8 +4406,8 @@ const NAME_TO_ABBR = {
   'New York Yankees':'NYY','Boston Red Sox':'BOS','Tampa Bay Rays':'TB','Toronto Blue Jays':'TOR',
   'Baltimore Orioles':'BAL','Chicago White Sox':'CWS','Cleveland Guardians':'CLE',
   'Detroit Tigers':'DET','Kansas City Royals':'KC','Minnesota Twins':'MIN',
-  'Houston Astros':'HOU','Los Angeles Angels':'LAA','Oakland Athletics':'OAK',
-  'Athletics':'OAK','Seattle Mariners':'SEA','Texas Rangers':'TEX',
+  'Houston Astros':'HOU','Los Angeles Angels':'LAA','Oakland Athletics':'ATH',
+  'Athletics':'ATH','Seattle Mariners':'SEA','Texas Rangers':'TEX',
   'Atlanta Braves':'ATL','Miami Marlins':'MIA','New York Mets':'NYM',
   'Philadelphia Phillies':'PHI','Washington Nationals':'WSH','Chicago Cubs':'CHC',
   'Cincinnati Reds':'CIN','Milwaukee Brewers':'MIL','Pittsburgh Pirates':'PIT',
@@ -4784,8 +4784,26 @@ async function loadSlates(date) {
   const wantType = _contestMode === 'showdown' ? 'showdown' : 'classic';
   let pool = _allSlates.filter(({ contestType }) => contestType === wantType);
 
-  let matching = date === 'all' ? pool
-    : pool.filter(({ slate: s }) => parseDateFromSlate(s) === date);
+  let matching;
+  if (date === 'all') {
+    matching = pool;
+  } else if (wantType === 'showdown') {
+    // Showdown slates have dates in their names
+    matching = pool.filter(({ slate: s }) => parseDateFromSlate(s) === date);
+  } else {
+    // Classic slates: check dk_slate_games to see which slates have games on this date
+    const { data: sgRows } = await sb.from('dk_slate_games')
+      .select('dk_slate, start_time')
+      .eq('season', new Date().getFullYear());
+    const classicSlatesForDate = new Set();
+    (sgRows || []).forEach(r => {
+      if (!r.start_time || r.dk_slate.startsWith('sd_')) return;
+      const utc = new Date(r.start_time);
+      const etDate = new Date(utc.getTime() - 4 * 3600000).toISOString().split('T')[0];
+      if (etDate === date) classicSlatesForDate.add(r.dk_slate);
+    });
+    matching = pool.filter(({ slate: s }) => classicSlatesForDate.has(s));
+  }
   if (!matching.length) matching = pool;
 
   if (!matching.length) {
