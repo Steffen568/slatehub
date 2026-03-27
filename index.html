@@ -3906,7 +3906,7 @@ function applySlateFilter() {
   buildSlateButtons(games);
 
   if (activeSlate && activeSlate !== 'all') {
-    games = games.filter(g => getSlateForGame(g) === activeSlate);
+    games = games.filter(g => getSlatesForGame(g).has(activeSlate));
   }
 
   renderGameButtons(games);
@@ -3915,21 +3915,28 @@ function applySlateFilter() {
     '<span style="color:var(--muted);font-size:10px;padding:4px 8px;">No games this slate</span>';
 }
 
-function getSlateForGame(g) {
-  // Use DraftKings slate data if available
-  if (g.dk_slate) return g.dk_slate;
+function getSlatesForGame(g) {
+  // Check dk_slate_games map first — a game can be on multiple slates
+  const awayAb = teamAbbr(g.away_team) || '';
+  const homeAb = teamAbbr(g.home_team) || '';
+  const key = `${awayAb}|${homeAb}`;
+  if (slateGameMap[key] && slateGameMap[key].size > 0) {
+    return slateGameMap[key];
+  }
   // Fallback to time-based bucketing
-  if (!g.game_time_utc) return 'main';
+  if (!g.game_time_utc) return new Set(['main']);
   const utcHour = new Date(g.game_time_utc).getUTCHours();
   const etHour = ((utcHour - 4) + 24) % 24;
-  if (etHour < 13)  return 'early';
-  if (etHour < 17)  return 'afternoon';
-  if (etHour < 19.5) return 'main';
-  return 'late';
+  if (etHour < 13)  return new Set(['early']);
+  if (etHour < 17)  return new Set(['afternoon']);
+  if (etHour < 19.5) return new Set(['main']);
+  return new Set(['late']);
 }
 
 function buildSlateButtons(games) {
-  const slatesPresent = new Set(games.map(g => getSlateForGame(g)));
+  const slatesPresent = new Set();
+  games.forEach(g => getSlatesForGame(g).forEach(s => slatesPresent.add(s)));
+  // Filter out showdown slates from the button bar
   const slateOrder  = ['all', 'early', 'afternoon', 'main', 'late'];
   const slateLabels = { all:'All', early:'Early', afternoon:'Afternoon', main:'Main', late:'Late' };
 
@@ -5210,6 +5217,7 @@ const sb = supabase.createClient(SUPA_URL, SUPA_KEY);
 // Active game state
 let activeGame = null;
 let allGames   = [];
+let slateGameMap = {};  // "AWAY|HOME" → Set of slate labels (from dk_slate_games)
 
 // ── Helpers
 function fmtTime(utc) {
@@ -5306,6 +5314,18 @@ async function loadGames() {
   }
 
   allGames = data;
+
+  // Load dk_slate_games for accurate multi-slate filtering
+  const { data: sgRows } = await sb.from('dk_slate_games')
+    .select('dk_slate, away_team, home_team')
+    .eq('season', new Date().getFullYear());
+  slateGameMap = {};
+  (sgRows || []).forEach(r => {
+    const key = `${r.away_team}|${r.home_team}`;
+    if (!slateGameMap[key]) slateGameMap[key] = new Set();
+    slateGameMap[key].add(r.dk_slate);
+  });
+
   renderDateButtons(data);
   filterGamesByDate(today);
 }
