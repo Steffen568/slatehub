@@ -7325,13 +7325,20 @@ function activateLateSwapUI() {
 async function buildPoolFromCSV(csvPool, date) {
   document.getElementById('pool-list').innerHTML = '<div class="pool-empty">Loading…</div>';
 
-  // 1. Load games for this date
+  // 1. Load games for this date, filtered to teams in the CSV pool
+  const csvTeams = new Set();
+  for (const csv of Object.values(csvPool)) { if (csv.team) csvTeams.add(csv.team); }
+
   const { data: games } = date && date !== 'all'
     ? await sb.from('games')
         .select('game_pk,game_date,home_team_id,away_team_id,home_team,away_team,home_sp_id,away_sp_id,home_sp_name,away_sp_name,venue_name,venue_id,game_time_utc')
         .eq('game_date', date)
     : { data: [] };
-  _games = games || [];
+  // Filter to only games with at least one team in the CSV pool
+  _games = (games || []).filter(g => {
+    const ha = teamAbbr(g.home_team), aa = teamAbbr(g.away_team);
+    return csvTeams.has(ha) || csvTeams.has(aa);
+  });
   buildGameLockTimes();
 
   const gamePks = _games.map(g => g.game_pk);
