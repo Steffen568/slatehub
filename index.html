@@ -7184,7 +7184,7 @@ async function loadBullpen(teamId, gameDate) {
   gameDate = gd.toISOString().split('T')[0];
 
   // Fetch recent appearances for this team
-  const { data: apps, error } = await sb
+  let { data: apps, error } = await sb
     .from('bullpen_appearances')
     .select('*')
     .eq('team_id', teamId)
@@ -7210,7 +7210,9 @@ async function loadBullpen(teamId, gameDate) {
     .eq('on_40_man', true);
 
   const rosterSet = new Set((rosterData || []).map(r => r.player_id));
-  const filteredIds = allRelieverIds.filter(id => rosterSet.has(id));
+  // Filter appearances and IDs to 40-man only — no fallback
+  apps = apps.filter(a => rosterSet.has(a.player_id));
+  const filteredIds = [...new Set(apps.map(a => a.player_id))];
   if (filteredIds.length === 0) {
     container.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:20px;text-align:center;">No bullpen data for active roster</div>';
     return;
