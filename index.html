@@ -5637,49 +5637,49 @@ let _activeWeather      = null;   // weather row for active game
 let _activeParkFactors  = null;   // park_factors row for active game
 let _activeOdds         = null;   // game_odds row for active game
 
-// ── Venue coordinates for radar embed (venue_id → [lat, lon, indoor])
+// ── Venue coordinates for radar embed (MLB API venue_id → [lat, lon, indoor])
 const VENUE_COORDS = {
-   1: [33.8003, -117.8827, false],  // Angel Stadium
-   2: [29.7573, -95.3555,  false],  // Daikin Park (Minute Maid)
-   3: [38.5802, -121.5085, false],  // Sutter Health Park (Athletics)
-   4: [43.6414, -79.3894,  true ],  // Rogers Centre (dome)
-   5: [33.8908, -84.4678,  false],  // Truist Park
-   6: [43.0280, -87.9712,  false],  // American Family Field
-   7: [38.6226, -90.1928,  false],  // Busch Stadium
-   8: [41.9484, -87.6553,  false],  // Wrigley Field
-   9: [33.4453, -112.0667, false],  // Chase Field (retractable)
-  10: [34.0739, -118.2400, false],  // Dodger Stadium
-  11: [37.7786, -122.3893, false],  // Oracle Park
-  12: [41.4962, -81.6852,  false],  // Progressive Field
-  13: [47.5914, -122.3326, false],  // T-Mobile Park
-  14: [25.7781, -80.2197,  false],  // loanDepot park
-  15: [40.7571, -73.8458,  false],  // Citi Field
-  16: [38.8730, -77.0074,  false],  // Nationals Park
-  17: [39.2838, -76.6218,  false],  // Oriole Park at Camden Yards
-  18: [32.7073, -117.1566, false],  // Petco Park
-  19: [39.9061, -75.1665,  false],  // Citizens Bank Park
-  20: [40.4469, -80.0057,  false],  // PNC Park
-  21: [32.7473, -97.0845,  false],  // Globe Life Field (retractable)
-  22: [28.0285, -82.5281,  false],  // Steinbrenner Field
-  23: [42.3467, -71.0972,  false],  // Fenway Park
-  24: [39.0979, -84.5082,  false],  // Great American Ball Park
-  25: [39.7559, -104.9942, false],  // Coors Field
-  26: [39.0517, -94.4803,  false],  // Kauffman Stadium
-  27: [42.3390, -83.0485,  false],  // Comerica Park
-  28: [44.9817, -93.2781,  false],  // Target Field
-  29: [41.8300, -87.6338,  false],  // Guaranteed Rate Field
-  30: [40.8296, -73.9262,  false],  // Yankee Stadium
+      1: [33.8003, -117.8827, false],  // Angel Stadium
+      2: [39.2838, -76.6218,  false],  // Oriole Park at Camden Yards
+      3: [42.3467, -71.0972,  false],  // Fenway Park
+      4: [41.8300, -87.6338,  false],  // Guaranteed Rate Field
+      5: [41.4962, -81.6852,  false],  // Progressive Field
+      7: [39.0517, -94.4803,  false],  // Kauffman Stadium
+     12: [27.7682, -82.6534,  true ],  // Tropicana Field (dome)
+     14: [43.6414, -79.3894,  true ],  // Rogers Centre (dome)
+     15: [33.4453, -112.0667, false],  // Chase Field (retractable)
+     17: [41.9484, -87.6553,  false],  // Wrigley Field
+     19: [39.7559, -104.9942, false],  // Coors Field
+     22: [34.0739, -118.2400, false],  // Dodger Stadium
+     31: [40.4469, -80.0057,  false],  // PNC Park
+     32: [43.0280, -87.9712,  false],  // American Family Field
+    680: [47.5914, -122.3326, false],  // T-Mobile Park (retractable)
+   2392: [29.7573, -95.3555,  false],  // Daikin Park (retractable)
+   2394: [42.3390, -83.0485,  false],  // Comerica Park
+   2395: [37.7786, -122.3893, false],  // Oracle Park
+   2602: [39.0979, -84.5082,  false],  // Great American Ball Park
+   2680: [32.7073, -117.1566, false],  // Petco Park
+   2681: [39.9061, -75.1665,  false],  // Citizens Bank Park
+   2889: [38.6226, -90.1928,  false],  // Busch Stadium
+   3289: [40.7571, -73.8458,  false],  // Citi Field
+   3309: [38.8730, -77.0074,  false],  // Nationals Park
+   3312: [44.9817, -93.2781,  false],  // Target Field
+   3313: [40.8296, -73.9262,  false],  // Yankee Stadium
+   4169: [25.7781, -80.2197,  false],  // loanDepot park (retractable)
+   4705: [33.8908, -84.4678,  false],  // Truist Park
+   5325: [32.7473, -97.0845,  true ],  // Globe Life Field (retractable/closed)
+   5355: [36.0909, -115.1761, false],  // Las Vegas Ballpark (Athletics)
 };
 
 function loadRadar(venueId, homeTeamId, gameTimeUtc) {
   const wrap = document.getElementById('radarWrap');
   if (!wrap) return;
 
-  // MLB API venue_id won't match our 1-30 keys — same fallback as loadParkFactors
+  // Direct lookup by MLB API venue_id, fallback to team→venue map
   let coords = VENUE_COORDS[venueId];
   if (!coords && homeTeamId) {
-    const internalId = TEAM_HOME_VENUE[homeTeamId];
-    if (internalId) coords = VENUE_COORDS[internalId];
+    const fallbackId = TEAM_HOME_VENUE[homeTeamId];
+    if (fallbackId) coords = VENUE_COORDS[fallbackId];
   }
 
   if (!coords) {
@@ -5696,9 +5696,15 @@ function loadRadar(venueId, homeTeamId, gameTimeUtc) {
 
   // Pin the radar to game time; fall back to now if time unknown
   const calendarTs = gameTimeUtc ? new Date(gameTimeUtc).getTime() : Date.now();
+  const gameTimeLabel = gameTimeUtc
+    ? new Date(gameTimeUtc).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short' })
+    : '';
 
-  const src = `https://embed.windy.com/embed2.html?lat=${lat}&lon=${lon}&detailLat=${lat}&detailLon=${lon}&zoom=10&level=surface&overlay=rain&product=ecmwf&menu=&message=&marker=false&calendar=${calendarTs}&pressure=&type=map&location=coordinates&detail=&metricWind=mph&metricTemp=%C2%B0F&radarRange=-1`;
-  wrap.innerHTML = `<iframe src="${src}" loading="lazy" allowfullscreen title="Radar — ${venueId}"></iframe>`;
+  // Windy embed: rain radar + wind overlay, pinned to game time, zoomed to stadium
+  const src = `https://embed.windy.com/embed2.html?lat=${lat}&lon=${lon}&detailLat=${lat}&detailLon=${lon}&zoom=9&level=surface&overlay=rainAccu&product=ecmwf&menu=&message=true&marker=true&calendar=${calendarTs}&pressure=true&type=map&location=coordinates&detail=true&metricWind=mph&metricTemp=%C2%B0F&radarRange=-1`;
+
+  wrap.innerHTML = `${gameTimeLabel ? `<div style="text-align:center;font-size:10px;color:var(--muted);padding:3px 0;background:var(--s2);border-bottom:1px solid var(--border);">Forecast pinned to first pitch: <strong style="color:var(--hi);">${gameTimeLabel}</strong></div>` : ''}
+    <iframe src="${src}" loading="lazy" allowfullscreen title="Radar"></iframe>`;
 }
 
 async function loadWeather(gamePk, venueName, away, home, time) {
