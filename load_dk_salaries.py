@@ -219,6 +219,9 @@ PLAYER_ID_REMAP = {
     1452073 : 814526,   # Jacob Wilson (auto-fixed)
     876320  : 665161,   # Jeremy Pena (auto-fixed)
     1055003 : 669134,   # Luis Campusano (auto-fixed)
+    657041  : 700951,   # Lane Thomas (auto-fixed)
+    702284  : 673784,   # Cole Young (auto-fixed)
+    805779  : 814526,   # Jacob Wilson (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids
@@ -535,6 +538,17 @@ if all_salary_rows:
 
     if started_dg_ids:
         print(f"  ⚠ {len(started_dg_ids)} DG(s) have in-progress games — skipping delete (upsert only): {sorted(started_dg_ids)}")
+
+    # Clean up stale DGs from previous days that are no longer in the API.
+    # These are finished slates whose games are all in the past — safe to remove.
+    stale_res = supabase.table('dk_salaries').select('dg_id').eq('season', season).limit(5000).execute()
+    db_dg_ids = {r['dg_id'] for r in (stale_res.data or [])}
+    stale_dg_ids = db_dg_ids - set(api_dg_ids)
+    if stale_dg_ids:
+        print(f"  Cleaning {len(stale_dg_ids)} stale DG(s) no longer in API: {sorted(stale_dg_ids)}")
+        for dgid in stale_dg_ids:
+            supabase.table('dk_salaries').delete().eq('dg_id', dgid).eq('season', season).execute()
+            supabase.table('dk_slate_games').delete().eq('dg_id', dgid).eq('season', season).execute()
 
     print(f"Clearing dk_salaries for {len(safe_dg_ids)} of {len(api_dg_ids)} active DG IDs (season {season})...")
     for dgid in safe_dg_ids:
