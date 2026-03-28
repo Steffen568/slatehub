@@ -217,6 +217,8 @@ PLAYER_ID_REMAP = {
     1316799 : 691777,   # Max Muncy (auto-fixed)
     1396147 : 673784,   # Cole Young (auto-fixed)
     1452073 : 814526,   # Jacob Wilson (auto-fixed)
+    876320  : 665161,   # Jeremy Pena (auto-fixed)
+    1055003 : 669134,   # Luis Campusano (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids
@@ -242,6 +244,7 @@ def drop_middle_initials(name):
 
 valid_mlbam_ids = set()  # all mlbam_ids in our players table
 name_to_mlbam   = {}
+name_to_all_mlbam = {}  # normalized name → set of ALL mlbam_ids (for disambiguation)
 ambiguous_names  = set()  # normalized names that map to 2+ different players
 
 for p in all_players:
@@ -252,6 +255,10 @@ for p in all_players:
         nn          = p['name_normalized']   # e.g. "bryan r. de la cruz"
         nn_stripped = normalize(nn)          # e.g. "bryan r de la cruz"
         nn_no_mi    = drop_middle_initials(nn_stripped)  # e.g. "bryan de la cruz"
+
+        for key in {nn, nn_stripped, nn_no_mi}:
+            if key:
+                name_to_all_mlbam.setdefault(key, set()).add(mlbam)
 
         for key in {nn, nn_stripped, nn_no_mi}:
             if not key:
@@ -268,6 +275,42 @@ for key in ambiguous_names:
 print(f"  Loaded {len(name_to_mlbam):,} player name mappings ({len(valid_mlbam_ids):,} unique IDs)")
 if ambiguous_names:
     print(f"  ⚠ {len(ambiguous_names)} ambiguous name(s) excluded (duplicate players — DK playerId required): {sorted(ambiguous_names)[:8]}")
+
+# Load team mappings from lineups for same-name disambiguation (e.g. two Max Muncys)
+# Maps DK team abbreviation → set of mlbam_ids on that team (from today's lineups)
+print("  Loading lineup team mappings for disambiguation...")
+from config import SEASON as _SEASON_CHECK
+_today = datetime.now().strftime('%Y-%m-%d')
+_lu_res = supabase.table('lineups').select('player_id, team_id').limit(5000).execute()
+_game_res = supabase.table('games').select('home_team_id, away_team_id, away_team, home_team').eq('game_date', _today).execute()
+# Build team_id → DK-style abbreviation from games table
+_tid_to_abbr = {}
+_DK_TEAM_MAP = {
+    'Arizona Diamondbacks':'ARI','Atlanta Braves':'ATL','Baltimore Orioles':'BAL',
+    'Boston Red Sox':'BOS','Chicago Cubs':'CHC','Chicago White Sox':'CWS',
+    'Cincinnati Reds':'CIN','Cleveland Guardians':'CLE','Colorado Rockies':'COL',
+    'Detroit Tigers':'DET','Houston Astros':'HOU','Kansas City Royals':'KC',
+    'Los Angeles Angels':'LAA','Los Angeles Dodgers':'LAD','Miami Marlins':'MIA',
+    'Milwaukee Brewers':'MIL','Minnesota Twins':'MIN','New York Mets':'NYM',
+    'New York Yankees':'NYY','Athletics':'ATH','Oakland Athletics':'ATH',
+    'Philadelphia Phillies':'PHI','Pittsburgh Pirates':'PIT','San Diego Padres':'SD',
+    'San Francisco Giants':'SF','Seattle Mariners':'SEA','St. Louis Cardinals':'STL',
+    'Tampa Bay Rays':'TB','Texas Rangers':'TEX','Toronto Blue Jays':'TOR',
+    'Washington Nationals':'WSH',
+}
+for g in (_game_res.data or []):
+    ha = _DK_TEAM_MAP.get(g.get('home_team',''),'')
+    aa = _DK_TEAM_MAP.get(g.get('away_team',''),'')
+    if ha: _tid_to_abbr[g['home_team_id']] = ha
+    if aa and g.get('away_team_id'): _tid_to_abbr[g['away_team_id']] = aa
+
+# Build mlbam_id → team abbreviation from lineups
+_pid_to_team_abbr = {}
+for r in (_lu_res.data or []):
+    tid = r.get('team_id')
+    pid = r.get('player_id')
+    if tid and pid and tid in _tid_to_abbr:
+        _pid_to_team_abbr[pid] = _tid_to_abbr[tid]
 
 # ── STEP 3: Fetch draftables for Classic + Showdown DGs
 print("\nFetching salaries from DraftKings...")
@@ -411,6 +454,17 @@ for dgid in all_dg_ids:
 
             # Final remap: catches wrong IDs sourced from our players table or DK fallback
             player_id = PLAYER_ID_REMAP.get(player_id, player_id)
+
+            # Same-name disambiguation: if multiple MLBAM IDs share this name,
+            # pick the one whose lineup team matches the DK team abbreviation.
+            # Fixes cases like two "Max Muncy" on different teams (LAD vs ATH).
+            all_ids = name_to_all_mlbam.get(norm, set()) | name_to_all_mlbam.get(norm_no_mi, set())
+            if len(all_ids) > 1 and team:
+                for alt_id in all_ids:
+                    if alt_id != player_id and _pid_to_team_abbr.get(alt_id) == team:
+                        print(f"    ⚡ Disambiguated '{name}' ({team}): {player_id} → {alt_id}")
+                        player_id = alt_id
+                        break
 
             row = {
                 'player_id':    player_id,
