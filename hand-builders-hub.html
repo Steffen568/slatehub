@@ -5308,6 +5308,8 @@ async function loadPlayerPool(date, slate) {
       const name    = proj.full_name || '?';
       const ps      = pitcherStatMap[proj.player_id];
       const salRow  = pitcherSalByName[name.toLowerCase()] || pitcherSalByName[normName(name)] || null;
+      // Skip pitchers not on the current slate (no salary = not on this DK slate)
+      if (!salRow) return;
       const teamId  = spIdToTeamId[proj.player_id] || null;
       const hesInfo = proj.game_pk ? gameHesMap[proj.game_pk] : null;
 
