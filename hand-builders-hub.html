@@ -4813,8 +4813,8 @@ async function loadSlates(date) {
   }
 
   sel.innerHTML = matching.map(({ slate: s }) => `<option value="${s}">${s}</option>`).join('');
-  sel.addEventListener('change', () => loadPlayerPool(date, sel.value));
-  // Skip loadPlayerPool in late-swap mode — buildPoolFromCSV will handle the pool
+  sel.addEventListener('change', () => { if (!lateSwapMode) loadPlayerPool(date, sel.value); });
+  // Skip loadPlayerPool in late-swap mode — buildPoolFromCSV handles the pool
   if (!lateSwapMode) {
     await loadPlayerPool(date, matching[0].slate);
   }
@@ -7359,23 +7359,22 @@ async function buildPoolFromCSV(csvPool, date) {
     if (g.away_team_id) teamGameMap[g.away_team_id] = g.game_pk;
   });
 
-  // 2. Fetch projections for ALL games on this date (not just slate games)
-  //    so locked players from other games (e.g. NYY@SF on main when on late slate) get enriched
+  // 2. Fetch projections for ALL games on this date (by game_date directly)
+  //    so locked players from other games get enriched too
   let projections = [], lineupRows = [];
-  const { data: allDateGames } = date && date !== 'all'
-    ? await sb.from('games').select('game_pk').eq('game_date', date)
-    : { data: [] };
-  const allDateGamePks = (allDateGames || []).map(g => g.game_pk);
-  if (allDateGamePks.length) {
-    [projections, lineupRows] = await Promise.all([
-      batchIn('player_projections',
-        'player_id,full_name,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,game_pk,team,position',
-        'game_pk', allDateGamePks),
-      batchIn('lineups',
-        'player_id,batting_order,team_id,player_name,status',
-        'game_pk', gamePks),
-    ]);
-  }
+  const projDate = date && date !== 'all' ? date : new Date().toISOString().split('T')[0];
+  const projQuery = sb.from('player_projections')
+    .select('player_id,full_name,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,game_pk,team,position')
+    .eq('game_date', projDate).limit(5000);
+  const [projRes, luRes] = await Promise.all([
+    projQuery,
+    gamePks.length
+      ? batchIn('lineups', 'player_id,batting_order,team_id,player_name,status', 'game_pk', gamePks)
+      : Promise.resolve([]),
+  ]);
+  projections = projRes.data || [];
+  lineupRows = Array.isArray(luRes) ? luRes : [];
+  console.log(`[buildPoolFromCSV] date=${projDate}, projections=${projections.length}, lineups=${lineupRows.length}`);
 
   // Build lookup maps — name-based for matching CSV players
   const projByName = {};
