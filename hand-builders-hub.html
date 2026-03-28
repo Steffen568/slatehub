@@ -6842,19 +6842,17 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
     return [p.player_id, { positions, isPitcher, teamKey }];
   }));
 
-  // PvH constraints: if pvhOff=true, prevent drafting hitters who face a selected SP
-  // For each SP, find the opposing team and create pairwise exclusion constraints
-  const pvhPairs = []; // [{spKey, oppTeamKey}]
+  // PvH: build map of SP player_id → opposing team key (for pairwise constraints below)
+  const pvhSpOppTeam = new Map(); // sp_pid → oppTeamKey
   if (pvhOff) {
     for (const p of eligPlayers) {
-      const { isPitcher, teamKey } = playerCache.get(p.player_id);
+      const { isPitcher } = playerCache.get(p.player_id);
       if (!isPitcher || !p.game_pk) continue;
       const game = _games.find(g => g.game_pk === p.game_pk);
       if (!game) continue;
-      // Find opposing team_id, then its team key
       const oppTeamId = (p.team_id === game.home_team_id) ? game.away_team_id : game.home_team_id;
       const oppTeamKey = oppTeamId ? (_teamIdAbbrMap[oppTeamId] || '') : null;
-      if (oppTeamKey) pvhPairs.push({ spPid: p.player_id, oppTeamKey });
+      if (oppTeamKey) pvhSpOppTeam.set(p.player_id, oppTeamKey);
     }
   }
 
@@ -6912,21 +6910,28 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
     varDef[`bd_${key}`] = 1;
     problem.constraints[`bd_${key}`] = { max: 1 };
 
-    // PvH: tag this player's variable for each relevant SP-vs-team constraint
-    for (let pi = 0; pi < pvhPairs.length; pi++) {
-      const { spPid, oppTeamKey } = pvhPairs[pi];
-      const cKey = `pvh_${pi}`;
-      if (pid === spPid) varDef[cKey] = 1;                       // this IS the SP
-      if (!isPitcher && teamKey === oppTeamKey) varDef[cKey] = 1; // hitter on opposing team
-    }
-
     problem.variables[key] = varDef;
     problem.ints[key]      = 1;
   }
 
-  // Register PvH constraints: SP + any opposing hitter ≤ 1
-  for (let pi = 0; pi < pvhPairs.length; pi++) {
-    problem.constraints[`pvh_${pi}`] = { max: 1 };
+  // PvH pairwise constraints: for each (SP, opposing hitter) pair, SP + hitter ≤ 1
+  // Pairwise means: when SP is NOT selected (=0), the hitter is unconstrained (can stack).
+  // Only when SP IS selected (=1) is the opposing hitter forced out.
+  if (pvhSpOppTeam.size > 0) {
+    for (const [spPid, oppTeamKey] of pvhSpOppTeam) {
+      const spKey = `p${spPid}`;
+      if (!problem.variables[spKey]) continue;
+      for (const p of eligPlayers) {
+        const { isPitcher, teamKey } = playerCache.get(p.player_id);
+        if (isPitcher || teamKey !== oppTeamKey) continue;
+        const hKey = `p${p.player_id}`;
+        if (!problem.variables[hKey]) continue;
+        const cKey = `pvh_${spPid}_${p.player_id}`;
+        problem.constraints[cKey] = { max: 1 };
+        problem.variables[spKey][cKey] = 1;
+        problem.variables[hKey][cKey] = 1;
+      }
+    }
   }
 
   return problem;
@@ -7853,8 +7858,9 @@ function lateSwapBuildLP(eligPlayers, unlockedSlotDefs, remainingBudget, lockedP
     return [p.player_id, { positions, isPitcher, teamKey }];
   }));
 
-  // PvH constraints (same logic as optoBuildLP)
-  const pvhPairs = [];
+  // PvH: build map of SP player_id → opposing team key (for pairwise constraints below)
+  const pvhSpOppTeam = new Map(); // sp_pid → oppTeamKey
+  const pvhLockedOppTeams = new Set(); // opposing team keys of LOCKED SPs (fully block)
   if (pvhOff) {
     for (const p of eligPlayers) {
       const { isPitcher } = playerCache.get(p.player_id);
@@ -7863,18 +7869,18 @@ function lateSwapBuildLP(eligPlayers, unlockedSlotDefs, remainingBudget, lockedP
       if (!game) continue;
       const oppTeamId = (p.team_id === game.home_team_id) ? game.away_team_id : game.home_team_id;
       const oppTeamKey = oppTeamId ? (_teamIdAbbrMap[oppTeamId] || '') : null;
-      if (oppTeamKey) pvhPairs.push({ spPid: p.player_id, oppTeamKey });
+      if (oppTeamKey) pvhSpOppTeam.set(p.player_id, oppTeamKey);
     }
-    // Also check locked SPs — their opposing hitters should be excluded too
+    // Locked SPs: their opposing hitters should be fully excluded
     Object.values(lockedSlots).forEach(p => {
       if (!p || !p.game_pk) return;
-      const { isPitcher } = playerCache.get(p.player_id) || {};
-      if (!isPitcher) return;
+      const cached = playerCache.get(p.player_id);
+      if (!cached?.isPitcher) return;
       const game = _games.find(g => g.game_pk === p.game_pk);
       if (!game) return;
       const oppTeamId = (p.team_id === game.home_team_id) ? game.away_team_id : game.home_team_id;
       const oppTeamKey = oppTeamId ? (_teamIdAbbrMap[oppTeamId] || '') : null;
-      if (oppTeamKey) pvhPairs.push({ spPid: '__locked__', oppTeamKey }); // locked SP — just exclude opp hitters
+      if (oppTeamKey) pvhLockedOppTeams.add(oppTeamKey);
     });
   }
 
@@ -7923,24 +7929,33 @@ function lateSwapBuildLP(eligPlayers, unlockedSlotDefs, remainingBudget, lockedP
     varDef[`bd_${key}`] = 1;
     problem.constraints[`bd_${key}`] = { max: 1 };
 
-    // PvH: tag variable for SP-vs-opposing-team constraints
-    for (let pi = 0; pi < pvhPairs.length; pi++) {
-      const { spPid, oppTeamKey } = pvhPairs[pi];
-      const cKey = `pvh_${pi}`;
-      if (pid === spPid) varDef[cKey] = 1;
-      if (!isPitcher && teamKey === oppTeamKey) varDef[cKey] = 1;
+    // PvH: block hitters facing locked SPs entirely
+    if (!isPitcher && pvhLockedOppTeams.has(teamKey)) {
+      problem.constraints[`pvh_lk_${key}`] = { max: 0 };
+      varDef[`pvh_lk_${key}`] = 1;
     }
 
     problem.variables[key] = varDef;
     problem.ints[key]      = 1;
   }
 
-  // Register PvH constraints
-  for (let pi = 0; pi < pvhPairs.length; pi++) {
-    const { spPid } = pvhPairs[pi];
-    // Locked SPs: just block opposing hitters entirely (max 0)
-    // Unlocked SPs: SP + opposing hitters ≤ 1
-    problem.constraints[`pvh_${pi}`] = { max: spPid === '__locked__' ? 0 : 1 };
+  // PvH pairwise constraints for unlocked SPs (same as optoBuildLP)
+  if (pvhSpOppTeam.size > 0) {
+    for (const [spPid, oppTeamKey] of pvhSpOppTeam) {
+      const spKey = `p${spPid}`;
+      if (!problem.variables[spKey]) continue;
+      for (const p of eligPlayers) {
+        if (lockedPids.has(p.player_id)) continue;
+        const { isPitcher: isP, teamKey: tk } = playerCache.get(p.player_id);
+        if (isP || tk !== oppTeamKey) continue;
+        const hKey = `p${p.player_id}`;
+        if (!problem.variables[hKey]) continue;
+        const cKey = `pvh_${spPid}_${p.player_id}`;
+        problem.constraints[cKey] = { max: 1 };
+        problem.variables[spKey][cKey] = 1;
+        problem.variables[hKey][cKey] = 1;
+      }
+    }
   }
 
   return problem;
