@@ -678,20 +678,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 .cond-sub{font-size:11px;color:var(--muted);margin-top:1px;}
 .wx-note{background:var(--s2);border-radius:4px;padding:6px 8px;border-left:3px solid var(--orange);font-size:12px;color:var(--text2);line-height:1.6;}
 .wx-note strong{color:var(--orange);}
-#radarWrap{flex:1;min-height:120px;border-radius:5px;overflow:hidden;background:var(--s2);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;}
+#radarWrap{flex:1;min-height:150px;border-radius:5px;overflow:hidden;background:var(--s2);border:1px solid var(--border);display:flex;flex-direction:column;align-items:center;justify-content:center;}
+#radarWrap iframe{width:100%;height:100%;min-height:150px;border:none;display:block;flex:1;}
 #radarWrap .radar-placeholder{font-size:11px;color:var(--muted);text-align:center;padding:12px;line-height:1.6;}
-.wind-panel{display:flex;align-items:center;gap:16px;padding:10px 14px;width:100%;}
-.wind-compass{position:relative;width:110px;height:110px;flex-shrink:0;}
-.wind-compass svg{width:100%;height:100%;}
-.wind-info{flex:1;display:flex;flex-direction:column;gap:6px;}
-.wind-info-row{display:flex;justify-content:space-between;align-items:center;font-size:12px;}
-.wind-info-label{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;}
-.wind-info-val{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:16px;color:var(--text);}
-.wind-info-val.wind-calm{color:var(--muted);}
-.wind-info-val.wind-mod{color:#fbbf24;}
-.wind-info-val.wind-strong{color:#f87171;}
-.precip-bar{width:100%;height:6px;border-radius:3px;background:var(--s3);overflow:hidden;margin-top:2px;}
-.precip-fill{height:100%;border-radius:3px;transition:width .3s;}
 /* CENTER */
 .pw-center{display:flex;flex-direction:column;align-items:center;padding:12px 10px 8px;gap:6px;border-right:1px solid var(--border);background:linear-gradient(180deg,#0d1117 0%,#0f1318 100%);}
 .park-hdr{width:100%;display:flex;align-items:flex-start;justify-content:space-between;padding:0 2px;}
@@ -5682,103 +5671,34 @@ const VENUE_COORDS = {
    5355: [36.0909, -115.1761, false],  // Las Vegas Ballpark (Athletics)
 };
 
-function renderWindPanel() {
+function loadRadar(venueId, homeTeamId, gameTimeUtc) {
   const wrap = document.getElementById('radarWrap');
   if (!wrap) return;
-  const wx = _activeWeather;
 
-  if (!wx) {
-    wrap.innerHTML = '<div class="radar-placeholder">Select a game to see weather</div>';
+  let coords = VENUE_COORDS[venueId];
+  if (!coords && homeTeamId) {
+    const fallbackId = TEAM_HOME_VENUE[homeTeamId];
+    if (fallbackId) coords = VENUE_COORDS[fallbackId];
+  }
+
+  if (!coords) {
+    wrap.innerHTML = '<div class="radar-placeholder">Radar not available for this venue</div>';
     return;
   }
 
-  if (!wx.is_outdoor || (activeGame?.roof_status === 'Closed')) {
-    const pf = _activeParkFactors;
-    const roofType = (pf?.roof_type || '').toLowerCase();
-    const isDome = roofType === 'dome' || activeGame?.roof_status === 'Closed';
-    if (isDome) {
-      wrap.innerHTML = '<div class="radar-placeholder">&#127960; Indoor / Dome venue<br><span style="font-size:10px;">Climate controlled — weather has no effect</span></div>';
-      return;
-    }
+  const [lat, lon, indoor] = coords;
+
+  if (indoor) {
+    wrap.innerHTML = '<div class="radar-placeholder">&#127960; Indoor / Dome venue<br><span style="font-size:10px;">No radar — climate controlled environment</span></div>';
+    return;
   }
 
-  const speed = parseFloat(wx.wind_speed) || 0;
-  const dir   = (wx.wind_dir || '').toUpperCase();
-  const deg   = parseFloat(wx.wind_deg) || 0;
-  const precip = parseFloat(wx.precip_pct) || 0;
-  const temp  = parseFloat(wx.temp_f) || 0;
-  const cond  = wx.conditions || '';
+  // Pin radar to 1 hour before game time so user can see approaching weather
+  const gameMs = gameTimeUtc ? new Date(gameTimeUtc).getTime() : Date.now();
+  const calendarTs = gameMs - (60 * 60 * 1000); // 1 hour before first pitch
 
-  // Wind speed class
-  const spdClass = speed < 5 ? 'wind-calm' : speed < 12 ? 'wind-info-val' : speed < 18 ? 'wind-mod' : 'wind-strong';
-  const spdLabel = speed < 5 ? 'Calm' : speed < 12 ? 'Light' : speed < 18 ? 'Moderate' : 'Strong';
-
-  // Wind arrow rotation: meteorological convention — deg is where wind comes FROM
-  // Arrow should point in the direction wind is GOING (add 180)
-  const arrowDeg = (deg + 180) % 360;
-
-  // Precip color
-  const precipColor = precip > 50 ? '#ef4444' : precip > 30 ? '#fbbf24' : precip > 10 ? '#60a5fa' : '#4ade80';
-
-  // DFS impact label
-  const OUT_DIRS = ['S','SSW','SW','WSW','W','WNW','SSE','SE','ESE'];
-  const IN_DIRS  = ['N','NNE','NE','ENE','NNW','NW'];
-  let windImpact = '';
-  if (speed >= 8) {
-    if (OUT_DIRS.includes(dir)) windImpact = '<span style="color:#4ade80;">Blowing Out</span>';
-    else if (IN_DIRS.includes(dir)) windImpact = '<span style="color:#60a5fa;">Blowing In</span>';
-    else windImpact = '<span style="color:var(--muted);">Crosswind</span>';
-  }
-
-  // Game time label
-  const timeLabel = activeGame?.game_time_utc
-    ? new Date(activeGame.game_time_utc).toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit', hour12:true })
-    : '';
-
-  wrap.innerHTML = `
-    <div class="wind-panel">
-      <div class="wind-compass">
-        <svg viewBox="0 0 120 120">
-          <!-- Compass ring -->
-          <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="1"/>
-          <circle cx="60" cy="60" r="38" fill="none" stroke="rgba(255,255,255,.05)" stroke-width="1"/>
-          <!-- Cardinal labels -->
-          <text x="60" y="14" text-anchor="middle" fill="rgba(255,255,255,.4)" font-size="9" font-weight="700">N</text>
-          <text x="60" y="114" text-anchor="middle" fill="rgba(255,255,255,.4)" font-size="9" font-weight="700">S</text>
-          <text x="10" y="63" text-anchor="middle" fill="rgba(255,255,255,.4)" font-size="9" font-weight="700">W</text>
-          <text x="110" y="63" text-anchor="middle" fill="rgba(255,255,255,.4)" font-size="9" font-weight="700">E</text>
-          <!-- Wind arrow -->
-          ${speed >= 2 ? `
-          <g transform="rotate(${arrowDeg}, 60, 60)">
-            <line x1="60" y1="85" x2="60" y2="22" stroke="${speed >= 18 ? '#f87171' : speed >= 12 ? '#fbbf24' : '#60a5fa'}" stroke-width="2.5" stroke-linecap="round"/>
-            <polygon points="60,18 53,30 67,30" fill="${speed >= 18 ? '#f87171' : speed >= 12 ? '#fbbf24' : '#60a5fa'}"/>
-          </g>` : `
-          <circle cx="60" cy="60" r="4" fill="rgba(255,255,255,.2)"/>
-          `}
-          <!-- Speed in center -->
-          <text x="60" y="64" text-anchor="middle" fill="var(--text)" font-size="14" font-weight="800" font-family="'Barlow Condensed',sans-serif">${speed >= 2 ? Math.round(speed) : ''}</text>
-          ${speed >= 2 ? `<text x="60" y="74" text-anchor="middle" fill="var(--muted)" font-size="8">mph</text>` : `<text x="60" y="64" text-anchor="middle" fill="var(--muted)" font-size="10">Calm</text>`}
-        </svg>
-      </div>
-      <div class="wind-info">
-        <div style="font-size:10px;color:var(--muted);margin-bottom:2px;">At First Pitch${timeLabel ? ' — ' + timeLabel : ''}</div>
-        <div class="wind-info-row">
-          <div><div class="wind-info-label">Wind</div><div class="wind-info-val ${spdClass}">${Math.round(speed)} mph ${dir}</div></div>
-          <div style="text-align:right;"><div class="wind-info-label">Impact</div><div style="font-size:13px;font-weight:700;">${windImpact || '<span style="color:var(--muted);">Negligible</span>'}</div></div>
-        </div>
-        <div class="wind-info-row">
-          <div><div class="wind-info-label">Precip Chance</div><div class="wind-info-val" style="color:${precipColor};">${precip.toFixed(0)}%</div></div>
-          <div style="text-align:right;"><div class="wind-info-label">Conditions</div><div style="font-size:12px;color:var(--text2);">${cond || '—'}</div></div>
-        </div>
-        <div class="precip-bar"><div class="precip-fill" style="width:${Math.min(precip,100)}%;background:${precipColor};"></div></div>
-      </div>
-    </div>`;
-}
-
-// Legacy alias — called from selectGameByPk
-function loadRadar(venueId, homeTeamId, gameTimeUtc) {
-  // Wind panel renders after weather loads (renderWindPanel called from loadWeather)
-  // No-op here — kept for call-site compatibility
+  const src = `https://embed.windy.com/embed2.html?lat=${lat}&lon=${lon}&detailLat=${lat}&detailLon=${lon}&zoom=10&level=surface&overlay=rain&product=ecmwf&menu=&message=&marker=true&calendar=${calendarTs}&pressure=&type=map&location=coordinates&detail=&metricWind=mph&metricTemp=%C2%B0F&radarRange=-1`;
+  wrap.innerHTML = `<iframe src="${src}" loading="lazy" allowfullscreen title="Radar"></iframe>`;
 }
 
 async function loadWeather(gamePk, venueName, away, home, time) {
@@ -5823,7 +5743,6 @@ async function loadWeather(gamePk, venueName, away, home, time) {
     const _wdps = document.getElementById('wxDewPtSub'); if (_wdps) _wdps.textContent = '—';
     const _wnote = document.getElementById('wxNote'); if (_wnote) _wnote.style.display = 'none';
     _activeWeather = null;
-    renderWindPanel();
     return;
   }
 
@@ -5918,7 +5837,6 @@ async function loadWeather(gamePk, venueName, away, home, time) {
 
   renderPitcherSignals();
   renderHES();
-  renderWindPanel();
 }
 
 // ── PARK FACTORS
