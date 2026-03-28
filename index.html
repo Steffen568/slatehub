@@ -1474,7 +1474,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 <nav class="sh-topnav">
   <div class="sh-topnav-logo">Slate<em>Hub</em></div>
   <a class="sh-tab sh-green active" href="index.html">SlateHub</a>
-  <a class="sh-tab sh-blue" href="hand-builders-hub.html">Hand Builders Hub</a>
+  <a class="sh-tab sh-blue" href="hand-builders-hub.html">Lineup Builder Hub</a>
   <a class="sh-tab sh-orange" href="top-stacks.html">Top Stacks</a>
   <a class="sh-tab sh-purple" href="top-pitchers.html">Top Pitchers</a>
 </nav>
@@ -1848,7 +1848,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
       <div class="ph-label">Batting Order &mdash; NYY vs BOS</div>
       <div style="display:flex;align-items:center;gap:8px;position:relative;">
         <span id="lineupCoverageBadge" style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;display:none;"></span>
-        <a href="hand-builders-hub.html" style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:2px 10px;border-radius:4px;border:1px solid rgba(251,191,36,.35);color:#fbbf24;text-decoration:none;transition:all .12s;" title="Hand Builders Hub">✎ Build</a>
+        <a href="hand-builders-hub.html" style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:2px 10px;border-radius:4px;border:1px solid rgba(251,191,36,.35);color:#fbbf24;text-decoration:none;transition:all .12s;" title="Lineup Builder Hub">✎ Build</a>
         <button class="gl-btn" onclick="openGlossaryTab('hes')"   title="Hitter Environment Score glossary" style="padding:2px 8px;font-size:11px;border-color:rgba(74,222,128,.35);color:#86efac;">HES</button>
         <button class="gl-btn" onclick="openGlossaryTab('pms')"   title="Pitcher Matchup Score glossary"    style="padding:2px 8px;font-size:11px;border-color:rgba(251,146,60,.35);color:#fdba74;">PMS</button>
         <button class="gl-btn" onclick="openGlossaryTab('stack')" title="Stack Grade glossary"              style="padding:2px 8px;font-size:11px;border-color:rgba(251,191,36,.35);color:#fde68a;">Stack</button>
@@ -3860,7 +3860,7 @@ function mlbPosToDK(pos) {
   if (!pos) return '--';
   const p = pos.toUpperCase().trim();
   if (['LF','CF','RF','OF'].includes(p)) return 'OF';
-  if (p === 'DH') return '--'; // DH is a lineup role, not a DK eligibility — drop it
+  if (p === 'DH') return 'DH';
   if (['SP','P','ST'].includes(p)) return 'SP';
   if (p === 'RP') return 'RP';
   if (['C','1B','2B','3B','SS'].includes(p)) return p;
@@ -8154,7 +8154,7 @@ async function loadBatterHands(playerIds, lineupPlayers) {
     if (!rowEl) return;
     const handEl = rowEl.querySelector('.br-hand');
     if (!handEl) return;
-    const hand = batsMap[player.player_id] || '--';
+    const hand = batsMap[player.player_id] || batsMap[String(player.player_id)] || '--';
     handEl.textContent = hand;
     handEl.className = 'br-hand' + (hand === 'R' ? ' R' : hand === 'S' ? ' S' : '');
   });
