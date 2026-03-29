@@ -7480,19 +7480,29 @@ async function buildPoolFromCSV(csvPool, date) {
     .select('player_id,full_name,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,game_pk,team')
     .eq('game_date', projDate).limit(5000);
   // Also fetch dk_salaries to fill gaps when CSV pool section is incomplete
-  const salQuery = sb.from('dk_salaries')
-    .select('player_id,name,salary,position,team,dk_slate,dg_id')
-    .eq('contest_type', 'classic').limit(5000);
-  const [projRes, luRes, salRes] = await Promise.all([
+  // Must paginate — Supabase silently truncates at 1000 rows
+  async function fetchAllSalaries() {
+    let all = [], offset = 0;
+    while (true) {
+      const { data } = await sb.from('dk_salaries')
+        .select('player_id,name,salary,position,team,dk_slate,dg_id')
+        .eq('contest_type', 'classic').range(offset, offset + 999);
+      if (!data || !data.length) break;
+      all = all.concat(data);
+      if (data.length < 1000) break;
+      offset += 1000;
+    }
+    return all;
+  }
+  const [projRes, luRes, dbSalaries] = await Promise.all([
     projQuery,
     gamePks.length
       ? batchIn('lineups', 'player_id,batting_order,team_id,player_name,status', 'game_pk', gamePks)
       : Promise.resolve([]),
-    salQuery,
+    fetchAllSalaries(),
   ]);
   projections = projRes.data || [];
   lineupRows = Array.isArray(luRes) ? luRes : [];
-  const dbSalaries = salRes.data || [];
   console.log(`[buildPoolFromCSV] date=${projDate}, projections=${projections.length}, lineups=${lineupRows.length}, dbSalaries=${dbSalaries.length}`);
 
   // Build lookup maps — name-based for matching CSV players
