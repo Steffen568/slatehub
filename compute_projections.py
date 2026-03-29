@@ -435,7 +435,7 @@ def compute_pitcher_true_talent(stats_by_season: dict, current_season: int) -> d
         (current_season - 2, 3),
     ]
 
-    def ip_weighted(col, league_avg, regression_ip=150):
+    def ip_weighted(col, league_avg, regression_ip=80):
         num = regression_ip * league_avg
         den = float(regression_ip)
         for yr, wt in seasons_weights:
@@ -463,10 +463,10 @@ def compute_pitcher_true_talent(stats_by_season: dict, current_season: int) -> d
         era_anchor = xfip_val  # fall back to xFIP alone if SIERA missing
 
     # ── K% anchor: Marcel + SwStr%-derived xK% ────────────────────────────────
-    # Use regression_ip=200 (vs 150 for ERA) — K% stabilizes slower than ERA,
-    # so we need more regression mass to pull small-sample outliers (30%+ K rates)
-    # back toward the 22.5% league mean.
-    marcel_k = clip(ip_weighted('k_pct', LEAGUE_AVG_K_PCT, regression_ip=200), 0.10, 0.40)
+    # Use regression_ip=120 (vs 80 for ERA) — K% stabilizes slower than ERA,
+    # but SwStr% blend already provides stability, so less regression needed
+    # than the original 200 IP mass which over-compressed elite K rates.
+    marcel_k = clip(ip_weighted('k_pct', LEAGUE_AVG_K_PCT, regression_ip=120), 0.10, 0.40)
 
     # SwStr% from most recent season with sufficient data (stabilizes fastest)
     swstr_xk = None
@@ -501,9 +501,9 @@ def compute_pitcher_true_talent(stats_by_season: dict, current_season: int) -> d
         gs = safe(row.get('gs'), 0)
         if gs and gs >= 5:
             raw_ip_per_gs = clip(ip / gs, 3.0, 6.5)   # cap at 6.5 (modern SP ceiling)
-            # Regress 15% toward 5.1 league avg — smooths out outlier seasons
-            # and accounts for modern bullpen usage pulling starters out earlier
-            ip_per_gs = raw_ip_per_gs * 0.85 + 5.1 * 0.15
+            # Regress 8% toward 5.1 league avg — light smoothing while preserving
+            # the real workload gap between aces and back-end starters
+            ip_per_gs = raw_ip_per_gs * 0.92 + 5.1 * 0.08
             break
 
     return {
@@ -529,11 +529,24 @@ def project_pitcher_dk_pts(talent: dict, opp_quality: float,
     PA_PER_IP    = 4.3   # avg batters faced per inning pitched
     BABIP_AGAINST = 0.297  # league avg BABIP against
 
-    base_ip      = talent['ip_per_gs']
-    proj_pa      = base_ip * PA_PER_IP
+    # ── Opposing lineup quality affects ALL stat categories ──────────────
+    # opp_quality is wRC+-based: >1.0 = strong lineup, <1.0 = weak lineup
+    #
+    # IP: strong lineups work counts, drive up pitch counts → shorter outings
+    #     30% passthrough — subtle effect
+    ip_opp_factor = 1.0 + (1.0 - opp_quality) * 0.30
+    base_ip       = talent['ip_per_gs'] * clip(ip_opp_factor, 0.90, 1.10)
+    proj_pa       = base_ip * PA_PER_IP
 
-    proj_ks      = proj_pa * talent['k_pct']
-    proj_bb      = proj_pa * talent['bb_pct']
+    # Ks: weak lineups strike out more, strong lineups make more contact
+    #     35% passthrough — meaningful but pitcher skill still dominates
+    k_opp_factor = 1.0 + (1.0 - opp_quality) * 0.35
+    proj_ks      = proj_pa * talent['k_pct'] * clip(k_opp_factor, 0.85, 1.18)
+
+    # BBs: strong lineups are more patient / disciplined
+    #     20% passthrough — BB% is mostly pitcher-driven
+    bb_opp_factor = 1.0 + (opp_quality - 1.0) * 0.20
+    proj_bb       = proj_pa * talent['bb_pct'] * clip(bb_opp_factor, 0.88, 1.15)
 
     # ER: SIERA+xFIP blend (era_anchor) per 9 IP, scaled by opponent and environment
     proj_er = talent['era_anchor'] * base_ip / 9.0 * opp_quality * park_mult * weather_mult
@@ -553,13 +566,17 @@ def project_pitcher_dk_pts(talent: dict, opp_quality: float,
         proj_bb  * 0.60
     )
 
-    SP_CALIBRATION = 0.90  # model runs ~10% hot vs analytical benchmarks
+    # Skill-scaled calibration: aces (low ERA) get lighter haircut (~5%),
+    # back-end starters (high ERA) get heavier haircut (~13%).
+    # At league-avg ERA (3.90): calibration ≈ 0.90 (same as before on average).
+    era_ratio = clip(talent['era_anchor'] / LEAGUE_AVG_XFIP, 0.65, 1.55)
+    SP_CALIBRATION = clip(0.87 + 0.03 * era_ratio, 0.87, 0.95)
     dk_pts = dk_pts * SP_CALIBRATION
 
     return {
         'proj_dk_pts'   : round2(dk_pts),
-        'proj_floor'    : round2(dk_pts * 0.55),
-        'proj_ceiling'  : round2(dk_pts * 1.50),
+        'proj_floor'    : round2(dk_pts * 0.45),
+        'proj_ceiling'  : round2(dk_pts * 1.60),
         'proj_ip'       : round2(base_ip),
         'proj_ks'       : round2(proj_ks),
         'proj_er'       : round2(proj_er),

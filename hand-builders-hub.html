@@ -6583,6 +6583,13 @@ function setStackExpCap(key, val) {
   saveSettings();
 }
 
+let _stackSizeFilter = 0; // 0 = All, 2 = 2-man, 3 = 3-man, etc.
+
+function setStackSizeFilter(size) {
+  _stackSizeFilter = size;
+  renderStackExposure();
+}
+
 function renderStackExposure() {
   const el    = document.getElementById('exp-stack-list');
   const saved = getActiveLineups();
@@ -6612,18 +6619,33 @@ function renderStackExposure() {
     });
   });
 
-  const rows = Object.values(stackCounts).sort((a, b) => {
+  const allRows = Object.values(stackCounts).sort((a, b) => {
     const aPct = a.count / total;
     const bPct = b.count / total;
     return bPct - aPct || a.team.localeCompare(b.team) || b.size - a.size;
   });
 
-  if (!rows.length) {
+  if (!allRows.length) {
     el.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:12px 16px;">No multi-player stacks found in saved lineups.</div>';
     return;
   }
 
-  el.innerHTML = `
+  // Build size tabs from stack sizes that exist (e.g. 2, 3, 4, 5)
+  const sizes = [...new Set(allRows.map(r => r.size))].sort((a, b) => a - b);
+  if (_stackSizeFilter !== 0 && !sizes.includes(_stackSizeFilter)) _stackSizeFilter = 0;
+
+  const rows = _stackSizeFilter === 0 ? allRows : allRows.filter(r => r.size === _stackSizeFilter);
+
+  const tabsHtml = `<div style="display:flex;gap:3px;padding:6px 8px;border-bottom:1px solid var(--border);">
+    <button class="exp-tab${_stackSizeFilter === 0 ? ' active' : ''}" onclick="setStackSizeFilter(0)" style="font-size:9px;padding:2px 7px;">All</button>
+    ${sizes.map(s => {
+      const isActive = _stackSizeFilter === s;
+      return `<button class="exp-tab${isActive ? ' active' : ''}" onclick="setStackSizeFilter(${s})"
+        style="font-size:9px;padding:2px 7px;">${s}-man</button>`;
+    }).join('')}
+  </div>`;
+
+  el.innerHTML = tabsHtml + `
     <table class="exp-table">
       <thead><tr>
         <th style="width:42px;"></th>
