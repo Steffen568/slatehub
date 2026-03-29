@@ -5607,14 +5607,20 @@ function _slimPlayer(p) {
   return s;
 }
 
+function _slimLineupObj(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  return Object.fromEntries(
+    Object.entries(obj).map(([k,v]) => [k, _slimPlayer(v)])
+  );
+}
+
 function _slimBuilds(bs) {
   return bs.map(b => ({
     ...b,
     lineups: (b.lineups || []).map(lu => ({
       ...lu,
-      slots: lu.slots ? Object.fromEntries(
-        Object.entries(lu.slots).map(([k,v]) => [k, _slimPlayer(v)])
-      ) : lu.slots,
+      lineup: lu.lineup ? _slimLineupObj(lu.lineup) : lu.lineup,
+      slots: lu.slots ? _slimLineupObj(lu.slots) : lu.slots,
     })),
   }));
 }
@@ -7757,6 +7763,26 @@ function importLateSwapCSV(file) {
     activateLateSwapUI();
     renderBuildTabs();
     renderSavedCards();
+
+    // Debug: identify players with missing salary or team
+    const missingData = [];
+    importedLineups.forEach(lu => {
+      Object.entries(lu.lineup || {}).forEach(([slot, p]) => {
+        if (p && (!p.salary || !p.team)) {
+          missingData.push({ name: p.name, slot, salary: p.salary, team: p.team });
+        }
+      });
+    });
+    console.log(`[Import] ${entries.length} entries, ${matched} matched, ${unmatched} stubs`);
+    if (missingData.length) {
+      const uniqNames = [...new Set(missingData.map(m => m.name))];
+      console.log(`[Import] ${uniqNames.length} unique players missing salary or team:`);
+      uniqNames.slice(0, 20).forEach(n => {
+        const m = missingData.find(d => d.name === n);
+        const poolHit = _csvPoolData?.[normName(n)] || _csvPoolData?.[n.toLowerCase()];
+        console.log(`  "${n}" → sal=${m.salary}, team="${m.team}", poolHit=${!!poolHit}, normKey="${normName(n)}"`);
+      });
+    }
 
     if (unmatched > 0) {
       showToast(`Imported ${entries.length} entries (${unmatched} players unmatched — check pool data)`);
