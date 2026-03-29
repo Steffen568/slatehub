@@ -8807,6 +8807,12 @@ function setContestMode(mode) {
   if (mode === 'classic')   btnC.classList.add('active');
   if (mode === 'showdown')  btnS.classList.add('active-sd');
   if (mode === 'lateswap')  btnL.classList.add('active-ls');
+  // Showdown needs PvH off — you must roster pitchers vs your hitters in single-game
+  if (mode === 'showdown' && pvhOff) {
+    pvhOff = false;
+    const btn = document.getElementById('pvh-btn');
+    if (btn) { btn.textContent = 'PvH On'; btn.classList.remove('active'); }
+  }
   // Show/hide settings rows — late swap uses classic layout
   const isClassicLike = mode === 'classic' || mode === 'lateswap';
   document.querySelectorAll('.classic-only').forEach(el => el.style.display = isClassicLike ? '' : 'none');
