@@ -7573,7 +7573,15 @@ async function buildPoolFromCSV(csvPool, date) {
   // Store projection lookup globally for enriching locked entry players not in CSV pool
   _csvProjByName = projByName;
 
+  // Debug: show team mapping diagnostics
+  const noTeam = [...allHitters, ...allPitchers].filter(p => !p.team_id);
+  const noSal  = [...allHitters, ...allPitchers].filter(p => !p.salary);
+  const noProj = [...allHitters, ...allPitchers].filter(p => !p.proj_dk_pts);
+  const noGpk  = [...allHitters, ...allPitchers].filter(p => !p.game_pk);
   console.log(`[buildPoolFromCSV] ${allHitters.length} hitters, ${allPitchers.length} pitchers from CSV pool`);
+  console.log(`  Games loaded: ${_games.length} | Teams mapped: ${Object.keys(abbrToTeamId).join(',')}`);
+  console.log(`  Missing: team_id=${noTeam.length}, salary=${noSal.length}, proj=${noProj.length}, game_pk=${noGpk.length}`);
+  if (noTeam.length) console.log(`  No team_id samples:`, noTeam.slice(0,5).map(p => `${p.name} (csv_team=${p.team})`));
   buildGameStrip();
   renderPool();
 }
@@ -7644,6 +7652,20 @@ function importLateSwapCSV(file) {
     }
 
     if (!entries.length) { showToast('No entries found in CSV'); return; }
+
+    // Debug: dump CSV pool parsing to verify column alignment
+    if (_csvPoolData) {
+      const poolKeys = Object.keys(_csvPoolData);
+      const uniq = [...new Set(poolKeys.map(k => _csvPoolData[k].name))];
+      const withSal = uniq.filter(n => _csvPoolData[normName(n)]?.salary > 0).length;
+      const withTeam = uniq.filter(n => _csvPoolData[normName(n)]?.team).length;
+      console.log(`[CSV Pool] ${uniq.length} unique players | ${withSal} with salary | ${withTeam} with team`);
+      // Show first 3 for column alignment check
+      uniq.slice(0,3).forEach(n => {
+        const p = _csvPoolData[normName(n)];
+        console.log(`  Sample: name="${p.name}" pos="${p.position}" sal=${p.salary} team="${p.team}" dkId=${p.draftableId}`);
+      });
+    }
 
     // Also index draftable IDs from entry player cells (backup)
     entries.forEach(entry => {
