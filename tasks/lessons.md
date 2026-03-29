@@ -239,3 +239,115 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### Auto-fixed DK ID mismatches: Ivan Herrera
 **What happened:** Pipeline auto-fixed 1 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Carlos Santana, Cole Young, Gabriel Arias, Jacob Wilson, Jesus Sanchez, Jose Caballero, Jose Ramirez, Julio Rodriguez, Lane Thomas, Matt Olson, Max Muncy, Miguel Rojas, Vladimir Guerrero Jr., Will Smith
+**What happened:** Pipeline auto-fixed 14 salary ID mismatch(es) in dk_salaries and added 14 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Lane Thomas
+**What happened:** Pipeline auto-fixed 1 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### DK ID mismatch (auto-fix failed): Max Muncy
+**What happened:** Auto-fix could not resolve: lineup_id=691777 dk_id=571970
+**Rule:** Manual investigation needed — check players table or DK API for this player.
+
+### Auto-fixed DK ID mismatches: Cole Young, Gabriel Arias, Jacob Wilson, Jose Caballero, Jose Ramirez, Julio Rodriguez, Lane Thomas, Luis Campusano
+**What happened:** Pipeline auto-fixed 8 salary ID mismatch(es) in dk_salaries and added 3 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+---
+
+## Session 28 Lessons (2026-03-28)
+
+### Stale DG data from previous days pollutes current slate pools
+**What happened:** Yesterday's DG 144171 (afternoon slate with LAA/HOU/DET/SD) persisted in dk_salaries because it wasn't in the current API response and never got deleted. Users saw non-slate players in the pool.
+**Rule:** `load_dk_salaries.py` must clean up stale DGs — any dg_id in the DB but NOT in the current API response should be deleted. Added stale DG cleanup step before the main upload.
+
+### PvH grouped LP constraints destroy stacks
+**What happened:** PvH used one constraint per SP: `SP + sum(all_opposing_hitters) <= 1`. When the SP wasn't selected (=0), opposing hitters were still limited to 1 total — killing all stacks.
+**Rule:** Use PAIRWISE constraints: one per (SP, hitter) pair. `SP + hitter <= 1` means when SP=0, the hitter is unconstrained. Only when SP=1 is the hitter blocked.
+
+### DK CSV marks locked players with (LOCKED) suffix
+**What happened:** DK entries CSV has `Kevin Gausman (42413638) (LOCKED)` for locked players. The parsing regex expected cells to end with `(digits)`, so all locked players failed to parse and their entry slots went blank.
+**Rule:** Strip `(LOCKED)` suffix before parsing the player cell regex. Track the locked flag per cell.
+
+### Late-swap mode race condition — loadPlayerPool overwrites CSV pool
+**What happened:** `enterLateSwapMode()` → `setContestMode` → `loadSlates` → `loadPlayerPool` ran concurrently with CSV import. `loadPlayerPool` loaded the main slate (with NYY/SF), overwriting the CSV-built pool.
+**Rule:** Skip `loadPlayerPool` when `lateSwapMode=true` — both in `loadSlates` initial load AND the dropdown change listener. `buildPoolFromCSV` handles the pool in late-swap mode.
+
+### Classic mode pitchers leak from all-date projections
+**What happened:** Classic mode built pitchers from `player_projections` (all games on the date), not from dk_salaries. Pitchers from non-slate games appeared with no salary.
+**Rule:** In Classic mode, skip pitchers that don't have a salary row on the current slate: `if (!salRow) return;`
+
+### Same-name players resolve to wrong MLBAM ID
+**What happened:** Two Max Muncys (LAD pid=571970, ATH pid=691777) both resolved to 571970. Name lookup was ambiguous (excluded), and DK's playerId fell through to the wrong MLBAM.
+**Rule:** After ID resolution, check if the resolved player_id's lineup team matches the DK team abbreviation. If multiple MLBAM IDs share the name, pick the one matching the DK team. Added `name_to_all_mlbam` map + team-based disambiguation in `load_dk_salaries.py`.
+
+### VENUE_COORDS must use MLB API venue_ids
+**What happened:** Radar showed wrong locations because VENUE_COORDS used sequential IDs (1-30) that didn't match MLB API venue_ids (1, 2, 680, 2392, etc.).
+**Rule:** All venue_id lookups (park_factors, VENUE_COORDS) must use MLB API venue_ids from the games table. These were remapped in Session 28.
+
+### buildPoolFromCSV projection query must use game_date directly
+**What happened:** Projections were fetched via a games table lookup by game_pk, which returned empty when date was 'all'. All players got proj_dk_pts: 0.
+**Rule:** Query `player_projections` directly by `.eq('game_date', date)` with `.limit(5000)`. Fall back to today's date if date picker is 'all'.
+
+### Auto-fixed DK ID mismatches: Brandon Lowe, David Hamilton, Gabriel Arias, Ivan Herrera, Jacob Wilson, Jose Ramirez, Josh Smith, Julio Rodriguez, Miguel Rojas, Miguel Vargas, Mike Yastrzemski, Tyler O'Neill
+**What happened:** Pipeline auto-fixed 12 salary ID mismatch(es) in dk_salaries and added 3 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Gabriel Arias, Jose Ramirez, Vladimir Guerrero Jr.
+**What happened:** Pipeline auto-fixed 3 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+---
+
+## Session 29 — Late-Swap, Ownership, Weather (2026-03-28)
+
+### player_projections query selecting nonexistent 'position' column
+**What happened:** `buildPoolFromCSV` queried `player_projections` with `position` in the select list, but that column doesn't exist. Supabase returned 400, so projections=0 for ALL players. Salaries, teams, and game mappings all cascaded from this failure.
+**Rule:** Before adding a column to a `.select()`, verify it exists in the table. Supabase returns 400 (not empty results) for nonexistent columns.
+
+### CSV pool section may be incomplete in SlateHub-exported CSVs
+**What happened:** The DK entries CSV has pool data (salary, team, position) in columns 15-23 alongside entry rows. But when the user exports lineups from SlateHub and pastes them into the DK template, the first ~150 entry rows have filled lineups but EMPTY pool columns. Pool data only appears after the entries end (~260 of ~590 players). Star players like Freeman, Betts, Trout had no salary.
+**Rule:** Always backfill `_csvPoolData` from `dk_salaries` in Supabase before building the pool. This covers any players missing from the CSV pool section.
+
+### Supabase silently truncates at 1000 rows even with .limit(5000)
+**What happened:** `dk_salaries` had 2009 classic rows. The query used `.limit(5000)` but Supabase returned only 1000, cutting off DET players entirely. No error thrown.
+**Rule:** For any table that might exceed 1000 rows, paginate with `.range(offset, offset+999)` in a loop. This applies to `dk_salaries`, `player_projections`, `batter_stats`, `batter_splits`, `rosters`. The `.limit()` parameter does NOT override Supabase's hard 1000-row cap.
+
+### Slate loading query hit 1000-row cap — Showdown slates disappeared (Session 30)
+**What happened:** The `loadDates()` function in hand-builders-hub.html used `.limit(3000)` to fetch dk_salaries for slate discovery. With 2365 rows, only 1000 came back and Showdown slates (CLE@SEA) were excluded by random row order.
+**Rule:** The slate-loading query is just another instance of the 1000-row cap. Every `.select()` on dk_salaries must paginate with `.range()`. When fixing a pattern, grep for ALL occurrences of the anti-pattern, not just the one that broke.
+
+### mlbPosToDK returned '--' for DH position
+**What happened:** Players listed as DH in lineups showed '--' for position badge. `mlbPosToDK` deliberately returned '--' for DH.
+**Rule:** DH is a real lineup position — return 'DH' from `mlbPosToDK`, not '--'.
+
+### loadBatterHands missing String() fallback on player_id lookup
+**What happened:** Batting hand showed '--' for players where `player_id` type (number vs string) didn't match between lineups and rosters tables.
+**Rule:** Always use both raw key and `String()` fallback when looking up player_id across tables: `map[id] || map[String(id)]`.
+
+### localStorage QuotaExceededError on large optimizer runs
+**What happened:** Saving 150 optimized lineups with full player objects exceeded localStorage's ~5MB limit.
+**Rule:** Use IndexedDB for large data (50MB+ quota). Slim player objects before persisting — strip stats/grades/arsenal fields, keep only essential 17 fields. Migrated in Session 29.
+
+### _slimBuilds processed lu.slots but lineups use lu.lineup
+**What happened:** The `_slimBuilds` function was processing `lu.slots` to strip player objects, but all saved lineups store data in `lu.lineup`. The slim optimization was a complete no-op.
+**Rule:** When adding persistence optimizations, verify the property name matches actual data structure. Imported lineups use `lineup`, manually saved use `lineup`. Both need processing.
+
+### Wind effect banner needs ballpark CF bearing data
+**What happened:** Added a wind In/Out/Cross indicator to the weather panel using `VENUE_CF_BEARING` map (compass bearing from home plate to center field for each MLB park). Compares wind direction against CF bearing: ±45° = out, ±135-180° = in, else = cross.
+**Rule:** Reference data — `VENUE_CF_BEARING` in `index.html` has bearings for all 30 parks. `null` = dome/closed roof.
+
+### DK public API does not expose ownership data
+**What happened:** Tried multiple DK API endpoints (draftables, scores, contests, draftgroups) for actual ownership %. None return ownership without authentication.
+**Rule:** Actual ownership must come from DK contest standings CSV export. Use `load_actual_ownership.py --csv <file>` to import. The standings CSV has `%Drafted` column with ownership data.
+
+### Auto-fixed DK ID mismatches: Cole Young, Gabriel Arias, Gary Sanchez, Ivan Herrera, Jacob Wilson, Jose Ramirez, Josh Smith, Julio Rodriguez, Miguel Vargas, Mike Yastrzemski
+**What happened:** Pipeline auto-fixed 10 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Tyler O'Neill, Vladimir Guerrero Jr.
+**What happened:** Pipeline auto-fixed 2 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.

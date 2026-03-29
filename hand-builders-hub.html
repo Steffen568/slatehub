@@ -4750,8 +4750,16 @@ async function loadDates() {
   const { data: gameData } = await sb.from('games')
     .select('game_date').gte('game_date','2025-01-01').order('game_date',{ascending:true});
 
-  const { data: slateData } = await sb.from('dk_salaries')
-    .select('dk_slate,contest_type').limit(3000);
+  // Paginate to get ALL rows (Supabase caps at 1000 per request)
+  let slateData = [], from = 0;
+  while (true) {
+    const { data: page } = await sb.from('dk_salaries')
+      .select('dk_slate,contest_type').range(from, from + 999);
+    if (!page || !page.length) break;
+    slateData = slateData.concat(page);
+    if (page.length < 1000) break;
+    from += 1000;
+  }
 
   // _allSlates: array of { slate, contestType } — deduplicated
   const seenSlates = new Map();
