@@ -4689,6 +4689,9 @@ function restoreSettings() {
 
 // ── INIT ────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
+  // Initialize IndexedDB storage, migrate from localStorage if needed
+  await _migrateToIDB();
+  _buildsCache = await getBuildsAsync();
   restoreSettings();
   buildSlots();
   renderSavedCards();
@@ -5590,18 +5593,108 @@ function setPositionFilter(pos) {
 }
 
 // ── BUILD STORAGE HELPERS ─────────────────────────────────────────────────────
-function getBuilds()          { return JSON.parse(localStorage.getItem('hbh_builds') || '[]'); }
-function saveBuilds(bs)       {
-  try { localStorage.setItem('hbh_builds', JSON.stringify(bs)); }
-  catch(e) {
-    if (e.name === 'QuotaExceededError') {
-      // Trim oldest builds to free space, keep last 5
-      while (bs.length > 5) bs.shift();
-      try { localStorage.setItem('hbh_builds', JSON.stringify(bs)); }
-      catch(e2) { console.warn('localStorage still full after trim — clearing old builds'); localStorage.removeItem('hbh_builds'); }
-    }
+// Uses IndexedDB (50MB+) with localStorage fallback.
+// Player objects are slimmed to essential fields only before persisting.
+
+const _SLIM_KEYS = ['player_id','name','salary','positions','team','team_id','game_pk',
+  'proj_dk_pts','proj_floor','proj_ceiling','proj_ownership','dk_id','batting_order',
+  'in_lineup','lineup_confirmed','_dkDraftableId','_dkCellName'];
+
+function _slimPlayer(p) {
+  if (!p) return p;
+  const s = {};
+  for (const k of _SLIM_KEYS) { if (p[k] !== undefined) s[k] = p[k]; }
+  return s;
+}
+
+function _slimBuilds(bs) {
+  return bs.map(b => ({
+    ...b,
+    lineups: (b.lineups || []).map(lu => ({
+      ...lu,
+      slots: lu.slots ? Object.fromEntries(
+        Object.entries(lu.slots).map(([k,v]) => [k, _slimPlayer(v)])
+      ) : lu.slots,
+    })),
+  }));
+}
+
+// IndexedDB wrapper
+const _IDB_NAME = 'slatehub_builds';
+const _IDB_STORE = 'builds';
+
+function _openIDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(_IDB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(_IDB_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function _idbGet(key) {
+  try {
+    const db = await _openIDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(_IDB_STORE, 'readonly');
+      const req = tx.objectStore(_IDB_STORE).get(key);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    });
+  } catch { return null; }
+}
+
+async function _idbSet(key, val) {
+  try {
+    const db = await _openIDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(_IDB_STORE, 'readwrite');
+      tx.objectStore(_IDB_STORE).put(val, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch(e) { console.warn('IDB write failed:', e); }
+}
+
+// Migrate localStorage → IndexedDB on first load
+let _buildsCache = null;
+async function _migrateToIDB() {
+  const lsData = localStorage.getItem('hbh_builds');
+  if (lsData) {
+    try {
+      const parsed = JSON.parse(lsData);
+      await _idbSet('hbh_builds', _slimBuilds(parsed));
+      localStorage.removeItem('hbh_builds');
+      console.log('[storage] Migrated builds from localStorage to IndexedDB');
+    } catch(e) { console.warn('[storage] Migration failed:', e); }
   }
 }
+
+async function getBuildsAsync() {
+  if (_buildsCache) return _buildsCache;
+  const idbData = await _idbGet('hbh_builds');
+  if (idbData) { _buildsCache = idbData; return idbData; }
+  // Fallback: try localStorage
+  try { return JSON.parse(localStorage.getItem('hbh_builds') || '[]'); }
+  catch { return []; }
+}
+
+// Synchronous getter uses cache (populated after first async load)
+function getBuilds() { return _buildsCache || []; }
+
+async function saveBuildsAsync(bs) {
+  const slim = _slimBuilds(bs);
+  _buildsCache = slim;
+  await _idbSet('hbh_builds', slim);
+}
+
+// Synchronous wrapper for existing call sites — fires and forgets
+function saveBuilds(bs) {
+  const slim = _slimBuilds(bs);
+  _buildsCache = slim;
+  _idbSet('hbh_builds', slim).catch(e => console.warn('saveBuilds error:', e));
+}
+
 function getActiveBuild()     { const bs = getBuilds(); return bs.find(b => b.id === activeBuildId) || bs[bs.length - 1] || null; }
 function getActiveLineups()   { return getActiveBuild()?.lineups || []; }
 function updateActiveBuild(lineups) {
