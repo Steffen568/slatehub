@@ -8989,9 +8989,10 @@ function renderSDPool() {
     <th style="width:26px;"></th><th style="width:26px;"></th>
     <th>Player</th><th style="width:36px;">Pos</th>
     ${salHeader}
-    <th style="width:48px;">Proj</th>
+    <th style="width:48px;" title="Click a cell to override">Proj</th>
     <th style="width:44px;">Val</th>
     <th style="width:44px;">Exp%</th>
+    <th style="width:44px;" title="Click a cell to set max exposure %">Cap</th>
   </tr>`;
 
   list.innerHTML = `<table class="player-table"><thead>${thead}</thead><tbody>
@@ -9032,9 +9033,10 @@ function renderSDPlayerRow(p, expPct, role) {
     <td><div class="pt-name-cell">${teamTag}${badge}<span class="pt-name">${p.name}</span></div></td>
     <td><span class="pt-muted" style="font-size:10px;">${pos}</span></td>
     <td class="pt-sal" style="${isCpt?'color:#fbbf24;font-weight:600;':''}">$${sal.toLocaleString()}</td>
-    <td class="pt-proj" style="${projOv?'color:#fbbf24;font-weight:700;':''}">${proj != null ? Number(proj).toFixed(1) : '—'}</td>
+    <td class="pt-proj" onclick="event.stopPropagation();editPlayerProj(${p.player_id},this)" title="Click to override projection" style="cursor:pointer;${projOv?'color:#fbbf24;font-weight:700;':''}">${proj != null ? Number(proj).toFixed(1) : '—'}</td>
     <td class="pt-val">${value}</td>
     <td style="color:${expColor};font-weight:700;font-family:'Barlow Condensed',sans-serif;">${expPct != null ? expPct.toFixed(0)+'%' : '—'}</td>
+    <td onclick="event.stopPropagation();editPlayerExp(${p.player_id},this)" title="Click to set max exposure %" style="cursor:pointer;color:${expTargets[p.player_id]!=null?'#a78bfa':'var(--muted)'};font-weight:${expTargets[p.player_id]!=null?'700':'400'};">${expTargets[p.player_id]!=null?expTargets[p.player_id]+'%':'—'}</td>
   </tr>`;
 }
 
