@@ -4503,6 +4503,7 @@ let sortCol         = 'proj';
 let sortDir         = -1;          // -1 = desc, 1 = asc
 let pvhOff          = true;        // true = hide hitters facing lineup's SP
 let projOverrides   = {};          // player_id → manual proj override
+let projBoosts      = {};          // player_id → boost level (-5 to +5), each tick = 3%
 let expTargets      = {};          // player_id → manual max exposure % (0–100)
 let expHitterMax    = 100;         // global hitter exposure cap %
 let expPitcherMax   = 100;         // global pitcher exposure cap %
@@ -4667,6 +4668,7 @@ function saveSettings() {
     expCptMax,
     optoSalaryCap,
     projOverrides,
+    projBoosts,
     expTargets,
     stackExpCaps,
   };
@@ -4692,6 +4694,7 @@ function restoreSettings() {
     if (s.teamStacks)    optoSettings.teamStacks  = s.teamStacks;
     if (s.blockedMainTeams) optoSettings.blockedMainTeams = s.blockedMainTeams;
     if (s.projOverrides) projOverrides = s.projOverrides;
+    if (s.projBoosts)    projBoosts    = s.projBoosts;
     if (s.expTargets)    expTargets    = s.expTargets;
     if (s.stackExpCaps)  stackExpCaps  = s.stackExpCaps;
   } catch(e) {}
@@ -5436,6 +5439,7 @@ async function loadPlayerPool(date, slate) {
   } else {
     renderPool();
   }
+  applyAllBoosts();
   buildTeamOptoTable();
   populateTeamExclDropdown();
   renderTeamExclChips();
@@ -5882,6 +5886,7 @@ function savePlayerProj(pid, input) {
   const val = parseFloat(input.value);
   if (!isNaN(val) && val >= 0) projOverrides[pid] = val;
   else delete projOverrides[pid];
+  delete projBoosts[pid]; // clear boost when manually editing projection
   saveSettings(); renderPool();
 }
 function editPlayerExp(pid, td) {
@@ -5912,6 +5917,42 @@ function toggleExclude(e, pid) {
   if (excludedPlayers.has(pid)) { excludedPlayers.delete(pid); }
   else { excludedPlayers.add(pid); lockedPlayers.delete(pid); }
   renderPool();
+}
+
+function boostCell(pid) {
+  const level = projBoosts[pid] || 0;
+  const pct = level * 3;
+  const label = level > 0 ? `+${pct}%` : level < 0 ? `${pct}%` : '';
+  const clr = level > 0 ? '#4ade80' : level < 0 ? '#f87171' : 'var(--muted)';
+  return `<div style="display:inline-flex;align-items:center;gap:1px;white-space:nowrap;">
+    <button class="pt-icon-btn" onclick="boostPlayer(event,${pid},-1)" title="Boost down" style="font-size:9px;padding:0 2px;line-height:1;${level < 0 ? 'color:#f87171;' : ''}">▼</button>
+    <span style="font-size:8px;font-weight:700;color:${clr};min-width:22px;text-align:center;">${label}</span>
+    <button class="pt-icon-btn" onclick="boostPlayer(event,${pid},1)" title="Boost up" style="font-size:9px;padding:0 2px;line-height:1;${level > 0 ? 'color:#4ade80;' : ''}">▲</button>
+  </div>`;
+}
+
+function boostPlayer(e, pid, dir) {
+  e.stopPropagation();
+  const cur = projBoosts[pid] || 0;
+  const nxt = Math.max(-5, Math.min(5, cur + dir));
+  if (nxt === 0) delete projBoosts[pid];
+  else projBoosts[pid] = nxt;
+  applyBoost(pid);
+  saveSettings();
+  renderPool();
+}
+
+function applyBoost(pid) {
+  const level = projBoosts[pid] || 0;
+  if (level === 0) { delete projOverrides[pid]; return; }
+  const p = [...allHitters, ...allPitchers].find(x => x.player_id === pid);
+  if (!p) return;
+  const base = p.proj_dk_pts || 0;
+  projOverrides[pid] = +(base * (1 + level * 0.03)).toFixed(1);
+}
+
+function applyAllBoosts() {
+  Object.keys(projBoosts).forEach(pid => applyBoost(+pid));
 }
 function toggleExcludeSD(e, pid, role) {
   e.stopPropagation();
@@ -6015,9 +6056,9 @@ function renderPool() {
 
   // Fixed left columns depend on tab
   const fixedHead = isHit
-    ? `<th style="width:26px;"></th><th style="width:26px;"></th>
+    ? `<th style="width:26px;"></th><th style="width:26px;"></th><th style="width:52px;"></th>
        <th>Player</th><th style="width:40px;">Pos</th>`
-    : `<th style="width:26px;"></th><th style="width:26px;"></th>
+    : `<th style="width:26px;"></th><th style="width:26px;"></th><th style="width:52px;"></th>
        <th style="width:42px;">${sortCol==='grade'?`<span class="sort-active">Grd</span>`:'Grd'}<span class="sort-arrow">${sortCol==='grade'?(sortDir<0?'▼':'▲'):''}</span></th>
        <th>Player</th><th style="width:36px;">Pos</th>`;
 
@@ -6026,7 +6067,7 @@ function renderPool() {
 
   const thead = isHit
     ? `<tr>${fixedHead}${visCols.map(th).join('')}</tr>`
-    : `<tr><th style="width:26px;"></th><th style="width:26px;"></th>
+    : `<tr><th style="width:26px;"></th><th style="width:26px;"></th><th style="width:52px;"></th>
        <th class="sortable${sortCol==='grade'?' sort-active':''}" ${pitGradeHandler} style="width:42px;">Grd<span class="sort-arrow">${sortCol==='grade'?(sortDir<0?'▼':'▲'):''}</span></th>
        <th>Player</th><th style="width:36px;">Pos</th>
        ${visCols.map(th).join('')}</tr>`;
@@ -6100,6 +6141,7 @@ function renderHitterRow(p, inL, expPct, visCols) {
     onclick="addToLineup(${p.player_id})">
     <td><button class="pt-icon-btn${locked?' locked':''}" onclick="toggleLock(event,${p.player_id})" title="Lock player">${locked ? SVG_LOCK_LOCKED : SVG_LOCK_OPEN}</button></td>
     <td><button class="pt-icon-btn${excluded?' excluded':''}" onclick="toggleExclude(event,${p.player_id})" title="Exclude player">${SVG_BAN}</button></td>
+    <td>${boostCell(p.player_id)}</td>
     <td><div class="pt-name-cell">${teamTag}${badge}<span class="pt-name">${p.name}</span></div></td>
     <td><span class="pt-muted" style="font-size:10px;">${pos}</span></td>
     ${visCols.map(c => cells[c.key] || '<td>—</td>').join('')}
@@ -6152,6 +6194,7 @@ function renderPitcherRow(p, inL, expPct, visCols) {
     onclick="addToLineup(${p.player_id})">
     <td><button class="pt-icon-btn${locked?' locked':''}" onclick="toggleLock(event,${p.player_id})" title="Lock player">${locked ? SVG_LOCK_LOCKED : SVG_LOCK_OPEN}</button></td>
     <td><button class="pt-icon-btn${excluded?' excluded':''}" onclick="toggleExclude(event,${p.player_id})" title="Exclude player">${SVG_BAN}</button></td>
+    <td>${boostCell(p.player_id)}</td>
     <td>${gPill}</td>
     <td><div class="pt-name-cell">${teamTag}${badge}${milbBadge}<span class="pt-name">${p.name}</span></div></td>
     <td><span class="pt-muted" style="font-size:10px;">SP</span></td>
