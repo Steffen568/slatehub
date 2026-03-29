@@ -7445,7 +7445,7 @@ function activateLateSwapUI() {
 async function buildPoolFromCSV(csvPool, date) {
   document.getElementById('pool-list').innerHTML = '<div class="pool-empty">Loading…</div>';
 
-  // 1. Load games for this date, filtered to teams in the CSV pool
+  // 1. Load games for this date — include all teams (CSV pool may be incomplete)
   const csvTeams = new Set();
   for (const csv of Object.values(csvPool)) { if (csv.team) csvTeams.add(csv.team); }
 
@@ -7454,11 +7454,8 @@ async function buildPoolFromCSV(csvPool, date) {
         .select('game_pk,game_date,home_team_id,away_team_id,home_team,away_team,home_sp_id,away_sp_id,home_sp_name,away_sp_name,venue_name,venue_id,game_time_utc')
         .eq('game_date', date)
     : { data: [] };
-  // Filter to only games with at least one team in the CSV pool
-  _games = (games || []).filter(g => {
-    const ha = teamAbbr(g.home_team), aa = teamAbbr(g.away_team);
-    return csvTeams.has(ha) || csvTeams.has(aa);
-  });
+  // Include all games for this date (CSV pool may be incomplete, dk_salaries backfills)
+  _games = games || [];
   buildGameLockTimes();
 
   const gamePks = _games.map(g => g.game_pk);
@@ -7482,15 +7479,21 @@ async function buildPoolFromCSV(csvPool, date) {
   const projQuery = sb.from('player_projections')
     .select('player_id,full_name,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,game_pk,team')
     .eq('game_date', projDate).limit(5000);
-  const [projRes, luRes] = await Promise.all([
+  // Also fetch dk_salaries to fill gaps when CSV pool section is incomplete
+  const salQuery = sb.from('dk_salaries')
+    .select('player_id,name,salary,position,team,dk_slate,dg_id')
+    .eq('contest_type', 'classic').limit(5000);
+  const [projRes, luRes, salRes] = await Promise.all([
     projQuery,
     gamePks.length
       ? batchIn('lineups', 'player_id,batting_order,team_id,player_name,status', 'game_pk', gamePks)
       : Promise.resolve([]),
+    salQuery,
   ]);
   projections = projRes.data || [];
   lineupRows = Array.isArray(luRes) ? luRes : [];
-  console.log(`[buildPoolFromCSV] date=${projDate}, projections=${projections.length}, lineups=${lineupRows.length}`);
+  const dbSalaries = salRes.data || [];
+  console.log(`[buildPoolFromCSV] date=${projDate}, projections=${projections.length}, lineups=${lineupRows.length}, dbSalaries=${dbSalaries.length}`);
 
   // Build lookup maps — name-based for matching CSV players
   const projByName = {};
@@ -7506,6 +7509,32 @@ async function buildPoolFromCSV(csvPool, date) {
   lineupRows.forEach(lu => {
     if (lu.player_name) luByName[normName(lu.player_name)] = lu;
   });
+
+  // Build salary lookup from dk_salaries — fills gaps when CSV pool is incomplete
+  // (e.g., SlateHub-exported CSVs that omit pool rows for some players)
+  const salByName = {};
+  dbSalaries.forEach(s => {
+    if (s.name) {
+      const key = normName(s.name);
+      if (!salByName[key] || s.salary > (salByName[key].salary || 0)) salByName[key] = s;
+    }
+  });
+
+  // Backfill _csvPoolData with dk_salaries for any entry players not in the CSV pool
+  // This ensures stub players get salary/team even when the CSV pool section is truncated
+  if (csvPool) {
+    let backfilled = 0;
+    dbSalaries.forEach(s => {
+      if (!s.name) return;
+      const key = normName(s.name);
+      if (!csvPool[key] && !csvPool[(s.name||'').toLowerCase()]) {
+        csvPool[key] = { name: s.name, draftableId: '', position: s.position || '', salary: s.salary || 0, team: s.team || '' };
+        csvPool[(s.name||'').toLowerCase()] = csvPool[key];
+        backfilled++;
+      }
+    });
+    if (backfilled > 0) console.log(`[buildPoolFromCSV] Backfilled ${backfilled} players from dk_salaries into pool`);
+  }
 
   // 3. Build allHitters and allPitchers from CSV pool data
   allHitters = [];
@@ -7773,14 +7802,17 @@ function importLateSwapCSV(file) {
         }
       });
     });
-    console.log(`[Import] ${entries.length} entries, ${matched} matched, ${unmatched} stubs`);
+    console.log(`[Import] ${entries.length} entries, ${matched} matched, ${unmatched} stubs, poolKeys=${Object.keys(_csvPoolData||{}).length}`);
     if (missingData.length) {
       const uniqNames = [...new Set(missingData.map(m => m.name))];
       console.log(`[Import] ${uniqNames.length} unique players missing salary or team:`);
       uniqNames.slice(0, 20).forEach(n => {
         const m = missingData.find(d => d.name === n);
         const poolHit = _csvPoolData?.[normName(n)] || _csvPoolData?.[n.toLowerCase()];
-        console.log(`  "${n}" → sal=${m.salary}, team="${m.team}", poolHit=${!!poolHit}, normKey="${normName(n)}"`);
+        // Fuzzy search: check if a similar key exists in pool
+        const nk = normName(n);
+        const fuzzy = poolHit ? null : Object.keys(_csvPoolData||{}).find(k => k.includes(nk.split(' ').pop()));
+        console.log(`  "${n}" → sal=${m.salary}, team="${m.team}", poolHit=${!!poolHit}, normKey="${nk}"${fuzzy ? `, fuzzyMatch="${fuzzy}"` : ''}`);
       });
     }
 
