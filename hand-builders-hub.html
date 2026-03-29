@@ -5591,7 +5591,17 @@ function setPositionFilter(pos) {
 
 // ── BUILD STORAGE HELPERS ─────────────────────────────────────────────────────
 function getBuilds()          { return JSON.parse(localStorage.getItem('hbh_builds') || '[]'); }
-function saveBuilds(bs)       { localStorage.setItem('hbh_builds', JSON.stringify(bs)); }
+function saveBuilds(bs)       {
+  try { localStorage.setItem('hbh_builds', JSON.stringify(bs)); }
+  catch(e) {
+    if (e.name === 'QuotaExceededError') {
+      // Trim oldest builds to free space, keep last 5
+      while (bs.length > 5) bs.shift();
+      try { localStorage.setItem('hbh_builds', JSON.stringify(bs)); }
+      catch(e2) { console.warn('localStorage still full after trim — clearing old builds'); localStorage.removeItem('hbh_builds'); }
+    }
+  }
+}
 function getActiveBuild()     { const bs = getBuilds(); return bs.find(b => b.id === activeBuildId) || bs[bs.length - 1] || null; }
 function getActiveLineups()   { return getActiveBuild()?.lineups || []; }
 function updateActiveBuild(lineups) {
@@ -7371,7 +7381,7 @@ async function buildPoolFromCSV(csvPool, date) {
   let projections = [], lineupRows = [];
   const projDate = date && date !== 'all' ? date : new Date().toISOString().split('T')[0];
   const projQuery = sb.from('player_projections')
-    .select('player_id,full_name,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,game_pk,team,position')
+    .select('player_id,full_name,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,game_pk,team')
     .eq('game_date', projDate).limit(5000);
   const [projRes, luRes] = await Promise.all([
     projQuery,
