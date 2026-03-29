@@ -4970,15 +4970,32 @@ async function loadPlayerPool(date, slate) {
   // Showdown: pitcherSalRes fetches ALL slate players (no position filter on the query).
   // Add non-pitcher entries directly — don't rely on starterPids/lineupRaw for hitter salaries
   // because the classic lineup-batting-order path misses pitchers and non-batting-order players.
+  // Filter to active roster only (DK includes full 40-man; minors/IL players aren't relevant).
   if (_contestMode === 'showdown') {
+    // Fetch active roster player_ids for the SD game teams
+    const sdTeamIds = [...new Set(_games.flatMap(g => [g.home_team_id, g.away_team_id]).filter(Boolean))];
+    let activeRosterPids = null;
+    if (sdTeamIds.length) {
+      const rosterRows = await batchIn('rosters','player_id,roster_status','team_id',sdTeamIds);
+      activeRosterPids = new Set(rosterRows.filter(r => r.roster_status === 'Active').map(r => r.player_id));
+    }
     (pitcherSalRes.data || [])
       .filter(r => !(r.position||'').split('/').some(p => ['SP','RP','P'].includes(p.trim())))
       .forEach(r => {
         if (r.player_id && !salByPid[r.player_id]) {
+          // Skip non-active roster players (minors, IL, NRI) if roster data available
+          if (activeRosterPids && !activeRosterPids.has(r.player_id)) return;
           salByPid[r.player_id] = r;
           salaries.push(r);
         }
       });
+    // Also filter pitchers already added above to active roster only
+    if (activeRosterPids) {
+      salaries = salaries.filter(r => activeRosterPids.has(r.player_id));
+      Object.keys(salByPid).forEach(pid => {
+        if (!activeRosterPids.has(+pid)) delete salByPid[pid];
+      });
+    }
   }
 
   // Add hitters from today's slate (salary + correct DK position)
