@@ -15,7 +15,7 @@ from agents.logger import RunLogger
 REPO_ROOT = Path(__file__).parent.parent
 
 PROJECTION_SCRIPTS = [
-    ('compute_projections.py', 'DFS Projections'),
+    ('sim_projections.py',     'DFS Projections (Monte Carlo Sim)'),
     ('compute_ownership.py',   'Ownership Projections'),
 ]
 
