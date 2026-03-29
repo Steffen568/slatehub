@@ -4323,6 +4323,13 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     <div class="opto-col classic-only">
       <div class="opto-col-title">Team Stack Settings</div>
       <div id="team-stack-prefs-list" style="margin-bottom:8px;"></div>
+      <!-- Blocked from main stack -->
+      <div id="blocked-main-list" style="margin-bottom:6px;"></div>
+      <div style="display:flex;align-items:center;gap:5px;padding-bottom:8px;border-bottom:1px solid var(--border);margin-bottom:8px;">
+        <span style="font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Block Main:</span>
+        <select class="opto-select" id="block-main-team" style="flex:1;min-width:60px;"><option value="">Team…</option></select>
+        <button class="opto-tog-btn" style="background:rgba(248,113,113,.1);border-color:rgba(248,113,113,.35);color:#f87171;font-size:10px;" onclick="addBlockedMainTeam()">Block</button>
+      </div>
       <!-- Add team stack form -->
       <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-top:8px;border-top:1px solid var(--border);">
         <select class="opto-select" id="new-ts-team" style="flex:1;min-width:60px;"><option value="">Team…</option></select>
@@ -4637,6 +4644,7 @@ const optoSettings = {
     }
   ],
   teamStacks: [],   // [{ team:'ATL', role:'main'|'sub', exposure:40 }]
+  blockedMainTeams: [],  // teams excluded from main stack but still in pool/sub-stacks
   teamOverrides: {},
 };
 
@@ -4653,6 +4661,7 @@ function saveSettings() {
     randPct:      optoSettings.randPct,
     stackRules:   optoSettings.stackRules,
     teamStacks:   optoSettings.teamStacks,
+    blockedMainTeams: optoSettings.blockedMainTeams,
     expHitterMax,
     expPitcherMax,
     expCptMax,
@@ -4681,6 +4690,7 @@ function restoreSettings() {
     if (s.optoSalaryCap != null){ optoSalaryCap = s.optoSalaryCap; const el = document.getElementById('opto-maxsal');    if (el) el.value = s.optoSalaryCap; }
     if (s.stackRules)    optoSettings.stackRules  = s.stackRules;
     if (s.teamStacks)    optoSettings.teamStacks  = s.teamStacks;
+    if (s.blockedMainTeams) optoSettings.blockedMainTeams = s.blockedMainTeams;
     if (s.projOverrides) projOverrides = s.projOverrides;
     if (s.expTargets)    expTargets    = s.expTargets;
     if (s.stackExpCaps)  stackExpCaps  = s.stackExpCaps;
@@ -7185,14 +7195,15 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set(), stackAppearCou
     }
   });
 
-  // Main team candidates — use team stack prefs if set, else all eligible teams (excluding capped)
+  // Main team candidates — use team stack prefs if set, else all eligible teams (excluding capped/blocked)
+  const blockedMain = new Set(optoSettings.blockedMainTeams || []);
   const mainPrefs = optoSettings.teamStacks.filter(ts => ts.role === 'main').map(ts => ts.team);
   const mainCandidates = (mainPrefs.length > 0
     ? mainPrefs
     : rankedTeams.filter(t =>
         allHitters.filter(h => optoTeamKey(h) === t && !isExcluded(h)).length >= rule.primarySize
       )
-  ).filter(t => !cappedStackTeams.has(t));
+  ).filter(t => !cappedStackTeams.has(t) && !blockedMain.has(t));
 
   const windows = optoStackWindows(rule);
 
@@ -8518,16 +8529,54 @@ function renderTeamStacks() {
   }).join('');
 }
 
+function addBlockedMainTeam() {
+  const sel = document.getElementById('block-main-team');
+  const team = sel?.value;
+  if (!team) { showToast('Select a team first'); return; }
+  if (!optoSettings.blockedMainTeams.includes(team)) {
+    optoSettings.blockedMainTeams.push(team);
+    saveSettings();
+  }
+  sel.value = '';
+  renderBlockedMainTeams();
+}
+
+function removeBlockedMainTeam(team) {
+  optoSettings.blockedMainTeams = optoSettings.blockedMainTeams.filter(t => t !== team);
+  saveSettings();
+  renderBlockedMainTeams();
+}
+
+function renderBlockedMainTeams() {
+  const container = document.getElementById('blocked-main-list');
+  if (!container) return;
+  const list = optoSettings.blockedMainTeams || [];
+  if (!list.length) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:4px;padding:4px 0;">
+    ${list.map(t => {
+      const tc = abbrColor(t);
+      return `<span style="display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;background:${tc.bg};color:${tc.tx};border:1px solid rgba(248,113,113,.4);">
+        ${t}<button onclick="removeBlockedMainTeam('${t}')" style="background:none;border:none;color:${tc.tx};cursor:pointer;font-size:11px;padding:0 0 0 2px;line-height:1;">×</button>
+      </span>`;
+    }).join('')}
+  </div>`;
+}
+
 function buildTeamOptoTable() {
   const teams = [...new Set([...allHitters, ...allPitchers].map(p => p.team).filter(Boolean))].sort();
-  // Populate the add-team dropdown
+  // Populate the add-team dropdowns
+  const teamOpts = '<option value="">Team…</option>' +
+    teams.map(t => `<option value="${t}">${t}</option>`).join('');
   const sel = document.getElementById('new-ts-team');
-  if (sel) {
-    sel.innerHTML = '<option value="">Team…</option>' +
-      teams.map(t => `<option value="${t}">${t}</option>`).join('');
-  }
-  // Render any existing team stack prefs
+  if (sel) sel.innerHTML = teamOpts;
+  const blockSel = document.getElementById('block-main-team');
+  if (blockSel) blockSel.innerHTML = teamOpts;
+  // Render any existing team stack prefs and blocked teams
   renderTeamStacks();
+  renderBlockedMainTeams();
 }
 
 // ── DK TEMPLATE UPLOAD ────────────────────────────────────────────────────────
