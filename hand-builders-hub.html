@@ -7185,11 +7185,11 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set(), stackAppearCou
     }
   });
 
-  // Main team candidates — use team stack prefs if set, else top 10 (excluding capped teams)
+  // Main team candidates — use team stack prefs if set, else all eligible teams (excluding capped)
   const mainPrefs = optoSettings.teamStacks.filter(ts => ts.role === 'main').map(ts => ts.team);
   const mainCandidates = (mainPrefs.length > 0
     ? mainPrefs
-    : rankedTeams.slice(0, 10).filter(t =>
+    : rankedTeams.filter(t =>
         allHitters.filter(h => optoTeamKey(h) === t && !isExcluded(h)).length >= rule.primarySize
       )
   ).filter(t => !cappedStackTeams.has(t));
