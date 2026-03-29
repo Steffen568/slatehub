@@ -4918,7 +4918,7 @@ async function loadPlayerPool(date, slate) {
   // ── Filter games/lineups to only teams on the selected slate ──────────────
   // Without this, players from non-slate games leak into the pool via the
   // lineup-starter fallback path (they get stub salary entries and show up).
-  if (_contestMode !== 'showdown') {
+  {
     const slateTeams = new Set();
     (pitcherSalRes.data || []).forEach(r => { if (r.team) slateTeams.add(r.team); });
     if (slateTeams.size > 0) {
@@ -9460,7 +9460,7 @@ function renderLineupCard_SD(s, i) {
     const roleCls   = sl.isCpt ? ' cpt-role' : '';
     const rowCls    = sl.isCpt ? ' sd-cpt-row' : '';
     if (!p) return `<div class="lc-slot-sd${rowCls}"><span class="lc-slot-role${roleCls}">${roleLabel}</span><span style="grid-column:2/7;color:var(--muted)">—</span></div>`;
-    const pos = p.primary_position || p.position || '?';
+    const pos = (p.positions && p.positions.length) ? p.positions[0] : (p.primary_position || p.position || '?');
     const isSP = ['SP','RP','P'].includes(pos);
     const pc = posColor(pos);
     const tc = abbrColor(p.team || '');
