@@ -5818,7 +5818,8 @@ function getExposureMap() {
   if (!total) return {};
   const map = {};
   saved.forEach(s => {
-    LINEUP_SLOTS.forEach(slot => {
+    const slots = s.mode === 'showdown' ? SD_LINEUP_SLOTS : LINEUP_SLOTS;
+    slots.forEach(slot => {
       const p = s.lineup?.[slot.key];
       if (!p) return;
       const id = p.player_id || p.dk_id;
@@ -5827,6 +5828,25 @@ function getExposureMap() {
   });
   Object.keys(map).forEach(id => { map[id] = map[id] / total * 100; });
   return map;
+}
+// SD-specific: separate CPT and FLEX exposure maps
+function getSDExposureMaps() {
+  const saved = getActiveLineups().filter(s => s.mode === 'showdown');
+  const total = saved.length;
+  if (!total) return { cpt: {}, flex: {}, total: 0 };
+  const cpt = {}, flex = {};
+  saved.forEach(s => {
+    SD_LINEUP_SLOTS.forEach(slot => {
+      const p = s.lineup?.[slot.key];
+      if (!p) return;
+      const id = p.player_id || p.dk_id;
+      if (slot.isCpt) cpt[id] = (cpt[id] || 0) + 1;
+      else            flex[id] = (flex[id] || 0) + 1;
+    });
+  });
+  Object.keys(cpt).forEach(id => { cpt[id] = cpt[id] / total * 100; });
+  Object.keys(flex).forEach(id => { flex[id] = flex[id] / total * 100; });
+  return { cpt, flex, total };
 }
 
 // ── SORT ──────────────────────────────────────────────────────────────────────
@@ -6583,26 +6603,38 @@ function renderExposure() {
   }
 
   const total = saved.length;
-  const counts = {}; // id → {id, name, pos, team, count, isSP}
+  const isSD  = saved.some(s => s.mode === 'showdown');
+
+  // For SD: track CPT and FLEX separately using composite keys "cpt_id" / "flex_id"
+  // For Classic: track by player_id as before
+  const counts = {};
   saved.forEach(s => {
     const slots = s.mode === 'showdown' ? SD_LINEUP_SLOTS : LINEUP_SLOTS;
     slots.forEach(slot => {
       const p = s.lineup?.[slot.key];
       if (!p) return;
-      const id = p.player_id || p.dk_id;
-      const pos = slot.pos || p.primary_position || p.position || '?';
-      const isCpt = slot.isCpt || false;
-      if (!counts[id]) counts[id] = { id, name: p.name, pos, team: p.team || '', count: 0, isSP: pos === 'SP', isCpt };
-      counts[id].count++;
+      const id   = p.player_id || p.dk_id;
+      const pos  = (p.positions && p.positions.length) ? p.positions[0] : (slot.pos || p.position || '?');
+      if (isSD) {
+        const role    = slot.isCpt ? 'cpt' : 'flex';
+        const compKey = `${role}_${id}`;
+        if (!counts[compKey]) counts[compKey] = { id, name: p.name, pos, team: p.team || '', count: 0, isSP: pos === 'SP', role };
+        counts[compKey].count++;
+      } else {
+        if (!counts[id]) counts[id] = { id, name: p.name, pos, team: p.team || '', count: 0, isSP: pos === 'SP', role: null };
+        counts[id].count++;
+      }
     });
   });
 
   const rows = Object.values(counts).sort((a,b) => b.count - a.count);
 
+  const roleHeader = isSD ? '<th style="width:36px;">Role</th>' : '';
   el.innerHTML = `
     <table class="exp-table">
       <thead><tr>
         <th style="width:34px;"></th>
+        ${roleHeader}
         <th>Player</th>
         <th>Exposure</th>
         <th style="width:58px;text-align:right;">Exp%</th>
@@ -6616,8 +6648,10 @@ function renderExposure() {
         const capped = cap != null && pct > cap;
         const tc     = r.team ? abbrColor(r.team) : null;
         const teamTag = tc ? `<span class="team-tag" style="background:${tc.bg};color:${tc.tx};font-size:9px;">${r.team}</span>` : '';
+        const roleCol = isSD ? `<td><span style="font-size:10px;font-weight:700;color:${r.role==='cpt'?'#fbbf24':'var(--text2)'};">${r.role==='cpt'?'CPT':'FLEX'}</span></td>` : '';
         return `<tr>
           <td><span class="exp-pos" style="background:${pc.bg};color:${pc.tx};">${r.pos}</span></td>
+          ${roleCol}
           <td><div class="exp-name-cell">${teamTag}<span>${r.name}</span></div></td>
           <td><div class="exp-bar-wrap-wide"><div class="exp-bar-fill" style="width:${pct}%;background:${barClr};"></div></div></td>
           <td style="text-align:right;font-weight:700;font-family:'Barlow Condensed',sans-serif;color:${capped?'#f87171':barClr};">
@@ -8974,7 +9008,8 @@ function renderSDPool() {
   const isCpt  = activeTab === 'hitters';   // Captains tab
   const role   = isCpt ? 'cpt' : 'flex';
   const search = (document.getElementById('pool-search')?.value || '').toLowerCase();
-  const expMap = getExposureMap();
+  const sdExp  = getSDExposureMaps();
+  const roleExpMap = isCpt ? sdExp.cpt : sdExp.flex;
   let all = [...allHitters, ...allPitchers].filter(p => (p.salary||0) > 0);
   if (search) all = all.filter(p =>
     (p.name||'').toLowerCase().includes(search) || (p.team||'').toLowerCase().includes(search));
@@ -9013,7 +9048,7 @@ function renderSDPool() {
   </tr>`;
 
   list.innerHTML = `<table class="player-table"><thead>${thead}</thead><tbody>
-    ${all.map(p => renderSDPlayerRow(p, expMap[p.player_id] ?? null, role)).join('')}
+    ${all.map(p => renderSDPlayerRow(p, roleExpMap[p.player_id] ?? null, role)).join('')}
   </tbody></table>`;
 }
 
@@ -9101,10 +9136,10 @@ function optoBuildLP_Showdown(pool, rule, cptCount, totalGenerated) {
     const ck = `c${pid}`;
     const fk = `f${pid}`;
 
-    // CPT: skip if exposure-capped OR role-excluded from CPT
-    const cptBanned = (cptCount[pid] || 0) >= cptCapMax || excludedCpt.has(pid);
-    // FLEX: skip if role-excluded from FLEX
-    const flexBanned = excludedFlex.has(pid);
+    // CPT: skip if exposure-capped OR role-excluded from CPT OR role-capped by optimizer
+    const cptBanned = (cptCount[pid] || 0) >= cptCapMax || excludedCpt.has(pid) || (rule?.cptExcluded?.has(pid));
+    // FLEX: skip if role-excluded from FLEX OR role-capped by optimizer
+    const flexBanned = excludedFlex.has(pid) || (rule?.flexExcluded?.has(pid));
 
     if (!cptBanned) {
       // CPT variable
@@ -9220,30 +9255,42 @@ function generateLineups_Showdown() {
   saveBuilds(allBuilds);
   activeBuildId = newBuild.id;
 
-  const generated   = [];
-  const cptCount    = {};
-  const appearCount = {};
+  const generated      = [];
+  const cptCount       = {};
+  const cptAppearCount = {};   // CPT appearances per player
+  const flexAppearCount = {};  // FLEX appearances per player
   let lineupIdx = 0;
 
   function buildOne() {
     const rule = optoPickRule(lineupIdx, N);
-    // Add diversity: exclude players over exposure cap (matches classic approach)
-    const capExcluded = new Set();
-    for (const [pid, cnt] of Object.entries(appearCount)) {
-      const isPit = (pool.find(p => p.player_id === +pid)?.positions || []).some(pos => ['SP','RP','P'].includes(pos));
+    // Add diversity: exclude players over exposure cap per role (CPT and FLEX tracked separately)
+    const cptExcluded  = new Set();
+    const flexExcluded = new Set();
+    for (const p of pool) {
+      const pid = p.player_id;
+      const isPit = (p.positions || []).some(pos => ['SP','RP','P'].includes(pos));
       const globalCap = isPit ? expPitcherMax : expHitterMax;
-      const globalMax = Math.max(1, Math.ceil(N * globalCap / 100));
-      if (cnt >= globalMax) capExcluded.add(+pid);
+      const globalMaxCpt  = Math.max(1, Math.ceil(N * Math.min(globalCap, expCptMax) / 100));
+      const globalMaxFlex = Math.max(1, Math.ceil(N * globalCap / 100));
+      if ((cptAppearCount[pid] || 0) >= globalMaxCpt)  cptExcluded.add(pid);
+      if ((flexAppearCount[pid] || 0) >= globalMaxFlex) flexExcluded.add(pid);
     }
-    // Per-player exposure caps
+    // Per-player exposure caps (apply to both roles)
     Object.entries(expTargets).forEach(([pid, capPct]) => {
       const playerMax = Math.max(1, Math.ceil(N * capPct / 100));
-      if ((appearCount[+pid] || 0) >= playerMax) capExcluded.add(+pid);
+      if ((cptAppearCount[+pid] || 0) >= playerMax)  cptExcluded.add(+pid);
+      if ((flexAppearCount[+pid] || 0) >= playerMax) flexExcluded.add(+pid);
     });
+    // A player is fully excluded only if capped in BOTH roles
+    const capExcluded = new Set();
+    for (const pid of cptExcluded) {
+      if (flexExcluded.has(pid)) capExcluded.add(pid);
+    }
     const filteredPool = pool.filter(p => !capExcluded.has(p.player_id));
     if (filteredPool.length < 6) return null;
 
-    const augRule = { locks: rule?.locks || [], excludes: [...(rule?.excludes || []), ...capExcluded] };
+    const augRule = { locks: rule?.locks || [], excludes: [...(rule?.excludes || []), ...capExcluded],
+                      cptExcluded, flexExcluded };
     const model = optoBuildLP_Showdown(filteredPool, augRule, cptCount, generated.length);
     const sol   = optoSolve_Showdown(model);
     if (!sol) return null;
@@ -9259,12 +9306,16 @@ function generateLineups_Showdown() {
       proj += s.isCpt ? (projOverrides[p.player_id]??p.proj_dk_pts??0)*1.5 : (projOverrides[p.player_id]??p.proj_dk_pts??0);
     });
 
-    // Update appear/CPT counts
-    Object.values(sdLineup).forEach(p => {
-      if (!p) return;
-      appearCount[p.player_id] = (appearCount[p.player_id]||0) + 1;
+    // Update CPT/FLEX appear counts separately
+    if (sdLineup.cpt) {
+      const cid = sdLineup.cpt.player_id;
+      cptAppearCount[cid] = (cptAppearCount[cid]||0) + 1;
+      cptCount[cid] = (cptCount[cid]||0) + 1;
+    }
+    SD_LINEUP_SLOTS.filter(s => !s.isCpt).forEach(s => {
+      const p = sdLineup[s.key];
+      if (p) flexAppearCount[p.player_id] = (flexAppearCount[p.player_id]||0) + 1;
     });
-    cptCount[sdLineup.cpt.player_id] = (cptCount[sdLineup.cpt.player_id]||0) + 1;
     const hasPit = Object.values(sdLineup).some(p => p && (p.positions||[]).some(pos => ['SP','RP','P'].includes(pos)));
     if (generated.length === 0) {
       console.log('[SD Lineup 1 details]:');
