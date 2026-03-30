@@ -278,14 +278,13 @@ def build_pool(data, slate=None):
                       env_score * 0.10 + bo_score * 0.15)
 
         # Pitcher concentration boost (public heavily rosters top SPs)
-        # Actual data: top SPs get 30-47%, 2nd tier 8-15%, rest <5%
-        # Use moderate amplification — the sim noise creates the spread
+        # The base_score already captures projection quality (which includes K%,
+        # Stuff+, matchup, etc.). Don't re-multiply by those signals — it
+        # double-counts and creates extreme concentration on one SP.
+        # Instead: flat boost to separate pitchers from hitters in the greedy
+        # builder, then let projection differences + noise create the spread.
         if is_pitcher:
-            salary_tier = clip((salary - 5000) / 3000, 0.2, 2.0)
-            pk = data.get('pitcher_k', {}).get(pid, {})
-            k_excitement = clip((pk.get('k_pct', 0.22) - 0.18) / 0.10, 0.5, 2.0)
-            stuff_hype = clip((pk.get('stuff_plus', 100) - 90) / 20, 0.5, 1.5)
-            base_score *= PITCHER_BOOST * (0.3 + salary_tier) * k_excitement * stuff_hype
+            base_score *= PITCHER_BOOST
 
         # Confirmed/unconfirmed modifier
         if confirmed:
@@ -354,11 +353,7 @@ def build_pool(data, slate=None):
         best['base_score'] = (proj_score * 0.40 + salary_score * 0.30 + value_score * 0.05 +
                               env_score * 0.10 + bo_score * 0.15)
         if best['is_pitcher']:
-            pk_data = data.get('pitcher_k', {}).get(best['player_id'], {})
-            salary_tier = clip((best['salary'] - 5000) / 3000, 0.2, 2.0)
-            k_excitement = clip((pk_data.get('k_pct', 0.22) - 0.18) / 0.10, 0.5, 2.0)
-            stuff_hype = clip((pk_data.get('stuff_plus', 100) - 90) / 20, 0.5, 1.5)
-            best['base_score'] *= PITCHER_BOOST * (0.3 + salary_tier) * k_excitement * stuff_hype
+            best['base_score'] *= PITCHER_BOOST
         lu = data['lineup_map'].get(best['player_id'])
         confirmed = lu and lu.get('batting_order') and lu['batting_order'] >= 1
         if confirmed:
