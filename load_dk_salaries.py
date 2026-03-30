@@ -81,6 +81,10 @@ print(f"  Classic draft group IDs:  {sorted(classic_dg_ids)}")
 print(f"  Showdown draft group IDs: {sorted(showdown_dg_ids)}")
 
 # Build DG metadata (classic slate labels + showdown game labels)
+# Only include DGs for today — skip tomorrow's early-posted DGs
+from datetime import date as _date
+today_str = str(_date.today())
+
 dg_meta = {}
 for dg in dg_list:
     dgid      = dg.get('DraftGroupId')
@@ -91,6 +95,13 @@ for dg in dg_list:
             game_date = datetime.fromisoformat(start_est.replace('Z','')).strftime('%Y-%m-%d')
         except Exception:
             pass
+
+    # Skip DGs that start on a future date (tomorrow's slates posted early)
+    if game_date and game_date > today_str:
+        print(f"  Skipping DG {dgid} — future date {game_date}")
+        classic_dg_ids.discard(dgid)
+        showdown_dg_ids.discard(dgid)
+        continue
 
     if dgid in classic_dg_ids:
         slate_label = 'main'
