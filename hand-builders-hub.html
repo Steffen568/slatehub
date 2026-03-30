@@ -4316,8 +4316,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 <section class="lineups-section" id="pool-section" style="display:none;">
   <div class="lineups-section-hd">
     <div class="opto-toggle-group" style="margin-right:8px;">
-      <button class="opto-tog-btn active" id="pool-tab-pool" onclick="switchPoolTab('pool')">Pool</button>
-      <button class="opto-tog-btn" id="pool-tab-portfolio" onclick="switchPoolTab('portfolio')">Portfolio</button>
+      <button class="opto-tog-btn active" id="pool-tab-pool" onclick="switchResultsTab('pool')">Pool</button>
+      <button class="opto-tog-btn" id="pool-tab-portfolio" onclick="switchResultsTab('portfolio')">Portfolio</button>
     </div>
     <span id="pool-count" style="font-size:11px;color:var(--muted);margin-left:4px;"></span>
     <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
@@ -7948,7 +7948,7 @@ let _poolExpStackFilter = 0;
 let _poolExpTab = 'players';
 let _portfolioLineups = []; // lineups selected by Build Portfolio, with contest metrics
 
-function switchPoolTab(tab) {
+function switchResultsTab(tab) {
   document.getElementById('pool-tab-pool')?.classList.toggle('active', tab === 'pool');
   document.getElementById('pool-tab-portfolio')?.classList.toggle('active', tab === 'portfolio');
   document.getElementById('pool-view-pool').style.display = tab === 'pool' ? '' : 'none';
@@ -8897,7 +8897,7 @@ function addOptimalPortfolio() {
   _portfolioLineups = selected;
 
   // Switch to portfolio tab (no old build creation — portfolio tab IS the view)
-  switchPoolTab('portfolio');
+  switchResultsTab('portfolio');
 
   const coveredPct = _contestSimResults ? (() => {
     const covered = new Set();
