@@ -7606,19 +7606,40 @@ function sampleSimProjections(simParams, gameKeys, teamKeys) {
   return simProj;
 }
 
-function simSolveWithStacks(allElig, rule, simProj, stackAppearCount, totalN) {
+// Pre-computed pool context — built once per generatePool run, reused per sim
+let _simCtx = null;
+
+function buildSimContext(allElig) {
   const eligById = new Map(allElig.map(p => [p.player_id, p]));
-
-  // Rank teams by SIMULATED top-5 score
   const allTeams = [...new Set(allHitters.filter(h => !isExcluded(h)).map(h => optoTeamKey(h)).filter(Boolean))];
-  const teamSimScores = {};
-  for (const t of allTeams) {
-    teamSimScores[t] = allHitters.filter(h => optoTeamKey(h)===t && !isExcluded(h))
-      .map(h => simProj.get(h.player_id) ?? 0).sort((a,b) => b-a).slice(0,5).reduce((s,v) => s+v, 0);
-  }
-  const rankedTeams = [...allTeams].sort((a,b) => (teamSimScores[b]||0) - (teamSimScores[a]||0));
-
   const blockedMain = new Set(optoSettings.blockedMainTeams || []);
+  const mainPrefs = optoSettings.teamStacks.filter(ts => ts.role==='main').map(ts => ts.team);
+  const subPrefs = optoSettings.teamStacks.filter(ts => ts.role==='sub').map(ts => ts.team);
+
+  // Pre-compute team hitters (only once, not per sim)
+  const teamHittersMap = {};
+  for (const t of allTeams) {
+    teamHittersMap[t] = allHitters.filter(h => optoTeamKey(h)===t && !isExcluded(h));
+  }
+
+  return { eligById, allTeams, blockedMain, mainPrefs, subPrefs, teamHittersMap };
+}
+
+function simSolveWithStacks(allElig, rule, simProj, stackAppearCount, totalN) {
+  const ctx = _simCtx;
+
+  // Rank teams by SIMULATED top-5 score (lightweight — just map lookups)
+  const teamSimScores = {};
+  for (const t of ctx.allTeams) {
+    const hitters = ctx.teamHittersMap[t];
+    if (!hitters) continue;
+    let scores = [];
+    for (const h of hitters) { scores.push(simProj.get(h.player_id) ?? 0); }
+    scores.sort((a,b) => b-a);
+    teamSimScores[t] = (scores[0]||0)+(scores[1]||0)+(scores[2]||0)+(scores[3]||0)+(scores[4]||0);
+  }
+  const rankedTeams = ctx.allTeams.slice().sort((a,b) => (teamSimScores[b]||0) - (teamSimScores[a]||0));
+
   const cappedStackTeams = new Set();
   Object.entries(stackExpCaps).forEach(([key, capPct]) => {
     const parts = key.split('_'); const size = +parts[parts.length-1]; const team = parts.slice(0,-1).join('_');
@@ -7628,27 +7649,25 @@ function simSolveWithStacks(allElig, rule, simProj, stackAppearCount, totalN) {
     }
   });
 
-  const mainPrefs = optoSettings.teamStacks.filter(ts => ts.role==='main').map(ts => ts.team);
-  const mainCandidates = (mainPrefs.length > 0 ? mainPrefs : rankedTeams.filter(t =>
-    allHitters.filter(h => optoTeamKey(h)===t && !isExcluded(h)).length >= rule.primarySize
-  )).filter(t => !cappedStackTeams.has(t) && !blockedMain.has(t));
+  const mainCandidates = (ctx.mainPrefs.length > 0 ? ctx.mainPrefs : rankedTeams.filter(t =>
+    (ctx.teamHittersMap[t]||[]).length >= rule.primarySize
+  )).filter(t => !cappedStackTeams.has(t) && !ctx.blockedMain.has(t));
 
   const windows = optoStackWindows(rule);
-  const subPrefs = optoSettings.teamStacks.filter(ts => ts.role==='sub').map(ts => ts.team);
 
-  // Pick top 3 sim-ranked teams to try (not all — keeps speed manageable)
-  const tryTeams = mainCandidates.slice(0, 3);
+  // Try top 2 sim-ranked teams (reduced from 3 for speed)
+  const tryTeams = mainCandidates.slice(0, 2);
 
   for (const mainTeam of tryTeams) {
     const win = windows[Math.floor(Math.random() * windows.length)];
-    const teamHitters = allHitters.filter(h => optoTeamKey(h)===mainTeam && !isExcluded(h));
+    const teamHitters = ctx.teamHittersMap[mainTeam] || [];
     const mainPlayerIds = win.length === 0
       ? teamHitters.map(h => h.player_id)
       : teamHitters.filter(h => h.batting_order != null && win.includes(h.batting_order)).map(h => h.player_id);
     if (mainPlayerIds.length < rule.primarySize) continue;
 
     const subCandidates = rule.subSize === 0 ? [null]
-      : (subPrefs.length > 0 ? subPrefs : rankedTeams).filter(t => t !== mainTeam).slice(0,3);
+      : (ctx.subPrefs.length > 0 ? ctx.subPrefs : rankedTeams).filter(t => t !== mainTeam).slice(0,2);
     const subTeam = subCandidates[Math.floor(Math.random() * subCandidates.length)] ?? null;
 
     const problem = optoBuildLP(allElig, {
@@ -7658,7 +7677,7 @@ function simSolveWithStacks(allElig, rule, simProj, stackAppearCount, totalN) {
 
     const ids = optoSolve(problem);
     if (!ids || ids.length !== 10) continue;
-    const totSal = ids.reduce((s, id) => s + (eligById.get(id)?.salary || 0), 0);
+    const totSal = ids.reduce((s, id) => s + (ctx.eligById.get(id)?.salary || 0), 0);
     if (totSal > optoSalaryCap) continue;
 
     const assembled = optoAssembleLineup(ids, allElig);
@@ -7671,7 +7690,7 @@ function simSolveWithStacks(allElig, rule, simProj, stackAppearCount, totalN) {
   const prob = optoBuildLP(allElig, {mainTeam:null, mainPlayerIds:[], mainSize:0, subTeam:null, subSize:0}, [], simProj);
   const ids = optoSolve(prob);
   if (ids && ids.length === 10) {
-    const sal = ids.reduce((s, id) => s + (eligById.get(id)?.salary || 0), 0);
+    const sal = ids.reduce((s, id) => s + (ctx.eligById.get(id)?.salary || 0), 0);
     if (sal <= optoSalaryCap) return optoAssembleLineup(ids, allElig);
   }
   return null;
@@ -7772,25 +7791,30 @@ function generatePool() {
   const stackAppearCount = {};
   const hitterSlotKeys = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
   let simIdx = 0;
+  let consecDupes = 0; // track consecutive duplicate/failed sims for early termination
+
+  // Build context ONCE — reused by every sim
+  _simCtx = buildSimContext(allElig);
 
   const poolSec = document.getElementById('pool-section');
   if (poolSec) poolSec.style.display = '';
   showPoolLoading('Generating Pool...');
 
   function runBatch() {
-    const BATCH = 15;
+    const BATCH = 8; // smaller batches to stay under 400ms and keep browser responsive
     const end = Math.min(simIdx + BATCH, poolSize);
     for (; simIdx < end; simIdx++) {
       const simProj = sampleSimProjections(simParams, gameKeys, teamKeys);
       const rule = optoPickRule(simIdx, poolSize);
       const lineup = simSolveWithStacks(allElig, rule, simProj, stackAppearCount, poolSize);
-      if (!lineup) continue;
+      if (!lineup) { consecDupes++; continue; }
 
       // Dedup
       const ids = Object.values(lineup).filter(p => p?.player_id).map(p => p.player_id).sort((a,b)=>a-b);
       const key = ids.join(',');
-      if (seenKeys.has(key)) continue;
+      if (seenKeys.has(key)) { consecDupes++; continue; }
       seenKeys.add(key);
+      consecDupes = 0; // reset on success
 
       // Track stack appearances
       const teamCounts = {};
@@ -7803,13 +7827,21 @@ function generatePool() {
       _poolCandidates.push({ lineup, metrics, dedupKey: key });
     }
 
-    if (simIdx < poolSize) {
+    // Early termination: if 80+ consecutive sims produced no new unique lineup,
+    // the solution space is exhausted — stop instead of grinding
+    const exhausted = consecDupes >= 80;
+
+    if (simIdx < poolSize && !exhausted) {
       updatePoolLoading(`${simIdx} / ${poolSize}`, `${_poolCandidates.length} unique lineups`, simIdx/poolSize*100);
       setTimeout(runBatch, 0);
     } else {
+      _simCtx = null; // free memory
       _poolCandidates.sort((a,b) => b.metrics.proj - a.metrics.proj);
       hidePoolLoading();
-      showToast(`Pool complete: ${_poolCandidates.length} unique lineups from ${poolSize} sims`);
+      const msg = exhausted
+        ? `Pool complete (early stop): ${_poolCandidates.length} unique lineups from ${simIdx} sims — solution space exhausted`
+        : `Pool complete: ${_poolCandidates.length} unique lineups from ${poolSize} sims`;
+      showToast(msg);
       renderPoolCards();
       renderPoolExposure();
     }
