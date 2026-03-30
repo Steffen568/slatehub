@@ -8044,14 +8044,16 @@ function renderPoolExposure() {
   // ── Players tab ──
   const playerCounts = {};
   pool.forEach(c => {
-    Object.entries(c.lineup).forEach(([k, p]) => {
-      if (!p?.player_id) return;
+    const seen = new Set();
+    for (const slot of LINEUP_SLOTS) {
+      const p = c.lineup?.[slot.key];
+      if (!p?.player_id || seen.has(p.player_id)) continue;
+      seen.add(p.player_id);
       if (!playerCounts[p.player_id]) {
-        const pos = LINEUP_SLOTS.find(s => s.key === k)?.pos || 'OF';
-        playerCounts[p.player_id] = { id: p.player_id, name: p.name, team: p.team, pos, count: 0 };
+        playerCounts[p.player_id] = { id: p.player_id, name: p.name || '?', team: p.team || '', pos: slot.pos, count: 0 };
       }
       playerCounts[p.player_id].count++;
-    });
+    }
   });
   let playerRows = Object.values(playerCounts).sort((a,b) => b.count - a.count);
   if (_poolExpPosFilter !== 'ALL') playerRows = playerRows.filter(r => r.pos === _poolExpPosFilter);
