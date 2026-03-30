@@ -8945,8 +8945,8 @@ function exportPortfolioDK() {
   const entries = _dkTemplate.entries.filter(e => String(e.contestId) === String(contestId));
   if (!entries.length) { showToast('No entries for this contest'); return; }
 
-  // Build the full header from the original DK CSV format
-  const header = 'Entry ID,Contest Name,Contest ID,Entry Fee,SP,SP,C,1B,2B,3B,SS,OF,OF,OF';
+  // Use the exact header from the original DK CSV to avoid format errors
+  const header = _dkTemplate.originalHeader || 'Entry ID,Contest Name,Contest ID,Entry Fee,SP,SP,C,1B,2B,3B,SS,OF,OF,OF';
   const csvRows = [header];
 
   // Round-robin portfolio lineups across entries
@@ -8965,13 +8965,21 @@ function exportPortfolioDK() {
       return `${p.name} (${dkId})`;
     });
 
-    csvRows.push(`${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},${slots.join(',')}`);
+    // Pad with empty columns to match original header width
+    const headerCols = header.split(',').length;
+    const rowBase = `${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},${slots.join(',')}`;
+    const rowCols = rowBase.split(',').length;
+    const padding = headerCols > rowCols ? ','.repeat(headerCols - rowCols) : '';
+    csvRows.push(rowBase + padding);
   }
 
   // Include unassigned entries from other contests as empty rows
+  const headerColCount = header.split(',').length;
   for (const entry of _dkTemplate.entries) {
     if (String(entry.contestId) === String(contestId)) continue;
-    csvRows.push(`${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},,,,,,,,,,`);
+    const base = `${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee}`;
+    const emptyPad = ','.repeat(headerColCount - 4);
+    csvRows.push(base + emptyPad);
   }
 
   const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
@@ -10893,6 +10901,7 @@ function importDKTemplate(file) {
   reader.onload = function(e) {
     const text = e.target.result;
     const rows = text.split('\n').map(r => r.split(','));
+    const originalHeader = rows[0]?.join(',') || '';  // preserve exact DK header for re-export
     const entries = [];
     const cptIds = {};
     const utilIds = {};
@@ -10946,7 +10955,7 @@ function importDKTemplate(file) {
     }
 
     const contests = Object.values(contestMap);
-    _dkTemplate = { entries, contests, cptIds, utilIds, classicIds, isSD };
+    _dkTemplate = { entries, contests, cptIds, utilIds, classicIds, isSD, originalHeader };
     _contestAssignments = {};
     // Also populate dkDraftgroupMap so fillDKTemplate-dependent code still works
     dkDraftgroupMap = classicIds;
