@@ -4281,26 +4281,58 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
   </div>
 </section>
 
+<!-- ── LOADING OVERLAY ──────────────────────────────────────────────────────── -->
+<div id="pool-loading-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:none;align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:32px 48px;text-align:center;min-width:320px;">
+    <div id="pool-loading-title" style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-bottom:12px;">Generating Pool...</div>
+    <div id="pool-loading-progress" style="font-size:24px;font-weight:800;color:var(--hi);font-family:'Barlow Condensed',sans-serif;margin-bottom:4px;">0 / 2000</div>
+    <div id="pool-loading-detail" style="font-size:11px;color:var(--muted);margin-bottom:16px;">Initializing...</div>
+    <div style="width:100%;height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
+      <div id="pool-loading-bar" style="height:100%;width:0%;background:#4ade80;border-radius:3px;transition:width .2s;"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ── POOL RESULTS PANEL ──────────────────────────────────────────────────── -->
 <section class="lineups-section" id="pool-section" style="display:none;">
   <div class="lineups-section-hd">
     <span class="lineups-section-title">Lineup Pool</span>
     <span id="pool-count" style="font-size:11px;color:var(--muted);margin-left:8px;"></span>
-    <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
-      <label style="font-size:10px;color:var(--muted);">Select top</label>
-      <input type="number" id="pool-select-n" value="20" min="1" max="150" style="width:46px;font-size:11px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;text-align:center;">
-      <button class="bld-btn" style="background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="addPoolToBuilds()">Add to Build</button>
+    <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+      <button class="bld-btn" style="background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.35);color:#a78bfa;" onclick="simulateContest()">Sim Contest</button>
+      <label style="font-size:10px;color:var(--muted);">Select</label>
+      <input type="number" id="pool-select-n" value="20" min="1" max="150" style="width:40px;font-size:11px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;text-align:center;">
+      <button class="bld-btn" style="background:rgba(99,179,237,.1);border-color:rgba(99,179,237,.35);color:#63b3ed;" onclick="addOptimalPortfolio()">Build Portfolio</button>
     </div>
   </div>
-  <div style="display:flex;flex-wrap:wrap;gap:6px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:10px;">
-    <label style="color:var(--muted);">Filters:</label>
-    <input type="number" placeholder="Min Proj" style="width:60px;" class="opto-input" oninput="setPoolFilter('minProj',this.value)">
-    <input type="number" placeholder="Min Ceil" style="width:60px;" class="opto-input" oninput="setPoolFilter('minCeil',this.value)">
-    <input type="number" placeholder="Min Floor" style="width:60px;" class="opto-input" oninput="setPoolFilter('minFloor',this.value)">
-    <input type="number" placeholder="Max Games" style="width:60px;" class="opto-input" oninput="setPoolFilter('maxGames',this.value)">
-    <input type="text" placeholder="Stack (e.g. ARI)" style="width:60px;" class="opto-input" oninput="setPoolFilter('stack',this.value)">
+  <!-- Filter bar -->
+  <div style="display:flex;flex-wrap:wrap;gap:6px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:10px;align-items:center;">
+    <label style="color:var(--muted);font-weight:700;">Filters:</label>
+    <input type="number" placeholder="Min Proj" style="width:58px;" class="opto-input" oninput="setPoolFilter('minProj',this.value)">
+    <input type="number" placeholder="Min Ceil" style="width:58px;" class="opto-input" oninput="setPoolFilter('minCeil',this.value)">
+    <input type="number" placeholder="Max Games" style="width:58px;" class="opto-input" oninput="setPoolFilter('maxGames',this.value)">
+    <input type="text" placeholder="Stack" style="width:50px;" class="opto-input" oninput="setPoolFilter('stack',this.value)">
+    <input type="number" placeholder="Min Win%" style="width:58px;" class="opto-input" oninput="setPoolFilter('minWin',this.value)">
   </div>
-  <div id="pool-results" style="overflow-y:auto;max-height:400px;"></div>
+  <!-- Two-column body -->
+  <div class="lineups-body">
+    <div class="lineups-saved-col">
+      <div class="lineups-grid" id="pool-cards" style="overflow-y:auto;max-height:600px;"></div>
+      <div id="pool-show-more" style="display:none;padding:8px;text-align:center;">
+        <button class="bld-btn" onclick="showMorePoolCards()">Show More</button>
+      </div>
+    </div>
+    <div class="lineups-exposure-col">
+      <div class="exp-col-hd" style="padding:0;">
+        <div class="exp-tab-bar">
+          <button class="exp-tab active" id="pool-exp-tab-players" onclick="switchPoolExpTab('players')">Players</button>
+          <button class="exp-tab" id="pool-exp-tab-stacks" onclick="switchPoolExpTab('stacks')">Stacks</button>
+        </div>
+      </div>
+      <div id="pool-exp-players" style="overflow-y:auto;flex:1;"></div>
+      <div id="pool-exp-stacks" style="overflow-y:auto;flex:1;display:none;"></div>
+    </div>
+  </div>
 </section>
 
 <!-- ── OPTIMIZER SETTINGS DRAWER ──────────────────────────────────────────── -->
@@ -4666,6 +4698,7 @@ const optoSettings = {
   blockedMainTeams: [],  // teams excluded from main stack but still in pool/sub-stacks
   poolMode: false,       // false = noise mode, true = pool generation mode
   poolSize: 2000,        // number of sims for pool generation
+  contestSims: 5000,     // number of sims for contest simulation
   teamOverrides: {},
 };
 
@@ -7478,6 +7511,28 @@ function optoDebug() {
   console.groupEnd();
 }
 
+// ── POOL LOADING OVERLAY ─────────────────────────────────────────────────────
+
+function showPoolLoading(title) {
+  const el = document.getElementById('pool-loading-overlay');
+  if (el) { el.style.display = 'flex'; }
+  const t = document.getElementById('pool-loading-title');
+  if (t) t.textContent = title || 'Working...';
+  updatePoolLoading('0', 'Initializing...', 0);
+}
+function updatePoolLoading(progress, detail, pct) {
+  const p = document.getElementById('pool-loading-progress');
+  const d = document.getElementById('pool-loading-detail');
+  const b = document.getElementById('pool-loading-bar');
+  if (p) p.textContent = progress;
+  if (d) d.textContent = detail;
+  if (b) b.style.width = Math.min(100, pct) + '%';
+}
+function hidePoolLoading() {
+  const el = document.getElementById('pool-loading-overlay');
+  if (el) el.style.display = 'none';
+}
+
 // ── POOL GENERATOR (Monte Carlo Sim) ─────────────────────────────────────────
 
 function boxMullerNormal() {
@@ -7691,10 +7746,9 @@ function generatePool() {
   const hitterSlotKeys = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
   let simIdx = 0;
 
-  // Show pool section
   const poolSec = document.getElementById('pool-section');
   if (poolSec) poolSec.style.display = '';
-  showToast(`Generating pool… 0/${poolSize}`);
+  showPoolLoading('Generating Pool...');
 
   function runBatch() {
     const BATCH = 15;
@@ -7723,21 +7777,62 @@ function generatePool() {
     }
 
     if (simIdx < poolSize) {
-      showToast(`Generating pool… ${simIdx}/${poolSize} (${_poolCandidates.length} unique)`);
+      updatePoolLoading(`${simIdx} / ${poolSize}`, `${_poolCandidates.length} unique lineups`, simIdx/poolSize*100);
       setTimeout(runBatch, 0);
     } else {
       _poolCandidates.sort((a,b) => b.metrics.proj - a.metrics.proj);
+      hidePoolLoading();
       showToast(`Pool complete: ${_poolCandidates.length} unique lineups from ${poolSize} sims`);
-      renderPoolTable();
+      renderPoolCards();
+      renderPoolExposure();
     }
   }
   setTimeout(runBatch, 30);
 }
 
-function renderPoolTable() {
-  const container = document.getElementById('pool-results');
-  if (!container) return;
+let _poolCardsShown = 50;
+let _poolExpTargets = {};
+let _poolExpPosFilter = 'ALL';
+let _poolExpStackFilter = 0;
+let _poolExpTab = 'players';
+
+function showMorePoolCards() { _poolCardsShown += 50; renderPoolCards(); }
+
+function switchPoolExpTab(tab) {
+  _poolExpTab = tab;
+  document.getElementById('pool-exp-tab-players')?.classList.toggle('active', tab === 'players');
+  document.getElementById('pool-exp-tab-stacks')?.classList.toggle('active', tab === 'stacks');
+  document.getElementById('pool-exp-players').style.display = tab === 'players' ? '' : 'none';
+  document.getElementById('pool-exp-stacks').style.display  = tab === 'stacks'  ? '' : 'none';
+  renderPoolExposure();
+}
+
+function setPoolExpTarget(key, field, val) {
+  if (!_poolExpTargets[key]) _poolExpTargets[key] = {};
+  const n = parseInt(val);
+  if (!isNaN(n) && n >= 0 && n <= 100) _poolExpTargets[key][field] = n;
+  else delete _poolExpTargets[key][field];
+  if (!_poolExpTargets[key].min && !_poolExpTargets[key].max) delete _poolExpTargets[key];
+}
+
+function filterPoolCandidates() {
   let filtered = _poolCandidates;
+  const f = _poolFilter;
+  if (f.minProj) filtered = filtered.filter(c => c.metrics.proj >= f.minProj);
+  if (f.maxProj) filtered = filtered.filter(c => c.metrics.proj <= f.maxProj);
+  if (f.minCeil) filtered = filtered.filter(c => c.metrics.ceil >= f.minCeil);
+  if (f.minFloor) filtered = filtered.filter(c => c.metrics.floor >= f.minFloor);
+  if (f.maxGames) filtered = filtered.filter(c => c.metrics.games <= f.maxGames);
+  if (f.stack) filtered = filtered.filter(c => c.metrics.stack.startsWith(f.stack));
+  if (f.minWin && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.winPct || 0) >= f.minWin);
+  if (f.mustInclude) { const pid = +f.mustInclude; filtered = filtered.filter(c => c.metrics.pids.has(pid)); }
+  return filtered;
+}
+
+function renderPoolCards() {
+  const container = document.getElementById('pool-cards');
+  if (!container) return;
+  let filtered = filterPoolCandidates();
 
   // Apply filters
   const f = _poolFilter;
@@ -7755,25 +7850,79 @@ function renderPoolTable() {
   const countEl = document.getElementById('pool-count');
   if (countEl) countEl.textContent = `${filtered.length} lineups`;
 
-  const show = filtered.slice(0, 200); // render max 200 rows for performance
-  container.innerHTML = `<table class="exp-table" style="font-size:10px;">
-    <thead><tr>
-      <th>#</th><th>Proj</th><th>Ceil</th><th>Floor</th><th>Sigma</th>
-      <th>Sal</th><th>Stack</th><th>Sub</th><th>Gms</th><th>BB</th>
-    </tr></thead>
-    <tbody>${show.map((c, i) => {
-      const m = c.metrics;
-      return `<tr style="cursor:pointer;" onclick="loadPoolLineup(${_poolCandidates.indexOf(c)})">
-        <td>${i+1}</td>
-        <td style="font-weight:700;">${m.proj}</td>
-        <td>${m.ceil}</td><td>${m.floor}</td><td>${m.sigma}</td>
-        <td>$${m.salary.toLocaleString()}</td>
-        <td><span class="stack-size-badge">${m.stack}</span></td>
-        <td>${m.sub}</td>
-        <td>${m.games}</td><td>${m.bringBacks}</td>
-      </tr>`;
-    }).join('')}</tbody>
-  </table>`;
+  // Sort by contest metrics if available, else by projection
+  if (filtered[0]?.contest) {
+    filtered.sort((a,b) => (b.contest?.winPct||0) - (a.contest?.winPct||0) || b.metrics.proj - a.metrics.proj);
+  }
+
+  const show = filtered.slice(0, _poolCardsShown);
+  const moreBtn = document.getElementById('pool-show-more');
+  if (moreBtn) moreBtn.style.display = filtered.length > _poolCardsShown ? '' : 'none';
+
+  const fmtSal  = v => v ? `$${(v/1000).toFixed(1)}k` : '—';
+  const fmtProj = v => v != null ? (+v).toFixed(1) : '—';
+
+  container.innerHTML = show.map((c, i) => {
+    const m = c.metrics;
+    const ct = c.contest;
+    const lu = c.lineup;
+    const idx = _poolCandidates.indexOf(c);
+
+    // Card border color based on contest tier
+    const borderClr = ct ? (ct.winPct > 0 ? '#4ade80' : ct.top1Pct >= 5 ? '#63b3ed' : 'var(--border)') : 'var(--border)';
+
+    // Contest badge
+    const contestBadge = ct
+      ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;${ct.winPct > 0 ? 'background:rgba(74,222,128,.15);color:#4ade80;' : ct.top1Pct >= 3 ? 'background:rgba(99,179,237,.12);color:#63b3ed;' : 'color:var(--muted);'}">${ct.winPct > 0 ? 'Win '+ct.winPct+'%' : 'T1 '+ct.top1Pct+'%'}</span>
+         <span style="font-size:8px;color:var(--muted);">Cash ${ct.cashPct}%</span>`
+      : '';
+
+    // Build player rows
+    const pitcherSlots = LINEUP_SLOTS.filter(sl => sl.pos === 'SP');
+    const hitterSlots  = LINEUP_SLOTS.filter(sl => sl.pos !== 'SP');
+
+    const pitRows = pitcherSlots.map(sl => {
+      const p = lu[sl.key];
+      if (!p) return '';
+      const tc = abbrColor(p.team || '');
+      const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
+      return `<div class="lc-slot-pitcher">
+        <span class="lc-slot-pos" style="background:${posColor('SP').bg};color:${posColor('SP').tx};">SP</span>
+        <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
+        <span class="lc-slot-name">${last}</span>
+        <span class="lc-slot-sal">${fmtSal(p.salary)}</span>
+        <span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span>
+      </div>`;
+    }).join('');
+
+    const hitRows = hitterSlots.map(sl => {
+      const p = lu[sl.key];
+      if (!p) return '';
+      const tc = abbrColor(p.team || '');
+      const pc = posColor(sl.pos);
+      const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
+      return `<div class="lc-slot-hitter">
+        <span class="lc-slot-pos" style="background:${pc.bg};color:${pc.tx};">${sl.pos}</span>
+        <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
+        <span class="lc-slot-name">${last}</span>
+        <span class="lc-slot-bo">${p.batting_order??'—'}</span>
+        <span class="lc-slot-sal">${fmtSal(p.salary)}</span>
+        <span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span>
+      </div>`;
+    }).join('');
+
+    return `<div class="lc-chip" style="border-color:${borderClr};" onclick="loadPoolLineup(${idx})">
+      <div class="lc-chip-hd">
+        <span class="lc-chip-name">#${i+1}</span>
+        <span class="lc-chip-pts">${m.proj} pts</span>
+        <span class="lc-chip-sal">$${m.salary.toLocaleString()}</span>
+        <span class="stack-size-badge" style="margin-left:4px;">${m.stack}</span>
+        ${m.sub !== '—' ? `<span class="stack-size-badge">${m.sub}</span>` : ''}
+        ${contestBadge}
+      </div>
+      <div class="lc-chip-slots">${pitRows}${hitRows}</div>
+    </div>`;
+  }).join('');
 }
 
 function loadPoolLineup(idx) {
@@ -7818,9 +7967,326 @@ function addPoolToBuilds() {
   showToast(`${selected.length} diverse lineups added to build!`);
 }
 
+function renderPoolExposure() {
+  const pool = _poolCandidates;
+  if (!pool.length) return;
+  const total = pool.length;
+  const hitterSlots = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
+
+  // ── Players tab ──
+  const playerCounts = {};
+  pool.forEach(c => {
+    Object.entries(c.lineup).forEach(([k, p]) => {
+      if (!p?.player_id) return;
+      if (!playerCounts[p.player_id]) {
+        const pos = LINEUP_SLOTS.find(s => s.key === k)?.pos || 'OF';
+        playerCounts[p.player_id] = { id: p.player_id, name: p.name, team: p.team, pos, count: 0 };
+      }
+      playerCounts[p.player_id].count++;
+    });
+  });
+  let playerRows = Object.values(playerCounts).sort((a,b) => b.count - a.count);
+  if (_poolExpPosFilter !== 'ALL') playerRows = playerRows.filter(r => r.pos === _poolExpPosFilter);
+
+  const positions = ['ALL', 'SP', 'C', '1B', '2B', '3B', 'SS', 'OF'];
+  const posTabsHtml = `<div style="display:flex;gap:3px;padding:6px 8px;border-bottom:1px solid var(--border);">
+    ${positions.map(p => `<button class="exp-tab${_poolExpPosFilter===p?' active':''}" onclick="_poolExpPosFilter='${p}';renderPoolExposure();" style="font-size:9px;padding:2px 6px;">${p}</button>`).join('')}
+  </div>`;
+
+  const playersEl = document.getElementById('pool-exp-players');
+  if (playersEl) {
+    playersEl.innerHTML = posTabsHtml + `<table class="exp-table">
+      <thead><tr><th style="width:26px;"></th><th>Player</th><th>Exposure</th><th style="width:44px;text-align:right;">Exp%</th><th style="width:40px;text-align:center;">Min</th><th style="width:40px;text-align:center;">Max</th></tr></thead>
+      <tbody>${playerRows.slice(0, 100).map(r => {
+        const pct = +(r.count / total * 100).toFixed(0);
+        const barClr = pct > 50 ? '#4ade80' : pct > 20 ? '#fbbf24' : 'var(--hi)';
+        const tc = abbrColor(r.team || '');
+        const tgt = _poolExpTargets[r.id] || {};
+        const overMax = tgt.max != null && pct > tgt.max;
+        const underMin = tgt.min != null && pct < tgt.min;
+        const rowStyle = overMax ? 'background:rgba(248,113,113,.08);' : underMin ? 'background:rgba(251,191,36,.08);' : '';
+        return `<tr style="${rowStyle}">
+          <td><span class="exp-pos">${r.pos}</span></td>
+          <td><div class="exp-name-cell"><span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${r.team||''}</span>${r.name||'?'}</div></td>
+          <td><div class="exp-bar-wrap-wide"><div class="exp-bar-fill" style="width:${pct}%;background:${barClr};"></div></div></td>
+          <td style="text-align:right;font-weight:700;color:${barClr};">${pct}%<br><span style="font-size:8px;color:var(--muted);font-weight:400;">${r.count}/${total}</span></td>
+          <td><input type="number" class="exp-cap-input" min="0" max="100" placeholder="—" value="${tgt.min!=null?tgt.min:''}" oninput="setPoolExpTarget(${r.id},'min',this.value)" style="width:36px;" title="Min exposure %"></td>
+          <td><input type="number" class="exp-cap-input" min="0" max="100" placeholder="—" value="${tgt.max!=null?tgt.max:''}" oninput="setPoolExpTarget(${r.id},'max',this.value)" style="width:36px;" title="Max exposure %"></td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  }
+
+  // ── Stacks tab ──
+  const stackCounts = {};
+  pool.forEach(c => {
+    const teamCounts = {};
+    hitterSlots.forEach(k => { const p = c.lineup[k]; if (p?.team) teamCounts[p.team] = (teamCounts[p.team]||0)+1; });
+    Object.entries(teamCounts).forEach(([team, cnt]) => {
+      for (let s = 2; s <= cnt; s++) {
+        const key = `${team}_${s}`;
+        if (!stackCounts[key]) stackCounts[key] = { team, size: s, count: 0 };
+        stackCounts[key].count++;
+      }
+    });
+  });
+  let stackRows = Object.values(stackCounts).sort((a,b) => b.count/total - a.count/total || a.team.localeCompare(b.team));
+  if (_poolExpStackFilter > 0) stackRows = stackRows.filter(r => r.size === _poolExpStackFilter);
+
+  const sizes = [...new Set(Object.values(stackCounts).map(r => r.size))].sort();
+  const stackTabsHtml = `<div style="display:flex;gap:3px;padding:6px 8px;border-bottom:1px solid var(--border);">
+    <button class="exp-tab${_poolExpStackFilter===0?' active':''}" onclick="_poolExpStackFilter=0;renderPoolExposure();" style="font-size:9px;padding:2px 6px;">All</button>
+    ${sizes.map(s => `<button class="exp-tab${_poolExpStackFilter===s?' active':''}" onclick="_poolExpStackFilter=${s};renderPoolExposure();" style="font-size:9px;padding:2px 6px;">${s}-man</button>`).join('')}
+  </div>`;
+
+  const stacksEl = document.getElementById('pool-exp-stacks');
+  if (stacksEl) {
+    stacksEl.innerHTML = stackTabsHtml + `<table class="exp-table">
+      <thead><tr><th style="width:42px;"></th><th>Team</th><th>Exposure</th><th style="width:44px;text-align:right;">Exp%</th><th style="width:40px;text-align:center;">Min</th><th style="width:40px;text-align:center;">Max</th></tr></thead>
+      <tbody>${stackRows.map(r => {
+        const pct = +(r.count / total * 100).toFixed(0);
+        const barClr = pct > 50 ? '#4ade80' : pct > 20 ? '#fbbf24' : 'var(--hi)';
+        const tc = abbrColor(r.team);
+        const capKey = `${r.team}_${r.size}`;
+        const tgt = _poolExpTargets[capKey] || {};
+        return `<tr>
+          <td><span class="stack-size-badge">${r.size}-man</span></td>
+          <td><span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${r.team}</span></td>
+          <td><div class="exp-bar-wrap-wide"><div class="exp-bar-fill" style="width:${pct}%;background:${barClr};"></div></div></td>
+          <td style="text-align:right;font-weight:700;color:${barClr};">${pct}%<br><span style="font-size:8px;color:var(--muted);font-weight:400;">${r.count}/${total}</span></td>
+          <td><input type="number" class="exp-cap-input" min="0" max="100" placeholder="—" value="${tgt.min!=null?tgt.min:''}" oninput="setPoolExpTarget('${capKey}','min',this.value)" style="width:36px;"></td>
+          <td><input type="number" class="exp-cap-input" min="0" max="100" placeholder="—" value="${tgt.max!=null?tgt.max:''}" oninput="setPoolExpTarget('${capKey}','max',this.value)" style="width:36px;"></td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  }
+}
+
 function setPoolFilter(key, val) {
   if (val === '' || val == null) delete _poolFilter[key];
   else _poolFilter[key] = isNaN(+val) ? val : +val;
+  _poolCardsShown = 50;
+  renderPoolCards();
+}
+
+// ── CONTEST SIMULATION ───────────────────────────────────────────────────────
+
+let _contestSimResults = null; // { perLineup: [{winCount, top1Count, ...}], simWinners: [[]] }
+let _poolSortCol = 'proj';
+let _poolSortDir = -1;
+
+function simulateContest() {
+  if (!_poolCandidates.length) { showToast('Generate a pool first'); return; }
+  const numSims = optoSettings.contestSims || 5000;
+  const pool = _poolCandidates;
+  const n = pool.length;
+
+  // Pre-extract player IDs per lineup for fast scoring
+  const lineupPids = pool.map(c => {
+    return Object.values(c.lineup).filter(p => p?.player_id).map(p => p.player_id);
+  });
+
+  // Build sim params from all eligible players
+  const allElig = [
+    ...allHitters.filter(h => !isExcluded(h) && (h.salary||0) > 0),
+    ...allPitchers.filter(p => !isExcluded(p) && (p.salary||0) > 0),
+  ];
+  const simParams = buildSimParams(allElig);
+  const gameKeys = [...new Set(allElig.map(p => p.game_pk).filter(Boolean))];
+  const teamKeys = [...new Set(allElig.map(p => optoTeamKey(p)).filter(Boolean))];
+
+  // Per-lineup accumulators
+  const stats = pool.map(() => ({
+    winCount: 0, top1Count: 0, top10Count: 0, cashCount: 0,
+    totalPts: 0, maxPts: 0, finishSum: 0
+  }));
+  // Track which sims each lineup wins (for portfolio optimization)
+  const simWinners = []; // simIdx → winning lineup index
+
+  const top1Cutoff = Math.max(1, Math.ceil(n * 0.01));
+  const top10Cutoff = Math.max(1, Math.ceil(n * 0.10));
+  const cashCutoff = Math.max(1, Math.ceil(n * 0.22));
+
+  let simIdx = 0;
+  showPoolLoading('Simulating Contest...');
+
+  function runBatch() {
+    const BATCH = 500;
+    const end = Math.min(simIdx + BATCH, numSims);
+
+    for (; simIdx < end; simIdx++) {
+      const simProj = sampleSimProjections(simParams, gameKeys, teamKeys);
+
+      // Score every lineup
+      const scores = new Float64Array(n);
+      for (let i = 0; i < n; i++) {
+        let s = 0;
+        for (const pid of lineupPids[i]) s += simProj.get(pid) ?? 0;
+        scores[i] = s;
+        stats[i].totalPts += s;
+        if (s > stats[i].maxPts) stats[i].maxPts = s;
+      }
+
+      // Rank by score (descending) — build index array
+      const indices = Array.from({length: n}, (_, i) => i);
+      indices.sort((a, b) => scores[b] - scores[a]);
+
+      // Record winner
+      simWinners.push(indices[0]);
+
+      // Record positions
+      for (let rank = 0; rank < n; rank++) {
+        const li = indices[rank];
+        stats[li].finishSum += rank + 1;
+        if (rank === 0) stats[li].winCount++;
+        if (rank < top1Cutoff) stats[li].top1Count++;
+        if (rank < top10Cutoff) stats[li].top10Count++;
+        if (rank < cashCutoff) stats[li].cashCount++;
+      }
+    }
+
+    if (simIdx < numSims) {
+      updatePoolLoading(`${simIdx} / ${numSims}`, `Scoring ${n} lineups per sim`, simIdx/numSims*100);
+      setTimeout(runBatch, 0);
+    } else {
+      hidePoolLoading();
+      finalizeContest(stats, simWinners, numSims);
+    }
+  }
+
+  setTimeout(runBatch, 30);
+}
+
+function finalizeContest(stats, simWinners, numSims) {
+  const n = _poolCandidates.length;
+  // Enrich each candidate with contest metrics
+  for (let i = 0; i < n; i++) {
+    const s = stats[i];
+    _poolCandidates[i].contest = {
+      winPct:    +(s.winCount / numSims * 100).toFixed(2),
+      top1Pct:   +(s.top1Count / numSims * 100).toFixed(1),
+      top10Pct:  +(s.top10Count / numSims * 100).toFixed(1),
+      cashPct:   +(s.cashCount / numSims * 100).toFixed(1),
+      avgFinish: +(s.finishSum / numSims).toFixed(0),
+      avgSimPts: +(s.totalPts / numSims).toFixed(1),
+      maxSimPts: +s.maxPts.toFixed(1),
+    };
+  }
+  _contestSimResults = { stats, simWinners, numSims };
+  showToast(`Contest sim complete! ${numSims} sims across ${n} lineups`);
+  renderPoolCards();
+  renderPoolExposure();
+}
+
+function selectOptimalPortfolio(k) {
+  if (!_contestSimResults) { showToast('Run contest sim first'); return []; }
+  const { simWinners, numSims } = _contestSimResults;
+  const pool = filterPoolCandidates();
+  const n = pool.length;
+  if (!n) return [];
+
+  // Map filtered indices to global indices
+  const globalIdx = pool.map(c => _poolCandidates.indexOf(c));
+
+  const covered = new Uint8Array(numSims);
+  const selected = [];
+  const selectedGlobal = new Set();
+  const appearCount = {}; // player_id → count in selected
+
+  function wouldViolateMax(candidate) {
+    for (const pid of candidate.metrics.pids) {
+      const tgt = _poolExpTargets[pid];
+      if (tgt?.max != null) {
+        const maxCount = Math.max(1, Math.ceil(k * tgt.max / 100));
+        if ((appearCount[pid] || 0) >= maxCount) return true;
+      }
+    }
+    // Stack max check
+    const hitterSlots = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
+    const teamCounts = {};
+    hitterSlots.forEach(key => { const p = candidate.lineup[key]; if (p?.team) teamCounts[p.team] = (teamCounts[p.team]||0)+1; });
+    for (const [team, cnt] of Object.entries(teamCounts)) {
+      for (let s = 2; s <= cnt; s++) {
+        const capKey = `${team}_${s}`;
+        const tgt = _poolExpTargets[capKey];
+        // Simple: count how many selected lineups have this stack
+        // (approximation — we'd need per-stack tracking for precision)
+      }
+    }
+    return false;
+  }
+
+  for (let pick = 0; pick < k && pick < n; pick++) {
+    const uncoveredWins = new Float64Array(n);
+    for (let s = 0; s < numSims; s++) {
+      if (covered[s]) continue;
+      // Find which filtered candidate (if any) won this sim
+      const winnerGlobal = simWinners[s];
+      const filteredIdx = globalIdx.indexOf(winnerGlobal);
+      if (filteredIdx >= 0) uncoveredWins[filteredIdx] += 1;
+    }
+
+    let bestIdx = -1, bestScore = -1;
+    for (let i = 0; i < n; i++) {
+      if (selectedGlobal.has(globalIdx[i])) continue;
+      if (wouldViolateMax(pool[i])) continue;
+      // Score: uncovered wins + small bonus for contest metrics
+      const score = uncoveredWins[i] + (pool[i].contest?.top1Pct || 0) * 0.1;
+      if (score > bestScore) { bestScore = score; bestIdx = i; }
+    }
+
+    if (bestIdx === -1) break;
+    selected.push(globalIdx[bestIdx]);
+    selectedGlobal.add(globalIdx[bestIdx]);
+
+    // Track exposure
+    for (const pid of pool[bestIdx].metrics.pids) {
+      appearCount[pid] = (appearCount[pid] || 0) + 1;
+    }
+
+    // Mark covered sims
+    for (let s = 0; s < numSims; s++) {
+      if (simWinners[s] === globalIdx[bestIdx]) covered[s] = 1;
+    }
+  }
+
+  return selected;
+}
+
+function addOptimalPortfolio() {
+  const k = +(document.getElementById('pool-select-n')?.value || 20);
+  const indices = selectOptimalPortfolio(k);
+  if (!indices.length) { showToast('No lineups selected'); return; }
+
+  const selected = indices.map(i => _poolCandidates[i]);
+  const newBuild = { id: 'build_' + Date.now(), name: `Optimal Portfolio (${selected.length})`, ts: Date.now(), lineups: [] };
+  const allBuilds = getBuilds();
+  allBuilds.push(newBuild);
+  saveBuilds(allBuilds);
+  activeBuildId = newBuild.id;
+
+  const generated = selected.map((c, i) => ({
+    name: `Portfolio ${i+1}`,
+    totProj: c.metrics.proj,
+    lineup: c.lineup,
+    ts: Date.now()
+  }));
+  updateActiveBuild(generated);
+  renderSavedCards();
+
+  const coveredPct = _contestSimResults ? (() => {
+    const covered = new Set();
+    for (const idx of indices) {
+      _contestSimResults.simWinners.forEach((w, s) => { if (w === idx) covered.add(s); });
+    }
+    return (covered.size / _contestSimResults.numSims * 100).toFixed(1);
+  })() : '?';
+  showToast(`${selected.length} portfolio lineups added! Coverage: ${coveredPct}% of winning sims`);
+}
+
+function setPoolSort(col) {
+  if (_poolSortCol === col) _poolSortDir *= -1;
+  else { _poolSortCol = col; _poolSortDir = -1; }
   renderPoolTable();
 }
 
