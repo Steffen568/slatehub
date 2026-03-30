@@ -557,20 +557,20 @@ if all_salary_rows:
     if started_dg_ids:
         print(f"  ⚠ {len(started_dg_ids)} DG(s) have in-progress games — skipping delete (upsert only): {sorted(started_dg_ids)}")
 
-    # Clean up stale DGs from previous days that are no longer in the API.
-    # These are finished slates whose games are all in the past — safe to remove.
-    stale_res = supabase.table('dk_salaries').select('dg_id').eq('season', season).limit(5000).execute()
-    db_dg_ids = {r['dg_id'] for r in (stale_res.data or [])}
-    stale_dg_ids = db_dg_ids - set(api_dg_ids)
-    if stale_dg_ids:
-        print(f"  Cleaning {len(stale_dg_ids)} stale DG(s) no longer in API: {sorted(stale_dg_ids)}")
-        for dgid in stale_dg_ids:
-            supabase.table('dk_salaries').delete().eq('dg_id', dgid).eq('season', season).execute()
-            supabase.table('dk_slate_games').delete().eq('dg_id', dgid).eq('season', season).execute()
-
-    print(f"Clearing dk_salaries for {len(safe_dg_ids)} of {len(api_dg_ids)} active DG IDs (season {season})...")
-    for dgid in safe_dg_ids:
-        supabase.table('dk_salaries').delete().eq('dg_id', dgid).eq('season', season).execute()
+    # Clear ALL salaries — ensures no stale data from prior days or season transitions.
+    # Supabase deletes max ~1000 rows per call, so loop until empty.
+    # Delete both current and prior season (catches spring training → regular season transition).
+    print(f"Clearing ALL dk_salaries (season {season} and {season-1})...")
+    for del_season in [season, season - 1]:
+        while True:
+            res = supabase.table('dk_salaries').delete().eq('season', del_season).execute()
+            deleted = len(res.data) if res.data else 0
+            if deleted == 0:
+                break
+            print(f"  Deleted {deleted} rows (season {del_season})...")
+    # Also clear stale slate-game mappings
+    for dgid in api_dg_ids:
+        supabase.table('dk_slate_games').delete().eq('dg_id', dgid).eq('season', season).execute()
     print("Cleared. Uploading fresh data...")
     batch_size = 500
     uploaded = 0
