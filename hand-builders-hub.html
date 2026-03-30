@@ -7930,6 +7930,7 @@ function generatePool() {
       _simCtx = null; // free memory
       _poolCandidates.sort((a,b) => b.metrics.proj - a.metrics.proj);
       hidePoolLoading();
+      switchResultsTab('pool'); // ensure pool view is visible
       const msg = exhausted
         ? `Pool complete (early stop): ${_poolCandidates.length} unique lineups from ${simIdx} sims — solution space exhausted`
         : `Pool complete: ${_poolCandidates.length} unique lineups from ${poolSize} sims`;
@@ -7963,10 +7964,29 @@ function renderPortfolioCards() {
     container.innerHTML = '<div class="pool-empty">Build a portfolio from the pool to see lineups here.</div>';
     return;
   }
+
+  // Apply same filters and sort as pool cards
+  let filtered = [..._portfolioLineups];
+  const f = _poolFilter;
+  if (f.minProj) filtered = filtered.filter(c => c.metrics.proj >= f.minProj);
+  if (f.maxProj) filtered = filtered.filter(c => c.metrics.proj <= f.maxProj);
+  if (f.minCeil) filtered = filtered.filter(c => c.metrics.ceil >= f.minCeil);
+  if (f.maxGames) filtered = filtered.filter(c => c.metrics.games <= f.maxGames);
+  if (f.stack) filtered = filtered.filter(c => c.metrics.stack.startsWith(f.stack));
+  if (f.minWin && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.winPct || 0) >= f.minWin);
+  if (f.maxOwn) filtered = filtered.filter(c => (c.metrics.totalOwn || 999) <= f.maxOwn);
+  if (f.minLeverage) filtered = filtered.filter(c => (c.metrics.leverage || 0) >= f.minLeverage);
+  if (f.minBoom && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.boomPct || 0) >= f.minBoom);
+
+  const sc = _poolSortCol, dir = _poolSortDir;
+  const getVal = (c) => { if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
+  const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
+  const sign = lowerIsBetter ? 1 : -1;
+  filtered.sort((a,b) => (getVal(a) - getVal(b)) * sign * dir || b.metrics.proj - a.metrics.proj);
   const fmtSal  = v => v ? `$${(v/1000).toFixed(1)}k` : '—';
   const fmtProj = v => v != null ? (+v).toFixed(1) : '—';
 
-  container.innerHTML = _portfolioLineups.map((c, i) => {
+  container.innerHTML = filtered.map((c, i) => {
     const m = c.metrics;
     const ct = c.contest;
     const lu = c.lineup;
@@ -8334,6 +8354,7 @@ function setPoolFilter(key, val) {
   else _poolFilter[key] = isNaN(+val) ? val : +val;
   _poolCardsShown = Infinity;
   renderPoolCards();
+  renderPortfolioCards();
 }
 
 // ── OPPONENT FIELD GENERATOR ─────────────────────────────────────────────────
@@ -8915,6 +8936,7 @@ function setPoolSort(col) {
   _poolCardsShown = Infinity;
   renderPoolCards();
   renderPoolExposure();
+  renderPortfolioCards();
 }
 
 function generateLineups() {
