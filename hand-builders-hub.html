@@ -8942,20 +8942,24 @@ function exportPortfolioDK() {
   const contestId = _activeContestId;
   if (!contestId) { showToast('Select a contest from the dropdown first'); return; }
 
-  // Get entries for this contest
-  const entries = _dkTemplate.entries.filter(e => e.contestId === contestId);
-  if (!entries.length) { showToast('No entries found for this contest'); return; }
+  // Get entries for this contest (contestId from picker is string, entry.contestId is also string)
+  const entries = _dkTemplate.entries.filter(e => String(e.contestId) === String(contestId));
+  console.log(`[Export] contestId=${contestId}, total entries=${_dkTemplate.entries.length}, matched=${entries.length}`);
+  if (!entries.length) { showToast('No entries found for this contest — check contest selection'); return; }
 
   const header = 'Entry ID,Contest Name,Contest ID,Entry Fee,P,P,C,1B,2B,3B,SS,OF,OF,OF';
   const csvRows = [header];
   const unmatchedPlayers = new Set();
 
   // Round-robin portfolio lineups across entries
+  const classicIdCount = Object.keys(_dkTemplate.classicIds || {}).length;
+  console.log(`[Export] classicIds map size: ${classicIdCount}, portfolio lineups: ${_portfolioLineups.length}`);
   for (let i = 0; i < entries.length; i++) {
     const lu = _portfolioLineups[i % _portfolioLineups.length];
     const { row, unmatched } = lineupToEntryRow(entries[i], lu);
     csvRows.push(row);
     unmatched.forEach(n => unmatchedPlayers.add(n));
+    if (i === 0) console.log(`[Export] First row: ${row}`);
   }
 
   // Also include entries from OTHER contests as empty rows
