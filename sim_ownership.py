@@ -481,8 +481,23 @@ def calibrate_ownership(pool, appear, feasible, target_date):
     else:
         print(f"  No actual ownership data for {target_date} — using uncalibrated rates")
 
-    # No artificial floor/cap — let the sim and calibration determine natural range.
-    # Only clamp to valid percentage range [0, 100].
+    # Re-normalize per position group so totals = slots × 100%.
+    # The calibration step can distort totals — this restores the constraint
+    # while preserving the relative ordering within each position.
+    pos_groups = defaultdict(list)
+    for p in pool:
+        pos_groups[p['pos']].append(p['player_id'])
+
+    for pos, pids in pos_groups.items():
+        slots = POS_SLOTS.get(pos, 1)
+        target_sum = slots * 100.0
+        current_sum = sum(calibrated.get(pid, 0) for pid in pids)
+        if current_sum > 0:
+            scale = target_sum / current_sum
+            for pid in pids:
+                calibrated[pid] = calibrated[pid] * scale
+
+    # Clamp to valid range [0, 100]
     for pid in calibrated:
         calibrated[pid] = clip(calibrated[pid], 0.0, 100.0)
 
