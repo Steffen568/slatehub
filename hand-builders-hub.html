@@ -8578,10 +8578,15 @@ function simulateContest() {
   const top10Cutoff = Math.max(1, Math.ceil(n * 0.10));
   const cashCutoff = Math.max(1, Math.ceil(n * (payoutPct / 100)));
 
-  // Pool IS the field — our optimized lineups represent the sharp competition.
-  // Scale pool rank to contest field size for realistic positioning.
+  // Pool competes against itself, scaled to contest size.
+  // fieldMult: how many contest entries each pool rank represents.
+  // fieldOffset: how many contest entries are likely BETTER than our best pool
+  //   lineup. In a 53K GPP, thousands of lineups from other sharp players will
+  //   finish above our #1. Estimate: ~10% of the field is at our level or better.
   const fieldMult = Math.max(1, Math.round(fieldSize / n));
-  console.log(`Contest sim: ${n} pool lineups × ${fieldMult} fieldMult = ${n * fieldMult} effective field (actual: ${fieldSize})`);
+  const sharpPct = 0.10; // ~10% of field is sharp competition above/at our level
+  const fieldOffset = Math.round(fieldSize * sharpPct * 0.5); // half of sharp field is above us on average
+  console.log(`Contest sim: ${n} lineups, fieldMult=${fieldMult}, fieldOffset=${fieldOffset} (${fieldSize.toLocaleString()} field)`);
 
   // Build payout lookup from contest data for ROI calculation
   let payoutTiers = null; // [{minPos, maxPos, value}]
@@ -8628,10 +8633,13 @@ function simulateContest() {
       for (let rank = 0; rank < top1Cutoff && rank < n; rank++) thisTop1.add(indices[rank]);
       simTop1.push(thisTop1);
 
-      // Record positions — scale pool rank to contest field size
+      // Record positions — scale pool rank to contest field size.
+      // Add random offset within each fieldMult gap to model the other
+      // sharp lineups that exist between our pool lineups in the real field.
+      // Without this, rank 0 ALWAYS gets position 1 and wins $50K every sim.
       for (let rank = 0; rank < n; rank++) {
         const li = indices[rank];
-        const fieldPos = rank * fieldMult + 1;
+        const fieldPos = fieldOffset + rank * fieldMult + Math.floor(Math.random() * fieldMult) + 1;
 
         stats[li].finishSum += fieldPos;
         if (fieldPos === 1) stats[li].winCount++;
