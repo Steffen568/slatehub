@@ -553,11 +553,35 @@ def fetch_data(target_date: str) -> dict:
     ).in_('game_pk', game_pks).gte('batting_order', 1).lte('batting_order', 9).execute().data or []
     print(f"  Lineups: {len(lineups)}")
 
+    # Build reverse PLAYER_ID_REMAP so we can look up stats when lineup
+    # uses a remapped ID (e.g. 115223) but stats are under the original (665489)
+    reverse_remap = {}
+    try:
+        import ast as _ast
+        import os as _os
+        _remap_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'load_dk_salaries.py')
+        with open(_remap_path, encoding='utf-8') as f:
+            src = f.read()
+        for node in _ast.walk(_ast.parse(src)):
+            if isinstance(node, _ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, _ast.Name) and t.id == 'PLAYER_ID_REMAP':
+                        remap = eval(compile(_ast.Expression(body=node.value), '<remap>', 'eval'))
+                        for orig, remapped in remap.items():
+                            reverse_remap[remapped] = orig
+                        break
+    except Exception:
+        pass
+
     # Batter stats (3 seasons, chunked)
+    # Include reverse-remapped IDs so stats load for players whose lineup ID
+    # differs from their stats ID (e.g. Vlad Jr: lineup=115223, stats=665489)
     player_ids = list({l['player_id'] for l in lineups if l.get('player_id')})
+    alt_ids = [reverse_remap[pid] for pid in player_ids if pid in reverse_remap]
+    all_stat_ids = list(set(player_ids + alt_ids))
     batter_stats = {}
-    for i in range(0, len(player_ids), 500):
-        chunk = player_ids[i:i+500]
+    for i in range(0, len(all_stat_ids), 500):
+        chunk = all_stat_ids[i:i+500]
         rows = sb.table('batter_stats').select(
             'player_id,season,pa,woba,xwoba,k_pct,bb_pct,iso,avg,sb,babip,'
             'barrel_pct,hard_hit_pct,avg_ev,wrc_plus,full_name,team'
@@ -579,11 +603,11 @@ def fetch_data(target_date: str) -> dict:
         for r in rows:
             pitcher_stats.setdefault(r['player_id'], {})[r['season']] = r
 
-    # Batter splits
+    # Batter splits (also include reverse-remapped IDs)
     batter_splits = {}
-    if player_ids:
-        for i in range(0, len(player_ids), 150):
-            chunk = player_ids[i:i+150]
+    if all_stat_ids:
+        for i in range(0, len(all_stat_ids), 150):
+            chunk = all_stat_ids[i:i+150]
             rows = sb.table('batter_splits').select(
                 'player_id,split,pa,wrc_plus,woba,k_pct,bb_pct'
             ).in_('player_id', chunk).in_('season', [SEASON, SEASON-1]).execute().data or []
@@ -620,6 +644,7 @@ def fetch_data(target_date: str) -> dict:
         'batter_stats': batter_stats, 'pitcher_stats': pitcher_stats,
         'batter_splits': batter_splits, 'odds': odds,
         'park_factors': park_factors, 'weather': weather,
+        '_reverse_remap': reverse_remap,
     }
 
 
@@ -772,8 +797,16 @@ def run():
         opp_sp_id   = game.get('away_sp_id') if is_home else game.get('home_sp_id')
         opp_sp_hand = game.get('away_sp_hand') if is_home else game.get('home_sp_hand')
 
-        # Batter talent
+        # Batter talent — try lineup player_id first, then reverse-remap ID
+        # (lineups may use DK-remapped ID while stats use MLBAM ID)
+        stats_pid = pid
         stats_by_yr = data['batter_stats'].get(pid, {})
+        if not stats_by_yr:
+            alt = data.get('_reverse_remap', {}).get(pid)
+            if alt:
+                stats_by_yr = data['batter_stats'].get(alt, {})
+                if stats_by_yr:
+                    stats_pid = alt
         if not stats_by_yr:
             # No stats = league average fallback
             talent = {
@@ -786,7 +819,7 @@ def run():
             talent = marcel_batter(stats_by_yr, SEASON)
 
         # Platoon adjustment
-        split_row = data['batter_splits'].get(pid, {}).get(opp_sp_hand)
+        split_row = data['batter_splits'].get(stats_pid, {}).get(opp_sp_hand)
         talent = platoon_adjust(talent, split_row)
 
         # Pitcher matchup
@@ -926,6 +959,12 @@ def run():
     for r in records:
         seen[(r['player_id'], r['game_pk'])] = r
     records = list(seen.values())
+
+    # Delete stale projections for this date before upserting.
+    # Previous runs may have used different player_ids for the same player
+    # (MLBAM vs DK ID), leaving orphan rows that cause duplicates.
+    print(f"  Clearing stale projections for {target_date}...")
+    sb.table('player_projections').delete().eq('game_date', target_date).execute()
 
     # Strip sim-specific columns if migration hasn't been run yet
     SIM_COLS = {'sim_mean', 'sim_median', 'sim_floor', 'sim_ceiling',
