@@ -351,3 +351,43 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### Auto-fixed DK ID mismatches: Tyler O'Neill, Vladimir Guerrero Jr.
 **What happened:** Pipeline auto-fixed 2 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Carlos Santana, Tyler O'Neill, Vladimir Guerrero Jr., Will Smith
+**What happened:** Pipeline auto-fixed 4 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+---
+
+## Session 30 — Sim Engine Build (2026-03-30)
+
+### Pitcher handedness missing from games table breaks platoon splits
+**What happened:** 84 game entries had null `home_sp_hand`/`away_sp_hand`. The sim projection engine couldn't look up platoon splits for opposing batters, inflating opp_quality and deflating pitcher projections (Cease projected 13.3 instead of 18+).
+**Rule:** After loading schedule, verify SP handedness is populated. Backfill from rosters table (`throws` column) when MLB API doesn't return `pitchHand`.
+
+### Small-sample split wRC+ extremes (469, -100) corrupt opp lineup quality
+**What happened:** Early-season platoon splits with <30 PA produced absurd wRC+ values (Langeliers 469 wRC+ vs RHP from 12 PA). This inflated the A's lineup quality to 1.19 when they should be ~0.95.
+**Rule:** Cap split wRC+ at [30, 200]. Require minimum 30 PA for splits to be used. Fall back to overall wRC+ (capped [40, 180]) when splits are unreliable.
+
+### Odds matching fails when DB has inconsistent team name formats
+**What happened:** DB stored "Athletics" (short) but Odds API sends "Oakland Athletics" (full). The lookup matched on exact team name pairs, failing for mixed formats. 4+ games per day had no odds.
+**Rule:** Build flexible lookup indexing each game by ALL name variants (full, short, reverse-mapped). `load_odds.py` now does this.
+
+### DK slate classification by time-only blends turbo into main
+**What happened:** A 4-game turbo starting at 6:35 PM got labeled `main` because it fell in the main time window (5-7:30 PM). It blended with the actual 10-game main slate.
+**Rule:** After fetching draftables, refine slate label using game count: ≤5 games in main window → `turbo`, ≤2 games in late window → `late_night`.
+
+### Ownership null for players with DK/MLB ID mismatches
+**What happened:** DK salaries use proprietary player IDs that differ from MLBAM IDs for some players (Castillo, Martinez, McCullers, Johnson). The ownership sim joined only on player_id, skipping these players.
+**Rule:** Always add name-based fallback matching when joining DK salary data to projection data. Normalize names (lowercase, strip Jr/Sr/III suffixes).
+
+### Pool generator no-stack fallback produces unstacked lineups
+**What happened:** When the LP solver failed for the top 2 stacked team candidates, it fell back to a no-stack solve, producing unstacked lineups that made it into the pool and portfolio.
+**Rule:** Never fall back to no-stack solves in the pool generator. If stacked solve fails, return null and move on. Use weighted random team selection to spread across all eligible teams.
+
+### Calibrating sim projections against the analytical engine is circular
+**What happened:** Initially tried tuning the sim to match the analytical engine's output. But the whole point of the sim is to be BETTER than the analytical engine.
+**Rule:** Calibrate against ACTUAL results (from `actual_results` table), not against the old model. Use `load_actuals.py` to populate actual DK points, then backtest sim vs reality.
+
+### Auto-fixed DK ID mismatches: Carson Kelly, Cole Young, David Hamilton, Gabriel Arias, Ivan Herrera, Jacob Wilson, Jose Ramirez, Josh Smith, Julio Rodriguez, Miguel Rojas, Miguel Vargas
+**What happened:** Pipeline auto-fixed 11 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.

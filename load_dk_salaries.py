@@ -226,6 +226,7 @@ PLAYER_ID_REMAP = {
     641933  : 828468,   # Tyler O'Neill (auto-fixed)
     664040  : 446184,   # Brandon Lowe (auto-fixed)
     596142  : 566435,   # Gary Sanchez (auto-fixed)
+    608348  : 803086,   # Carson Kelly (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids

@@ -45,11 +45,12 @@ sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
 
 # ── Signal weights ─────────────────────────────────────────────────────────────
 W_VALUE        = 0.35   # proj_dk_pts per $1000 salary
-W_SALARY_RANK  = 0.25   # salary rank within position group
-W_BAT_ORDER    = 0.15   # batting order position
+W_SALARY_RANK  = 0.20   # salary rank within position group
+W_PROJ_PTS     = 0.12   # raw projection magnitude (star power)
+W_BAT_ORDER    = 0.13   # batting order position
 W_VEGAS        = 0.10   # team implied runs
-W_PARK         = 0.08   # park factor
-W_WEATHER      = 0.07   # weather suppression
+W_PARK         = 0.05   # park factor
+W_WEATHER      = 0.05   # weather suppression
 
 LEAGUE_AVG_IMPLIED = 4.5  # baseline implied runs, same as compute_projections.py
 
@@ -57,8 +58,8 @@ LEAGUE_AVG_IMPLIED = 4.5  # baseline implied runs, same as compute_projections.p
 # Note: when ALL players in a group are unconfirmed (spring training),
 # softmax is scale-invariant so the multiplier has no relative effect.
 # The steeper UNCONF_MULT matters in-season when confirmed players co-exist.
-CONF_MULT   = 1.20
-UNCONF_MULT = 0.55
+CONF_MULT   = 1.40
+UNCONF_MULT = 0.40
 
 # Batting order score — spots 1–4 premium, 5–9 haircut
 BAT_ORDER_SCORE = {1: 1.0, 2: 0.97, 3: 0.94, 4: 0.90,
@@ -70,9 +71,10 @@ SLATE_SMALL_MAX  = 4   # ≤ 4 games → small
 SLATE_MEDIUM_MAX = 7   # ≤ 7 games → medium; > 7 → large
 
 # Softmax temperature — controls distribution sharpness
-# 1.0 = very concentrated at top; 3.0+ = near-uniform
-# 2.2 reproduces realistic contest spread (top SP ~20-35%, avg SP ~7%)
-SOFTMAX_TEMP = 2.2
+# Lower = more concentrated at top; higher = more uniform
+# Position-specific temps used in normalize_position_group()
+SOFTMAX_TEMP_SP     = 0.8    # SPs: very sharp — top SP dominates (40-50%)
+SOFTMAX_TEMP_HITTER = 1.4    # Hitters: moderately sharp
 
 # DK lineup slot counts per position.
 # Ownership across all players in a group must sum to (slots × 100%).
@@ -91,7 +93,7 @@ POSITION_SLOTS = {
 # On small slates the cap is computed dynamically in normalize_position_group
 # (2× the avg_target, floored at this value) so small pools don't get cut off.
 POSITION_MAX_OWN = {
-    'SP': 40.0,
+    'SP': 55.0,
     'C':  30.0,
     '1B': 30.0,
     '2B': 30.0,
@@ -202,6 +204,22 @@ def compute_salary_rank_score(salary, all_salaries_in_group):
     return rank / len(sorted_sals)   # higher salary → higher score
 
 
+def compute_proj_pts_score(proj_dk_pts, all_proj_pts_in_group):
+    """
+    Raw projection magnitude — captures star power / name recognition.
+    Highest-projected player in the group → 1.0, lowest → ~0.0.
+    Players with high projections get outsized ownership regardless of value.
+    """
+    pts = safe(proj_dk_pts, 0)
+    if not all_proj_pts_in_group or pts <= 0:
+        return 0.0
+    max_pts = max(all_proj_pts_in_group)
+    min_pts = min(all_proj_pts_in_group)
+    if max_pts <= min_pts:
+        return 0.5
+    return clip((pts - min_pts) / (max_pts - min_pts), 0.0, 1.0)
+
+
 def compute_bat_order_score(batting_order, is_pitcher):
     """Batting order signal. Pitchers always return 1.0 (not applicable)."""
     if is_pitcher:
@@ -256,13 +274,14 @@ def compute_weather_score(weather_mult, precip_pct, wind_dir, is_outdoor):
 
 # ── Core scoring ───────────────────────────────────────────────────────────────
 
-def compute_raw_score(row, salary_group_sals):
+def compute_raw_score(row, salary_group_sals, proj_pts_group):
     """
     Weighted sum of all signals + confirmation modifier.
     All component scores are in [0, 1] before weighting.
     """
     v_val   = compute_value_score(row.get('proj_dk_pts'), row.get('salary'))
     v_sal   = compute_salary_rank_score(row.get('salary'), salary_group_sals)
+    v_proj  = compute_proj_pts_score(row.get('proj_dk_pts'), proj_pts_group)
     v_order = compute_bat_order_score(row.get('batting_order'), row.get('is_pitcher'))
     v_vegas = compute_vegas_score(row.get('vegas_mult'))
     v_park  = compute_park_score(row.get('park_mult'))
@@ -274,6 +293,7 @@ def compute_raw_score(row, salary_group_sals):
 
     raw = (W_VALUE       * v_val   +
            W_SALARY_RANK * v_sal   +
+           W_PROJ_PTS    * v_proj  +
            W_BAT_ORDER   * v_order +
            W_VEGAS        * v_vegas +
            W_PARK         * v_park  +
@@ -324,13 +344,10 @@ def normalize_position_group(raw_scores, pos_key):
     dynamic_max = min(avg_target * 2.0, 90.0)
     max_own     = max(base_max, dynamic_max)
 
-    # Dynamic temperature: SOFTMAX_TEMP is calibrated for ~10 players.
-    # With fewer players (e.g. 3 SPs on a 2-game slate) we need a sharper
-    # distribution so scores actually differentiate — otherwise all 3 players
-    # cluster near the 66.7% average (2 slots / 3 players).
-    # Scale: temp = SOFTMAX_TEMP × sqrt(n / 10), floored at 0.8, capped at SOFTMAX_TEMP.
-    # Small pool: n=3 → ×0.55 → temp≈1.2 (sharp). Large pool: n≥10 → unchanged.
-    temp = min(SOFTMAX_TEMP, max(0.8, SOFTMAX_TEMP * math.sqrt(n / 10.0)))
+    # Position-specific temperature: SPs need very sharp distribution (top SP dominates),
+    # hitters need moderately sharp. Scale down for small pools.
+    base_temp = SOFTMAX_TEMP_SP if pos_key == 'SP' else SOFTMAX_TEMP_HITTER
+    temp = min(base_temp, max(0.5, base_temp * math.sqrt(n / 10.0)))
 
     shares     = softmax(raw_scores, temperature=temp)
     ownerships = [s * pool for s in shares]
@@ -608,7 +625,8 @@ def run_single_slate(target_date, slate_filter=None, game_pk_filter=None):
             continue
 
         group_sals = [safe(r.get('salary'), 0) for r in group]
-        raw_scores = [compute_raw_score(r, group_sals) for r in group]
+        group_proj = [safe(r.get('proj_dk_pts'), 0) for r in group]
+        raw_scores = [compute_raw_score(r, group_sals, group_proj) for r in group]
         ownerships = normalize_position_group(raw_scores, pos_key)
 
         for row, raw, own in zip(group, raw_scores, ownerships):
