@@ -4327,11 +4327,17 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <button class="bld-btn" style="background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.35);color:#a78bfa;" onclick="simulateContest()">Sim Contest</button>
       <label style="font-size:10px;color:var(--muted);">Select</label>
       <input type="number" id="pool-select-n" value="20" min="1" max="150" style="width:40px;font-size:11px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;text-align:center;">
-      <div style="display:flex;align-items:center;gap:3px;" title="Quality favors high-projection lineups. Coverage favors diverse scenario coverage.">
+      <select id="portfolio-strategy" style="font-size:10px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;" onchange="setPortfolioStrategy(this.value)">
+        <option value="balanced">Balanced GPP</option>
+        <option value="firstPlace">First Place</option>
+        <option value="contrarian">Contrarian</option>
+        <option value="cash">Cash / Consistency</option>
+        <option value="maxCorr">Max Correlation</option>
+      </select>
+      <div id="strategy-controls" style="display:flex;align-items:center;gap:3px;">
         <span style="font-size:8px;color:var(--muted);">Quality</span>
-        <input type="range" id="pool-coverage-wt" min="0" max="100" value="50" style="width:60px;height:12px;" oninput="optoSettings.coverageWt=+this.value;document.getElementById('pool-cov-label').textContent=this.value+'%';saveSettings();">
+        <input type="range" id="pool-coverage-wt" min="0" max="100" value="50" style="width:60px;height:12px;" oninput="optoSettings.coverageWt=+this.value;saveSettings();">
         <span style="font-size:8px;color:var(--muted);">Cover</span>
-        <span id="pool-cov-label" style="font-size:9px;font-weight:700;color:var(--text2);min-width:24px;">50%</span>
       </div>
       <button class="bld-btn" style="background:rgba(99,179,237,.1);border-color:rgba(99,179,237,.35);color:#63b3ed;" onclick="addOptimalPortfolio()">Build Portfolio</button>
     </div>
@@ -8700,6 +8706,28 @@ function finalizeContest(stats, simWinners, simTop1, numSims, contestDb, payoutT
   renderPoolExposure();
 }
 
+// ── PORTFOLIO STRATEGIES ──────────────────────────────────────────────────────
+
+function setPortfolioStrategy(name) {
+  optoSettings.portfolioStrategy = name;
+  const ctrl = document.getElementById('strategy-controls');
+  if (!ctrl) return;
+  if (name === 'balanced') {
+    ctrl.innerHTML = `<span style="font-size:8px;color:var(--muted);">Quality</span>
+      <input type="range" id="pool-coverage-wt" min="0" max="100" value="${optoSettings.coverageWt||50}" style="width:60px;height:12px;" oninput="optoSettings.coverageWt=+this.value;saveSettings();">
+      <span style="font-size:8px;color:var(--muted);">Cover</span>`;
+  } else if (name === 'contrarian') {
+    ctrl.innerHTML = `<span style="font-size:8px;color:var(--muted);">Max Own%</span>
+      <input type="number" value="${optoSettings.maxLineupOwn||120}" min="30" max="300" style="width:45px;" class="opto-input" oninput="optoSettings.maxLineupOwn=+this.value;saveSettings();">`;
+  } else if (name === 'maxCorr') {
+    ctrl.innerHTML = `<span style="font-size:8px;color:var(--muted);">Stack Div</span>
+      <input type="range" min="0" max="100" value="${optoSettings.stackDivWt||50}" style="width:60px;height:12px;" oninput="optoSettings.stackDivWt=+this.value;saveSettings();">`;
+  } else {
+    ctrl.innerHTML = '';
+  }
+  saveSettings();
+}
+
 function selectOptimalPortfolio(k) {
   if (!_contestSimResults) { showToast('Run contest sim first'); return []; }
   const { simWinners, simTop1, numSims } = _contestSimResults;
@@ -8707,89 +8735,113 @@ function selectOptimalPortfolio(k) {
   const n = pool.length;
   if (!n) return [];
 
-  // Quality vs Coverage blend (0 = pure quality, 100 = pure coverage)
-  const coverageWt = (optoSettings.coverageWt ?? 50) / 100; // 0.0 – 1.0
-  const qualityWt = 1 - coverageWt;
+  const strat = optoSettings.portfolioStrategy || 'balanced';
 
   // Map filtered indices to global indices
   const globalIdx = pool.map(c => _poolCandidates.indexOf(c));
-  // Pre-build reverse lookup for speed
   const globalToFiltered = new Map();
   globalIdx.forEach((gi, fi) => globalToFiltered.set(gi, fi));
 
-  // Normalize projection scores for quality weighting
-  const maxProj = Math.max(...pool.map(c => c.metrics.proj));
+  // Pre-compute normalization maxes
+  const norm = (arr) => Math.max(...arr) || 1;
+  const maxProj = norm(pool.map(c => c.metrics.proj));
+  const maxCeil = norm(pool.map(c => c.metrics.ceil));
+  const maxFloor = norm(pool.map(c => c.metrics.floor));
+  const maxCorr = norm(pool.map(c => c.metrics.corrScore || 0));
+  const maxLev = norm(pool.map(c => c.metrics.leverage || 0));
+  const maxWinPct = norm(pool.map(c => c.contest?.winPct || 0));
+  const maxCashPct = norm(pool.map(c => c.contest?.cashPct || 0));
+  const maxBoomPct = norm(pool.map(c => c.contest?.boomPct || 0));
+  const maxWinUpside = norm(pool.map(c => c.contest?.winUpside || 0));
 
-  const covered = new Uint8Array(numSims); // 1 = a portfolio lineup finished top-1% in this sim
+  const covered = new Uint8Array(numSims);
   const selected = [];
   const selectedGlobal = new Set();
-  const appearCount = {}; // player_id → count in selected
-  const stackAppear = {}; // "TEAM_SIZE" → count in selected
+  const appearCount = {};
+  const stackAppear = {};
+  const stackTeamFreq = {}; // team → count (for maxCorr diversity)
   const hitterSlotKeys = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
 
   function wouldViolateMax(candidate) {
-    // Player max check
     for (const pid of candidate.metrics.pids) {
       const tgt = _poolExpTargets[pid];
       if (tgt?.max != null) {
-        const maxCount = Math.max(1, Math.ceil(k * tgt.max / 100));
-        if ((appearCount[pid] || 0) >= maxCount) return true;
+        if ((appearCount[pid] || 0) >= Math.max(1, Math.ceil(k * tgt.max / 100))) return true;
       }
     }
-    // Stack max check
-    const teamCounts = {};
-    hitterSlotKeys.forEach(key => { const p = candidate.lineup[key]; if (p?.team) teamCounts[p.team] = (teamCounts[p.team]||0)+1; });
-    for (const [team, cnt] of Object.entries(teamCounts)) {
+    const tc = {};
+    hitterSlotKeys.forEach(key => { const p = candidate.lineup[key]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
+    for (const [team, cnt] of Object.entries(tc)) {
       for (let s = 2; s <= cnt; s++) {
-        const capKey = `${team}_${s}`;
-        const tgt = _poolExpTargets[capKey];
-        if (tgt?.max != null) {
-          const maxCount = Math.max(1, Math.ceil(k * tgt.max / 100));
-          if ((stackAppear[capKey] || 0) >= maxCount) return true;
-        }
+        const tgt = _poolExpTargets[`${team}_${s}`];
+        if (tgt?.max != null && (stackAppear[`${team}_${s}`] || 0) >= Math.max(1, Math.ceil(k * tgt.max / 100))) return true;
       }
     }
     return false;
   }
 
   function needsMinBoost(candidate) {
-    // Check if any player in this lineup is BELOW their min target
     for (const pid of candidate.metrics.pids) {
       const tgt = _poolExpTargets[pid];
-      if (tgt?.min != null) {
-        const minCount = Math.ceil(k * tgt.min / 100);
-        if ((appearCount[pid] || 0) < minCount) return true;
-      }
+      if (tgt?.min != null && (appearCount[pid] || 0) < Math.ceil(k * tgt.min / 100)) return true;
     }
     return false;
   }
 
+  // Strategy-specific settings
+  const coverageWt = (optoSettings.coverageWt ?? 50) / 100;
+  const maxLineupOwn = optoSettings.maxLineupOwn || 120;
+  const stackDivWt = (optoSettings.stackDivWt ?? 50) / 100;
+
   for (let pick = 0; pick < k && pick < n; pick++) {
-    // Count uncovered top-1% appearances per candidate (broader than wins-only)
+    // Compute uncovered coverage per candidate
     const uncoveredTop1 = new Float64Array(n);
+    const uncoveredWins = strat === 'firstPlace' ? new Float64Array(n) : null;
     for (let s = 0; s < numSims; s++) {
       if (covered[s]) continue;
+      // Top-1% coverage (balanced, contrarian, maxCorr)
       const top1Set = simTop1[s];
-      if (!top1Set) continue;
-      for (const gi of top1Set) {
-        const fi = globalToFiltered.get(gi);
-        if (fi !== undefined) uncoveredTop1[fi] += 1;
-      }
+      if (top1Set) { for (const gi of top1Set) { const fi = globalToFiltered.get(gi); if (fi !== undefined) uncoveredTop1[fi]++; } }
+      // Win-only coverage (firstPlace)
+      if (uncoveredWins) { const fi = globalToFiltered.get(simWinners[s]); if (fi !== undefined) uncoveredWins[fi]++; }
     }
+    const covNorm = numSims * 0.01 || 1;
 
     let bestIdx = -1, bestScore = -Infinity;
     for (let i = 0; i < n; i++) {
       if (selectedGlobal.has(globalIdx[i])) continue;
       if (wouldViolateMax(pool[i])) continue;
 
-      // Blend: quality (projection-based) + coverage (uncovered top-1%)
-      const qualityScore = pool[i].metrics.proj / (maxProj || 1);
-      const coverageScore = uncoveredTop1[i] / (numSims * 0.01 || 1); // normalize
-      let score = qualityWt * qualityScore + coverageWt * coverageScore;
+      const c = pool[i];
+      const m = c.metrics;
+      const ct = c.contest || {};
+      let score = 0;
 
-      // Boost lineups that help meet min exposure targets
-      if (needsMinBoost(pool[i])) score *= 1.3;
+      if (strat === 'balanced') {
+        score = (1 - coverageWt) * (m.proj / maxProj) + coverageWt * (uncoveredTop1[i] / covNorm);
 
+      } else if (strat === 'firstPlace') {
+        score = 0.30 * (m.ceil / maxCeil) + 0.20 * ((ct.winPct||0) / maxWinPct) + 0.50 * ((uncoveredWins?.[i]||0) / covNorm);
+
+      } else if (strat === 'contrarian') {
+        if ((m.totalOwn || 0) > maxLineupOwn) continue; // hard filter
+        score = 0.35 * ((m.leverage||0) / maxLev) + 0.25 * ((ct.winUpside||0) / maxWinUpside) + 0.15 * (m.ceil / maxCeil) + 0.25 * (uncoveredTop1[i] / covNorm);
+
+      } else if (strat === 'cash') {
+        // Overlap penalty for diversity (no coverage bitmap)
+        let overlap = 0;
+        for (const pid of m.pids) { if (appearCount[pid]) overlap++; }
+        const overlapPen = Math.max(0.5, 1 - 0.03 * overlap);
+        score = (0.30 * ((m.floor||0) / maxFloor) + 0.30 * ((ct.cashPct||0) / maxCashPct) + 0.25 * (m.proj / maxProj) + 0.15 * (1 - (ct.bustPct||50)/100)) * overlapPen;
+
+      } else if (strat === 'maxCorr') {
+        const mainTeam = (m.stack || '').split(' ')[0];
+        const teamN = stackTeamFreq[mainTeam] || 0;
+        const stackPen = 1 / (1 + stackDivWt * 0.3 * teamN);
+        score = (0.40 * ((m.corrScore||0) / maxCorr) + 0.25 * (m.proj / maxProj) + 0.15 * ((ct.boomPct||0) / maxBoomPct) + 0.20 * (uncoveredTop1[i] / covNorm)) * stackPen;
+      }
+
+      if (needsMinBoost(c)) score *= 1.3;
       if (score > bestScore) { bestScore = score; bestIdx = i; }
     }
 
@@ -8797,21 +8849,20 @@ function selectOptimalPortfolio(k) {
     selected.push(globalIdx[bestIdx]);
     selectedGlobal.add(globalIdx[bestIdx]);
 
-    // Track player exposure
-    for (const pid of pool[bestIdx].metrics.pids) {
-      appearCount[pid] = (appearCount[pid] || 0) + 1;
-    }
-
-    // Track stack exposure
-    const teamCounts = {};
-    hitterSlotKeys.forEach(key => { const p = pool[bestIdx].lineup[key]; if (p?.team) teamCounts[p.team] = (teamCounts[p.team]||0)+1; });
-    Object.entries(teamCounts).forEach(([team, cnt]) => {
+    // Track exposures
+    for (const pid of pool[bestIdx].metrics.pids) { appearCount[pid] = (appearCount[pid] || 0) + 1; }
+    const tc = {};
+    hitterSlotKeys.forEach(key => { const p = pool[bestIdx].lineup[key]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
+    Object.entries(tc).forEach(([team, cnt]) => {
       for (let s = 2; s <= cnt; s++) { stackAppear[`${team}_${s}`] = (stackAppear[`${team}_${s}`]||0)+1; }
+      stackTeamFreq[team] = (stackTeamFreq[team]||0) + 1;
     });
 
-    // Mark sims as covered where this lineup was in top-1%
-    for (let s = 0; s < numSims; s++) {
-      if (simTop1[s]?.has(globalIdx[bestIdx])) covered[s] = 1;
+    // Mark coverage (firstPlace uses wins, others use top-1%)
+    if (strat === 'firstPlace') {
+      for (let s = 0; s < numSims; s++) { if (simWinners[s] === globalIdx[bestIdx]) covered[s] = 1; }
+    } else if (strat !== 'cash') {
+      for (let s = 0; s < numSims; s++) { if (simTop1[s]?.has(globalIdx[bestIdx])) covered[s] = 1; }
     }
   }
 
@@ -8824,7 +8875,9 @@ function addOptimalPortfolio() {
   if (!indices.length) { showToast('No lineups selected'); return; }
 
   const selected = indices.map(i => _poolCandidates[i]);
-  const newBuild = { id: 'build_' + Date.now(), name: `Optimal Portfolio (${selected.length})`, ts: Date.now(), lineups: [] };
+  const stratNames = {balanced:'Balanced GPP',firstPlace:'First Place',contrarian:'Contrarian',cash:'Cash',maxCorr:'Max Correlation'};
+  const stratLabel = stratNames[optoSettings.portfolioStrategy||'balanced'] || 'Portfolio';
+  const newBuild = { id: 'build_' + Date.now(), name: `${stratLabel} (${selected.length})`, ts: Date.now(), lineups: [] };
   const allBuilds = getBuilds();
   allBuilds.push(newBuild);
   saveBuilds(allBuilds);
@@ -8852,7 +8905,7 @@ function addOptimalPortfolio() {
     }
     return (covered.size / _contestSimResults.numSims * 100).toFixed(1);
   })() : '?';
-  showToast(`${selected.length} portfolio lineups added! Coverage: ${coveredPct}% of winning sims`);
+  showToast(`${stratLabel}: ${selected.length} lineups | Win coverage: ${coveredPct}%`);
 }
 
 function setPoolSort(col) {
