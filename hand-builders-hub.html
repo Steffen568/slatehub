@@ -4233,6 +4233,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <div class="sal-bar-wrap"><div class="sal-bar-fill" id="sal-bar" style="width:0%;background:var(--hi);"></div></div>
       <div class="lateswap-sal-breakdown" id="lateswap-sal-info"></div>
       <div class="builder-actions">
+        <label class="bld-btn" style="cursor:pointer;background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.35);color:#fbbf24;" title="Import DK entries CSV — loads your contests for sim targeting">
+          DK CSV <input type="file" id="dk-csv-input-main" accept=".csv" style="display:none" onchange="importDKTemplate(this.files[0])">
+        </label>
         <div class="opto-toggle-group" id="mode-toggle" style="margin-right:4px;">
           <button class="opto-tog-btn active" id="mode-btn-opto" onclick="setOptoMode(false)" title="Standard optimizer with noise-based diversity">Opto</button>
           <button class="opto-tog-btn" id="mode-btn-sim" onclick="setOptoMode(true)" title="Monte Carlo sim pool → contest sim → portfolio optimizer" style="position:relative;">Sim<span style="position:absolute;top:-4px;right:-4px;font-size:7px;background:#a78bfa;color:#fff;padding:0 3px;border-radius:4px;font-weight:800;line-height:1.4;">NEW</span></button>
@@ -4245,6 +4248,18 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     </div>
   </section>
 
+</div>
+
+<!-- ── CONTEST SUMMARY BAR (visible after DK CSV import) ──────────────────── -->
+<div id="contest-summary-bar" style="display:none;margin:8px 0;padding:8px 12px;background:var(--s2);border:1px solid rgba(167,139,250,.25);border-radius:6px;">
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <span style="font-size:11px;font-weight:700;color:#a78bfa;">Contests</span>
+    <span id="contest-summary-text" style="font-size:10px;color:var(--text2);"></span>
+    <select id="contest-picker-main" style="font-size:10px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;max-width:320px;margin-left:auto;" title="Select contest for sim targeting">
+      <option value="">-- select contest for sim --</option>
+    </select>
+  </div>
+  <div id="contest-summary-list" style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;"></div>
 </div>
 
 <!-- ── LINEUPS SECTION ─────────────────────────────────────────────────────── -->
@@ -10422,6 +10437,7 @@ function importDKTemplate(file) {
     dkDraftgroupMap = classicIds;
     showToast(`DK CSV imported: ${contests.length} contests, ${entries.length} entries`);
     renderContestDash();
+    populateContestPicker(); // show contests immediately (payout data loads async)
 
     // Fetch enriched contest data (payout structures) from dk_contests table
     const cids = contests.map(c => +c.contestId).filter(Boolean);
@@ -10445,19 +10461,58 @@ function importDKTemplate(file) {
 }
 
 function populateContestPicker() {
-  const sel = document.getElementById('contest-picker');
-  if (!sel) return;
   const contests = _dkTemplate?.contests || [];
-  sel.style.display = contests.length ? '' : 'none';
-  sel.innerHTML = '<option value="">-- select contest --</option>' +
-    contests.map(c => {
+  if (!contests.length) return;
+
+  // Build options HTML (shared between both pickers)
+  const optsHtml = contests.map(c => {
+    const db = _dkContestData[+c.contestId];
+    const label = db
+      ? `${c.contestName.slice(0,40)} ($${db.entry_fee} | ${db.max_entries?.toLocaleString()} max | ${db.payout_pct}% paid)`
+      : `${c.contestName.slice(0,50)} (no payout data)`;
+    return `<option value="${c.contestId}">${label}</option>`;
+  }).join('');
+
+  // Pool section picker
+  const sel = document.getElementById('contest-picker');
+  if (sel) {
+    sel.style.display = '';
+    sel.innerHTML = '<option value="">-- select contest --</option>' + optsHtml;
+    sel.onchange = function() {
+      _activeContestId = this.value || null;
+      // Sync the other picker
+      const other = document.getElementById('contest-picker-main');
+      if (other) other.value = this.value;
+    };
+  }
+
+  // Main summary bar picker
+  const sel2 = document.getElementById('contest-picker-main');
+  if (sel2) {
+    sel2.innerHTML = '<option value="">-- select contest for sim --</option>' + optsHtml;
+    sel2.onchange = function() {
+      _activeContestId = this.value || null;
+      if (sel) sel.value = this.value;
+    };
+  }
+
+  // Summary bar
+  const bar = document.getElementById('contest-summary-bar');
+  const summaryText = document.getElementById('contest-summary-text');
+  const summaryList = document.getElementById('contest-summary-list');
+  if (bar) bar.style.display = '';
+  if (summaryText) {
+    const totalEntries = contests.reduce((s, c) => s + (c.entryCount || 0), 0);
+    const totalFee = contests.reduce((s, c) => s + parseFloat(c.entryFee || 0) * (c.entryCount || 0), 0);
+    summaryText.textContent = `${contests.length} contest${contests.length>1?'s':''} | ${totalEntries} entries | $${totalFee.toFixed(0)} total`;
+  }
+  if (summaryList) {
+    summaryList.innerHTML = contests.map(c => {
       const db = _dkContestData[+c.contestId];
-      const label = db
-        ? `${c.contestName.slice(0,40)} ($${db.entry_fee} | ${db.max_entries?.toLocaleString()} entries | ${db.payout_pct}% paid)`
-        : `${c.contestName.slice(0,50)} (no payout data)`;
-      return `<option value="${c.contestId}">${label}</option>`;
+      const paidBadge = db ? `<span style="color:var(--muted);"> ${db.payout_pct}% paid</span>` : '';
+      return `<span style="font-size:9px;padding:2px 6px;border-radius:3px;background:var(--s3);border:1px solid var(--border);color:var(--text2);">${c.contestName.slice(0,35)} <span style="color:#fbbf24;">${c.entryCount}x</span>${paidBadge}</span>`;
     }).join('');
-  sel.onchange = function() { _activeContestId = this.value || null; };
+  }
 }
 
 function renderContestDash() {
