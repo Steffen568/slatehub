@@ -8440,8 +8440,8 @@ function simulateContest() {
   const top10Cutoff = Math.max(1, Math.ceil(n * 0.10));
   const cashCutoff = Math.max(1, Math.ceil(n * (payoutPct / 100)));
 
-  // Generate opponent field for realistic contest simulation
-  const NUM_OPPONENTS = 1000;
+  // Generate opponent field — match pool size for stable metrics
+  const NUM_OPPONENTS = Math.max(1500, n);
   showPoolLoading('Generating opponent field...');
   const field = generateOpponentField(NUM_OPPONENTS, contestDb);
   const oppPids = field?.oppPids || [];
