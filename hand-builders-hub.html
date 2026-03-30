@@ -10915,22 +10915,33 @@ function importDKTemplate(file) {
           contestMap[contestId].entryCount++;
         }
       }
-      const name = (r[13] || '').trim();
-      const dkId = (r[14] || '').trim();
+      // Parse pool section (columns 15+): RosterPos, Name+ID, Name, ID
+      const poolName = (r[17] || '').trim();
+      const poolDkId = (r[18] || '').trim();
       const rosterPos = (r[15] || '').trim();
-      if (name && dkId && /^\d+$/.test(dkId)) {
-        const nName = normName(name);
-        const lName = name.toLowerCase();
+      if (poolName && poolDkId && /^\d+$/.test(poolDkId)) {
+        const nName = normName(poolName);
+        const lName = poolName.toLowerCase();
         if (rosterPos === 'CPT') {
-          cptIds[nName] = dkId; cptIds[lName] = dkId;
+          cptIds[nName] = poolDkId; cptIds[lName] = poolDkId;
           isSD = true;
         } else if (rosterPos === 'UTIL') {
-          utilIds[nName] = dkId; utilIds[lName] = dkId;
+          utilIds[nName] = poolDkId; utilIds[lName] = poolDkId;
           isSD = true;
         }
-        // Classic positions: P, C, 1B, 2B, 3B, SS, OF — store all by name
-        classicIds[nName] = dkId;
-        classicIds[lName] = dkId;
+        classicIds[nName] = poolDkId;
+        classicIds[lName] = poolDkId;
+      }
+      // Also parse DK IDs from slot columns (4-13): format "Name (DK_ID)"
+      for (let col = 4; col <= 13; col++) {
+        const cell = (r[col] || '').trim();
+        const m = cell.match(/^(.+?)\s*\((\d+)\)$/);
+        if (m) {
+          const slotName = m[1].trim();
+          const slotId = m[2];
+          classicIds[normName(slotName)] = slotId;
+          classicIds[slotName.toLowerCase()] = slotId;
+        }
       }
     }
 
