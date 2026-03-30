@@ -8584,8 +8584,8 @@ function simulateContest() {
   //   lineup. In a 53K GPP, thousands of lineups from other sharp players will
   //   finish above our #1. Estimate: ~10% of the field is at our level or better.
   const fieldMult = Math.max(1, Math.round(fieldSize / n));
-  const sharpPct = 0.10; // ~10% of field is sharp competition above/at our level
-  const fieldOffset = Math.round(fieldSize * sharpPct * 0.5); // half of sharp field is above us on average
+  const sharpPct = 0.02; // ~2% of field is sharp competition above our level
+  const fieldOffset = Math.round(fieldSize * sharpPct); // ~1000 lineups ahead of us in a 53K field
   console.log(`Contest sim: ${n} lineups, fieldMult=${fieldMult}, fieldOffset=${fieldOffset} (${fieldSize.toLocaleString()} field)`);
 
   // Build payout lookup from contest data for ROI calculation
