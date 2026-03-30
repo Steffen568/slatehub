@@ -8936,34 +8936,54 @@ function addOptimalPortfolio() {
 
 function exportPortfolioDK() {
   if (!_portfolioLineups.length) { showToast('Build a portfolio first'); return; }
+  if (!_dkTemplate) { showToast('Upload DK CSV first'); return; }
 
-  // Export in DK upload format: one row per lineup with DK player IDs
-  // Also try dkDraftgroupMap (from late-swap CSV) for draftable-specific IDs
-  const header = 'SP,SP,C,1B,2B,3B,SS,OF,OF,OF';
+  const contestId = _activeContestId;
+  if (!contestId) { showToast('Select a contest from the dropdown'); return; }
+
+  // Get entries for this contest
+  const entries = _dkTemplate.entries.filter(e => String(e.contestId) === String(contestId));
+  if (!entries.length) { showToast('No entries for this contest'); return; }
+
+  // Build the full header from the original DK CSV format
+  const header = 'Entry ID,Contest Name,Contest ID,Entry Fee,SP,SP,C,1B,2B,3B,SS,OF,OF,OF';
   const csvRows = [header];
 
-  for (const c of _portfolioLineups) {
+  // Round-robin portfolio lineups across entries
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const c = _portfolioLineups[i % _portfolioLineups.length];
     const lu = c.lineup;
-    const ids = LINEUP_SLOTS.map(sl => {
+
+    // Format each slot as "Name (DK_ID)" matching DK CSV format
+    const slots = LINEUP_SLOTS.map(sl => {
       const p = lu[sl.key];
       if (!p) return '';
-      // Try draftgroup-specific ID first (from DK CSV), then dk_id (from salary table)
-      return dkDraftgroupMap[normName(p.name)]
-          || dkDraftgroupMap[(p.name||'').toLowerCase()]
-          || p.dk_id || p.player_id || '';
+      const dkId = dkDraftgroupMap[normName(p.name)]
+                || dkDraftgroupMap[(p.name||'').toLowerCase()]
+                || p.dk_id || p.player_id || '';
+      return `${p.name} (${dkId})`;
     });
-    csvRows.push(ids.join(','));
+
+    csvRows.push(`${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},${slots.join(',')}`);
+  }
+
+  // Include unassigned entries from other contests as empty rows
+  for (const entry of _dkTemplate.entries) {
+    if (String(entry.contestId) === String(contestId)) continue;
+    csvRows.push(`${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},,,,,,,,,,`);
   }
 
   const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `SlateHub_portfolio_${new Date().toISOString().slice(0,10)}.csv`;
+  a.download = `DKEntries_${new Date().toISOString().slice(0,10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 
-  showToast(`Exported ${_portfolioLineups.length} lineups with DK IDs`);
+  const contest = _dkTemplate.contests.find(c => String(c.contestId) === String(contestId));
+  showToast(`Exported ${entries.length} entries for ${contest?.contestName?.slice(0,40) || contestId}`);
 }
 
 function setPoolSort(col) {
