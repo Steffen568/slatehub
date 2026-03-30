@@ -7935,7 +7935,7 @@ function generatePool() {
   setTimeout(runBatch, 30);
 }
 
-let _poolCardsShown = 150;
+let _poolCardsShown = Infinity;
 let _poolExpTargets = {};
 let _poolExpPosFilter = 'ALL';
 let _poolExpStackFilter = 0;
@@ -8311,7 +8311,7 @@ function renderPoolExposure() {
 function setPoolFilter(key, val) {
   if (val === '' || val == null) delete _poolFilter[key];
   else _poolFilter[key] = isNaN(+val) ? val : +val;
-  _poolCardsShown = 150;
+  _poolCardsShown = Infinity;
   renderPoolCards();
 }
 
@@ -8858,7 +8858,7 @@ function addOptimalPortfolio() {
 function setPoolSort(col) {
   if (_poolSortCol === col) _poolSortDir *= -1;
   else { _poolSortCol = col; _poolSortDir = -1; }
-  _poolCardsShown = 150;
+  _poolCardsShown = Infinity;
   renderPoolCards();
   renderPoolExposure();
 }
