@@ -8937,19 +8937,22 @@ function addOptimalPortfolio() {
 function exportPortfolioDK() {
   if (!_portfolioLineups.length) { showToast('Build a portfolio first'); return; }
 
-  // Export portfolio lineups as clean CSV with player names and IDs
-  // User can copy/paste into their DK entries CSV
-  const header = 'Lineup,SP1,SP2,C,1B,2B,3B,SS,OF1,OF2,OF3,Salary,Proj';
+  // Export in DK upload format: one row per lineup with DK player IDs
+  // Also try dkDraftgroupMap (from late-swap CSV) for draftable-specific IDs
+  const header = 'SP,SP,C,1B,2B,3B,SS,OF,OF,OF';
   const csvRows = [header];
 
-  for (let i = 0; i < _portfolioLineups.length; i++) {
-    const c = _portfolioLineups[i];
+  for (const c of _portfolioLineups) {
     const lu = c.lineup;
-    const players = LINEUP_SLOTS.map(sl => {
+    const ids = LINEUP_SLOTS.map(sl => {
       const p = lu[sl.key];
-      return p ? (p.name || '?') : '';
+      if (!p) return '';
+      // Try draftgroup-specific ID first (from DK CSV), then dk_id (from salary table)
+      return dkDraftgroupMap[normName(p.name)]
+          || dkDraftgroupMap[(p.name||'').toLowerCase()]
+          || p.dk_id || p.player_id || '';
     });
-    csvRows.push(`${i+1},${players.join(',')},${c.metrics.salary},${c.metrics.proj}`);
+    csvRows.push(ids.join(','));
   }
 
   const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
@@ -8960,7 +8963,7 @@ function exportPortfolioDK() {
   a.click();
   URL.revokeObjectURL(url);
 
-  showToast(`Exported ${_portfolioLineups.length} portfolio lineups`);
+  showToast(`Exported ${_portfolioLineups.length} lineups with DK IDs`);
 }
 
 function setPoolSort(col) {
