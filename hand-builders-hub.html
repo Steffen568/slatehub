@@ -4237,14 +4237,6 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
         <button class="bld-btn" id="ls-export-btn" style="display:none;background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportLateSwapCSV()">Export DK CSV</button>
         <button class="bld-btn primary" onclick="saveLineup()">Save Lineup</button>
         <button class="bld-btn" onclick="clearLineup()">Clear</button>
-        <label class="bld-btn sd-only" style="display:none;background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.35);color:#fbbf24;cursor:pointer;" title="Import DKEntries.csv for export">
-          DK CSV <input type="file" accept=".csv" style="display:none" onchange="importDKTemplate(this.files[0])">
-        </label>
-        <label class="bld-btn" style="cursor:pointer;" title="Upload your DK entries CSV — lineups will be filled in automatically">
-          ↑ DK Template
-          <input type="file" accept=".csv" style="display:none;" onchange="fillDKTemplate(event)">
-        </label>
-        <button class="bld-btn" onclick="exportSavedCSV()" title="Export saved lineups (plain format)">↓ CSV</button>
       </div>
     </div>
   </section>
@@ -4287,6 +4279,28 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
   </div>
 </section>
 
+<!-- ── POOL RESULTS PANEL ──────────────────────────────────────────────────── -->
+<section class="lineups-section" id="pool-section" style="display:none;">
+  <div class="lineups-section-hd">
+    <span class="lineups-section-title">Lineup Pool</span>
+    <span id="pool-count" style="font-size:11px;color:var(--muted);margin-left:8px;"></span>
+    <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+      <label style="font-size:10px;color:var(--muted);">Select top</label>
+      <input type="number" id="pool-select-n" value="20" min="1" max="150" style="width:46px;font-size:11px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;text-align:center;">
+      <button class="bld-btn" style="background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="addPoolToBuilds()">Add to Build</button>
+    </div>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:10px;">
+    <label style="color:var(--muted);">Filters:</label>
+    <input type="number" placeholder="Min Proj" style="width:60px;" class="opto-input" oninput="setPoolFilter('minProj',this.value)">
+    <input type="number" placeholder="Min Ceil" style="width:60px;" class="opto-input" oninput="setPoolFilter('minCeil',this.value)">
+    <input type="number" placeholder="Min Floor" style="width:60px;" class="opto-input" oninput="setPoolFilter('minFloor',this.value)">
+    <input type="number" placeholder="Max Games" style="width:60px;" class="opto-input" oninput="setPoolFilter('maxGames',this.value)">
+    <input type="text" placeholder="Stack (e.g. ARI)" style="width:60px;" class="opto-input" oninput="setPoolFilter('stack',this.value)">
+  </div>
+  <div id="pool-results" style="overflow-y:auto;max-height:400px;"></div>
+</section>
+
 <!-- ── OPTIMIZER SETTINGS DRAWER ──────────────────────────────────────────── -->
 <div class="opto-backdrop" id="opto-backdrop" onclick="toggleOptoPanel()"></div>
 <div class="opto-panel" id="opto-panel">
@@ -4302,7 +4316,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <div class="opto-row"><label>Min Salary</label><input class="opto-input" id="opto-minsal" type="number" step="100" value="48000" oninput="optoSettings.minSalary=+this.value;saveSettings()"></div>
       <div class="opto-row"><label>Max Salary</label><input class="opto-input" id="opto-maxsal" type="number" step="100" value="50000" oninput="optoSalaryCap=+this.value;saveSettings()"></div>
       <div class="opto-row"><label>Min Unique</label><input class="opto-input" id="opto-unique" type="number" min="0" max="8" value="3" oninput="optoSettings.minUnique=+this.value;saveSettings()"></div>
-      <div class="opto-row"><label>Randomness %</label><input class="opto-input" id="opto-randpct" type="number" min="0" max="30" value="10" title="Adds ±N% noise to projections — produces diverse lineups quickly. 0=off (exhaustive), 5-15=recommended for 20+ lineups" oninput="optoSettings.randPct=+this.value;saveSettings()"></div>
+      <div class="opto-row"><label>Mode</label><select class="opto-input" id="opto-mode" style="width:80px;" onchange="optoSettings.poolMode=(this.value==='pool');document.getElementById('opto-randpct-row').style.display=this.value==='pool'?'none':'';document.getElementById('opto-poolsize-row').style.display=this.value==='pool'?'':'none';saveSettings()"><option value="noise">Noise</option><option value="pool">Pool</option></select></div>
+      <div class="opto-row" id="opto-randpct-row"><label>Randomness %</label><input class="opto-input" id="opto-randpct" type="number" min="0" max="30" value="10" title="Adds ±N% noise to projections — produces diverse lineups quickly. 0=off (exhaustive), 5-15=recommended for 20+ lineups" oninput="optoSettings.randPct=+this.value;saveSettings()"></div>
+      <div class="opto-row" id="opto-poolsize-row" style="display:none"><label>Pool Size</label><input class="opto-input" id="opto-poolsize" type="number" min="500" max="3000" step="100" value="2000" title="Number of simulations to run" oninput="optoSettings.poolSize=+this.value;saveSettings()"></div>
       <div class="opto-row"><label>Hitter Max Exp%</label><input class="opto-input" id="opto-expmax-hit" type="number" min="1" max="100" value="100" oninput="expHitterMax=+this.value;saveSettings()"></div>
       <div class="opto-row classic-only"><label>Pitcher Max Exp%</label><input class="opto-input" id="opto-expmax-pit" type="number" min="1" max="100" value="100" oninput="expPitcherMax=+this.value;saveSettings()"></div>
       <div class="opto-row sd-only" style="display:none"><label>CPT Max Exp%</label><input class="opto-input" id="opto-cpt-max" type="number" min="1" max="100" value="35" oninput="expCptMax=+this.value;saveSettings()" title="Max % of lineups any player can appear as Captain"></div>
@@ -4646,6 +4662,8 @@ const optoSettings = {
   ],
   teamStacks: [],   // [{ team:'ATL', role:'main'|'sub', exposure:40 }]
   blockedMainTeams: [],  // teams excluded from main stack but still in pool/sub-stacks
+  poolMode: false,       // false = noise mode, true = pool generation mode
+  poolSize: 2000,        // number of sims for pool generation
   teamOverrides: {},
 };
 
@@ -4663,6 +4681,8 @@ function saveSettings() {
     stackRules:   optoSettings.stackRules,
     teamStacks:   optoSettings.teamStacks,
     blockedMainTeams: optoSettings.blockedMainTeams,
+    poolMode: optoSettings.poolMode,
+    poolSize: optoSettings.poolSize,
     expHitterMax,
     expPitcherMax,
     expCptMax,
@@ -4693,6 +4713,8 @@ function restoreSettings() {
     if (s.stackRules)    optoSettings.stackRules  = s.stackRules;
     if (s.teamStacks)    optoSettings.teamStacks  = s.teamStacks;
     if (s.blockedMainTeams) optoSettings.blockedMainTeams = s.blockedMainTeams;
+    if (s.poolMode != null) { optoSettings.poolMode = s.poolMode; const el = document.getElementById('opto-mode'); if (el) { el.value = s.poolMode ? 'pool' : 'noise'; document.getElementById('opto-randpct-row').style.display = s.poolMode ? 'none' : ''; document.getElementById('opto-poolsize-row').style.display = s.poolMode ? '' : 'none'; } }
+    if (s.poolSize != null) { optoSettings.poolSize = s.poolSize; const el = document.getElementById('opto-poolsize'); if (el) el.value = s.poolSize; }
     if (s.projOverrides) projOverrides = s.projOverrides;
     if (s.projBoosts)    projBoosts    = s.projBoosts;
     if (s.expTargets)    expTargets    = s.expTargets;
@@ -7454,9 +7476,356 @@ function optoDebug() {
   console.groupEnd();
 }
 
+// ── POOL GENERATOR (Monte Carlo Sim) ─────────────────────────────────────────
+
+function boxMullerNormal() {
+  let u, v, s;
+  do { u = Math.random()*2-1; v = Math.random()*2-1; s = u*u+v*v; } while (s >= 1 || s === 0);
+  return u * Math.sqrt(-2 * Math.log(s) / s);
+}
+
+function buildSimParams(allElig) {
+  const H_W_GAME = 0.387, H_W_TEAM = 0.447, H_W_INDIV = 0.806;
+  const P_W_GAME = -0.30, P_W_TEAM = 0.15, P_W_INDIV = 0.94;
+  const params = new Map();
+  for (const p of allElig) {
+    const pid = p.player_id;
+    const mean = projOverrides[pid] ?? p.proj_dk_pts ?? 0;
+    const floor = p.proj_floor, ceil = p.proj_ceiling;
+    let sd = (floor != null && ceil != null && ceil > floor) ? (ceil - floor) / 3.3 : Math.abs(mean) * 0.20;
+    sd = Math.max(sd, 0.5);
+    const isPit = optoIsPitcher(p);
+    params.set(pid, {
+      mean, sd,
+      wGame: isPit ? P_W_GAME : H_W_GAME,
+      wTeam: isPit ? P_W_TEAM : H_W_TEAM,
+      wIndiv: isPit ? P_W_INDIV : H_W_INDIV,
+      gamePk: p.game_pk, teamKey: optoTeamKey(p), isPitcher: isPit
+    });
+  }
+  return params;
+}
+
+function sampleSimProjections(simParams, gameKeys, teamKeys) {
+  const gameFactor = new Map();
+  for (const gk of gameKeys) gameFactor.set(gk, boxMullerNormal());
+  const teamFactor = new Map();
+  for (const tk of teamKeys) teamFactor.set(tk, boxMullerNormal());
+  const simProj = new Map();
+  for (const [pid, sp] of simParams) {
+    const zGame = gameFactor.get(sp.gamePk) ?? 0;
+    const zTeam = teamFactor.get(sp.teamKey) ?? 0;
+    const zPlayer = boxMullerNormal();
+    const noise = sp.wGame * zGame + sp.wTeam * zTeam + sp.wIndiv * zPlayer;
+    simProj.set(pid, Math.max(0, sp.mean + sp.sd * noise));
+  }
+  return simProj;
+}
+
+function simSolveWithStacks(allElig, rule, simProj, stackAppearCount, totalN) {
+  const eligById = new Map(allElig.map(p => [p.player_id, p]));
+
+  // Rank teams by SIMULATED top-5 score
+  const allTeams = [...new Set(allHitters.filter(h => !isExcluded(h)).map(h => optoTeamKey(h)).filter(Boolean))];
+  const teamSimScores = {};
+  for (const t of allTeams) {
+    teamSimScores[t] = allHitters.filter(h => optoTeamKey(h)===t && !isExcluded(h))
+      .map(h => simProj.get(h.player_id) ?? 0).sort((a,b) => b-a).slice(0,5).reduce((s,v) => s+v, 0);
+  }
+  const rankedTeams = [...allTeams].sort((a,b) => (teamSimScores[b]||0) - (teamSimScores[a]||0));
+
+  const blockedMain = new Set(optoSettings.blockedMainTeams || []);
+  const cappedStackTeams = new Set();
+  Object.entries(stackExpCaps).forEach(([key, capPct]) => {
+    const parts = key.split('_'); const size = +parts[parts.length-1]; const team = parts.slice(0,-1).join('_');
+    if (size <= rule.primarySize) {
+      const maxCount = Math.max(1, Math.ceil(totalN * capPct / 100));
+      if ((stackAppearCount[key]||0) >= maxCount) cappedStackTeams.add(team);
+    }
+  });
+
+  const mainPrefs = optoSettings.teamStacks.filter(ts => ts.role==='main').map(ts => ts.team);
+  const mainCandidates = (mainPrefs.length > 0 ? mainPrefs : rankedTeams.filter(t =>
+    allHitters.filter(h => optoTeamKey(h)===t && !isExcluded(h)).length >= rule.primarySize
+  )).filter(t => !cappedStackTeams.has(t) && !blockedMain.has(t));
+
+  const windows = optoStackWindows(rule);
+  const subPrefs = optoSettings.teamStacks.filter(ts => ts.role==='sub').map(ts => ts.team);
+
+  // Pick top 3 sim-ranked teams to try (not all — keeps speed manageable)
+  const tryTeams = mainCandidates.slice(0, 3);
+
+  for (const mainTeam of tryTeams) {
+    const win = windows[Math.floor(Math.random() * windows.length)];
+    const teamHitters = allHitters.filter(h => optoTeamKey(h)===mainTeam && !isExcluded(h));
+    const mainPlayerIds = win.length === 0
+      ? teamHitters.map(h => h.player_id)
+      : teamHitters.filter(h => h.batting_order != null && win.includes(h.batting_order)).map(h => h.player_id);
+    if (mainPlayerIds.length < rule.primarySize) continue;
+
+    const subCandidates = rule.subSize === 0 ? [null]
+      : (subPrefs.length > 0 ? subPrefs : rankedTeams).filter(t => t !== mainTeam).slice(0,3);
+    const subTeam = subCandidates[Math.floor(Math.random() * subCandidates.length)] ?? null;
+
+    const problem = optoBuildLP(allElig, {
+      mainTeam, mainPlayerIds, mainSize: rule.primarySize,
+      subTeam, subSize: rule.subSize
+    }, [], simProj);
+
+    const ids = optoSolve(problem);
+    if (!ids || ids.length !== 10) continue;
+    const totSal = ids.reduce((s, id) => s + (eligById.get(id)?.salary || 0), 0);
+    if (totSal > optoSalaryCap) continue;
+
+    const assembled = optoAssembleLineup(ids, allElig);
+    assembled._mainTeam = mainTeam;
+    assembled._subTeam = subTeam;
+    return assembled;
+  }
+
+  // Fallback: no-stack solve
+  const prob = optoBuildLP(allElig, {mainTeam:null, mainPlayerIds:[], mainSize:0, subTeam:null, subSize:0}, [], simProj);
+  const ids = optoSolve(prob);
+  if (ids && ids.length === 10) {
+    const sal = ids.reduce((s, id) => s + (eligById.get(id)?.salary || 0), 0);
+    if (sal <= optoSalaryCap) return optoAssembleLineup(ids, allElig);
+  }
+  return null;
+}
+
+function scorePoolLineup(lineupObj) {
+  const hitterSlots = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
+  const players = Object.entries(lineupObj).filter(([k,v]) => v && typeof v === 'object' && v.player_id);
+  const pids = new Set(players.map(([k,p]) => p.player_id));
+
+  let proj = 0, ceil = 0, floor = 0, sigma = 0, salary = 0;
+  const gamePks = new Set();
+  const teamCounts = {};
+  players.forEach(([k, p]) => {
+    proj   += projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
+    ceil   += p.proj_ceiling ?? p.proj_dk_pts ?? 0;
+    floor  += p.proj_floor ?? 0;
+    sigma  += p.sim_sd ?? ((p.proj_ceiling ?? 0) - (p.proj_floor ?? 0)) / 3.3;
+    salary += p.salary ?? 0;
+    if (p.game_pk) gamePks.add(p.game_pk);
+  });
+  hitterSlots.forEach(k => {
+    const p = lineupObj[k];
+    if (p?.team) teamCounts[p.team] = (teamCounts[p.team]||0)+1;
+  });
+
+  // Main stack: team with most hitters
+  const stackEntries = Object.entries(teamCounts).sort((a,b) => b[1]-a[1]);
+  const mainStack = stackEntries[0] ? `${stackEntries[0][0]} ${stackEntries[0][1]}` : '—';
+  const subStack = stackEntries[1] && stackEntries[1][1] >= 2 ? `${stackEntries[1][0]} ${stackEntries[1][1]}` : '—';
+
+  // Bring-backs: if main stack exists, count hitters from opposing team in same game
+  let bringBacks = 0;
+  if (stackEntries[0]) {
+    const mainTeam = stackEntries[0][0];
+    const mainGamePks = new Set();
+    hitterSlots.forEach(k => {
+      const p = lineupObj[k];
+      if (p?.team === mainTeam && p.game_pk) mainGamePks.add(p.game_pk);
+    });
+    hitterSlots.forEach(k => {
+      const p = lineupObj[k];
+      if (p && p.team !== mainTeam && mainGamePks.has(p.game_pk)) bringBacks++;
+    });
+  }
+
+  return {
+    proj: +proj.toFixed(1), ceil: +ceil.toFixed(1), floor: +floor.toFixed(1),
+    sigma: +sigma.toFixed(1), salary, games: gamePks.size,
+    stack: mainStack, sub: subStack, bringBacks, pids
+  };
+}
+
+function selectDiverseFromPool(candidates, n) {
+  if (candidates.length <= n) return candidates.map((c,i) => i);
+  const selected = [0]; // start with highest proj
+  const indices = new Set([0]);
+  while (selected.length < n) {
+    let bestIdx = -1, bestScore = -Infinity;
+    for (let i = 0; i < candidates.length; i++) {
+      if (indices.has(i)) continue;
+      let minDist = Infinity;
+      for (const si of selected) {
+        let inter = 0;
+        for (const pid of candidates[i].pids) { if (candidates[si].pids.has(pid)) inter++; }
+        const union = candidates[i].pids.size + candidates[si].pids.size - inter;
+        const dist = union > 0 ? 1 - inter/union : 0;
+        if (dist < minDist) minDist = dist;
+      }
+      const score = 0.35 * (candidates[i].proj / (candidates[0].proj||1)) + 0.65 * minDist;
+      if (score > bestScore) { bestScore = score; bestIdx = i; }
+    }
+    if (bestIdx === -1) break;
+    selected.push(bestIdx);
+    indices.add(bestIdx);
+  }
+  return selected;
+}
+
+// Pool state
+let _poolCandidates = [];  // [{lineup, metrics, dedupKey}]
+let _poolFilter = {};
+
+function generatePool() {
+  const poolSize = optoSettings.poolSize || 2000;
+  const allElig = [
+    ...allHitters.filter(h => !isExcluded(h) && (h.salary||0) > 0 && (projOverrides[h.player_id] ?? h.proj_dk_pts ?? 0) > 0),
+    ...allPitchers.filter(p => !isExcluded(p) && (p.salary||0) > 0 && (projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0) > 0),
+  ];
+  if (allElig.length < 10) { showToast('Not enough eligible players'); return; }
+
+  const simParams = buildSimParams(allElig);
+  const gameKeys = [...new Set(allElig.map(p => p.game_pk).filter(Boolean))];
+  const teamKeys = [...new Set(allElig.map(p => optoTeamKey(p)).filter(Boolean))];
+
+  _poolCandidates = [];
+  const seenKeys = new Set();
+  const stackAppearCount = {};
+  const hitterSlotKeys = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
+  let simIdx = 0;
+
+  // Show pool section
+  const poolSec = document.getElementById('pool-section');
+  if (poolSec) poolSec.style.display = '';
+  showToast(`Generating pool… 0/${poolSize}`);
+
+  function runBatch() {
+    const BATCH = 15;
+    const end = Math.min(simIdx + BATCH, poolSize);
+    for (; simIdx < end; simIdx++) {
+      const simProj = sampleSimProjections(simParams, gameKeys, teamKeys);
+      const rule = optoPickRule(simIdx, poolSize);
+      const lineup = simSolveWithStacks(allElig, rule, simProj, stackAppearCount, poolSize);
+      if (!lineup) continue;
+
+      // Dedup
+      const ids = Object.values(lineup).filter(p => p?.player_id).map(p => p.player_id).sort((a,b)=>a-b);
+      const key = ids.join(',');
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+
+      // Track stack appearances
+      const teamCounts = {};
+      hitterSlotKeys.forEach(k => { const p = lineup[k]; if (p?.team) teamCounts[p.team] = (teamCounts[p.team]||0)+1; });
+      Object.entries(teamCounts).forEach(([team, cnt]) => {
+        for (let s = 2; s <= cnt; s++) { const k = `${team}_${s}`; stackAppearCount[k] = (stackAppearCount[k]||0)+1; }
+      });
+
+      const metrics = scorePoolLineup(lineup);
+      _poolCandidates.push({ lineup, metrics, dedupKey: key });
+    }
+
+    if (simIdx < poolSize) {
+      showToast(`Generating pool… ${simIdx}/${poolSize} (${_poolCandidates.length} unique)`);
+      setTimeout(runBatch, 0);
+    } else {
+      _poolCandidates.sort((a,b) => b.metrics.proj - a.metrics.proj);
+      showToast(`Pool complete: ${_poolCandidates.length} unique lineups from ${poolSize} sims`);
+      renderPoolTable();
+    }
+  }
+  setTimeout(runBatch, 30);
+}
+
+function renderPoolTable() {
+  const container = document.getElementById('pool-results');
+  if (!container) return;
+  let filtered = _poolCandidates;
+
+  // Apply filters
+  const f = _poolFilter;
+  if (f.minProj) filtered = filtered.filter(c => c.metrics.proj >= f.minProj);
+  if (f.maxProj) filtered = filtered.filter(c => c.metrics.proj <= f.maxProj);
+  if (f.minCeil) filtered = filtered.filter(c => c.metrics.ceil >= f.minCeil);
+  if (f.minFloor) filtered = filtered.filter(c => c.metrics.floor >= f.minFloor);
+  if (f.maxGames) filtered = filtered.filter(c => c.metrics.games <= f.maxGames);
+  if (f.stack) filtered = filtered.filter(c => c.metrics.stack.startsWith(f.stack));
+  if (f.mustInclude) {
+    const pid = +f.mustInclude;
+    filtered = filtered.filter(c => c.metrics.pids.has(pid));
+  }
+
+  const countEl = document.getElementById('pool-count');
+  if (countEl) countEl.textContent = `${filtered.length} lineups`;
+
+  const show = filtered.slice(0, 200); // render max 200 rows for performance
+  container.innerHTML = `<table class="exp-table" style="font-size:10px;">
+    <thead><tr>
+      <th>#</th><th>Proj</th><th>Ceil</th><th>Floor</th><th>Sigma</th>
+      <th>Sal</th><th>Stack</th><th>Sub</th><th>Gms</th><th>BB</th>
+    </tr></thead>
+    <tbody>${show.map((c, i) => {
+      const m = c.metrics;
+      return `<tr style="cursor:pointer;" onclick="loadPoolLineup(${_poolCandidates.indexOf(c)})">
+        <td>${i+1}</td>
+        <td style="font-weight:700;">${m.proj}</td>
+        <td>${m.ceil}</td><td>${m.floor}</td><td>${m.sigma}</td>
+        <td>$${m.salary.toLocaleString()}</td>
+        <td><span class="stack-size-badge">${m.stack}</span></td>
+        <td>${m.sub}</td>
+        <td>${m.games}</td><td>${m.bringBacks}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
+}
+
+function loadPoolLineup(idx) {
+  const c = _poolCandidates[idx];
+  if (!c) return;
+  lineup = {...c.lineup};
+  LINEUP_SLOTS.forEach(s => renderSlot(s.key));
+  updateTotals();
+  renderPool();
+}
+
+function addPoolToBuilds() {
+  const n = +(document.getElementById('pool-select-n')?.value || 20);
+  let filtered = _poolCandidates;
+  const f = _poolFilter;
+  if (f.minProj) filtered = filtered.filter(c => c.metrics.proj >= f.minProj);
+  if (f.maxProj) filtered = filtered.filter(c => c.metrics.proj <= f.maxProj);
+  if (f.minCeil) filtered = filtered.filter(c => c.metrics.ceil >= f.minCeil);
+  if (f.minFloor) filtered = filtered.filter(c => c.metrics.floor >= f.minFloor);
+  if (f.maxGames) filtered = filtered.filter(c => c.metrics.games <= f.maxGames);
+  if (f.stack) filtered = filtered.filter(c => c.metrics.stack.startsWith(f.stack));
+
+  const indices = selectDiverseFromPool(filtered.map(c => c.metrics), n);
+  const selected = indices.map(i => filtered[i]);
+
+  if (!selected.length) { showToast('No lineups match filters'); return; }
+
+  const newBuild = { id: 'build_' + Date.now(), name: `Pool Build (${selected.length})`, ts: Date.now(), lineups: [] };
+  const allBuilds = getBuilds();
+  allBuilds.push(newBuild);
+  saveBuilds(allBuilds);
+  activeBuildId = newBuild.id;
+
+  const generated = selected.map((c, i) => ({
+    name: `Pool ${i+1}`,
+    totProj: c.metrics.proj,
+    lineup: c.lineup,
+    ts: Date.now()
+  }));
+  updateActiveBuild(generated);
+  renderSavedCards();
+  showToast(`${selected.length} diverse lineups added to build!`);
+}
+
+function setPoolFilter(key, val) {
+  if (val === '' || val == null) delete _poolFilter[key];
+  else _poolFilter[key] = isNaN(+val) ? val : +val;
+  renderPoolTable();
+}
+
 function generateLineups() {
   if (_contestMode === 'showdown') { generateLineups_Showdown(); return; }
   if (lateSwapMode) { lateSwapAllLineups(); return; }
+  if (optoSettings.poolMode) { generatePool(); return; }
   const N = optoSettings.numLineups || 1;
 
   // Validate pool
