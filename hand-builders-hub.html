@@ -7955,6 +7955,7 @@ function switchResultsTab(tab) {
   document.getElementById('pool-view-pool').style.display = tab === 'pool' ? '' : 'none';
   document.getElementById('pool-view-portfolio').style.display = tab === 'portfolio' ? '' : 'none';
   if (tab === 'portfolio') renderPortfolioCards();
+  renderPoolExposure(); // refresh exposure for the active tab
 }
 
 function renderPortfolioCards() {
@@ -8253,7 +8254,9 @@ function addPoolToBuilds() {
 }
 
 function renderPoolExposure() {
-  const pool = _poolCandidates;
+  // Show exposure for whichever tab is active
+  const isPortfolio = document.getElementById('pool-tab-portfolio')?.classList.contains('active');
+  const pool = (isPortfolio && _portfolioLineups.length) ? _portfolioLineups : _poolCandidates;
   if (!pool.length) return;
   const total = pool.length;
   const hitterSlots = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
