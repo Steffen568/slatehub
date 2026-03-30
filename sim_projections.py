@@ -621,7 +621,14 @@ def fetch_data(target_date: str) -> dict:
 
 def compute_opp_quality(lineups, batter_stats, batter_splits, opp_team_id,
                          pitcher_hand, odds, is_home):
-    """PA-weighted wRC+ of opposing lineup vs pitcher hand (same as compute_projections)."""
+    """PA-weighted wRC+ of opposing lineup vs pitcher hand.
+
+    Data quality guards:
+    - Split wRC+ capped at [30, 200] to prevent small-sample extremes
+    - Split requires min 30 PA to be used (else fall back to overall)
+    - Overall wRC+ capped at [40, 180]
+    - Unknown/no-data batters default to 95 (slightly below avg)
+    """
     opp_batters = [lu for lu in lineups
                    if lu.get('team_id') == opp_team_id and lu.get('batting_order')]
     stats_wrc = None
@@ -632,18 +639,27 @@ def compute_opp_quality(lineups, batter_stats, batter_splits, opp_team_id,
             order = lu.get('batting_order', 5)
             pa_wt = LINEUP_PA.get(order, LEAGUE_AVG_PA)
             wrc = None
+            # Try platoon split (require min 30 PA, cap extremes)
             if pitcher_hand:
                 split = batter_splits.get(pid, {}).get(pitcher_hand)
                 if split:
-                    wrc = safe(split.get('wrc_plus'))
+                    split_pa = safe(split.get('pa'), 0)
+                    split_wrc = safe(split.get('wrc_plus'))
+                    if split_wrc is not None and split_pa >= 30:
+                        wrc = clip(split_wrc, 30, 200)
+            # Fall back to overall wRC+ (capped)
             if wrc is None:
                 s = batter_stats.get(pid, {})
                 curr = s.get(SEASON) or s.get(SEASON-1) or s.get(SEASON-2)
                 if curr:
-                    wrc = safe(curr.get('wrc_plus'))
-            if wrc is not None:
-                tw += wrc * pa_wt
-                tp += pa_wt
+                    raw = safe(curr.get('wrc_plus'))
+                    if raw is not None:
+                        wrc = clip(raw, 40, 180)
+            # Default for unknowns
+            if wrc is None:
+                wrc = 95
+            tw += wrc * pa_wt
+            tp += pa_wt
         if tp > 0:
             stats_wrc = tw / tp
 
@@ -659,7 +675,8 @@ def compute_opp_quality(lineups, batter_stats, batter_splits, opp_team_id,
     if stats_wrc is not None and vegas_opp is not None:
         blended = stats_wrc * 0.70 + vegas_opp * 0.30
     elif stats_wrc is not None:
-        blended = stats_wrc
+        # No odds data — light regression toward 100 (neutral)
+        blended = stats_wrc * 0.80 + 100.0 * 0.20
     elif vegas_opp is not None:
         blended = vegas_opp
     else:
