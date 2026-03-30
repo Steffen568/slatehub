@@ -8540,7 +8540,7 @@ let _contestSimResults = null; // { perLineup: [{winCount, top1Count, ...}], sim
 let _poolSortCol = 'proj';
 let _poolSortDir = -1;
 
-async function simulateContest() {
+function simulateContest() {
   if (!_poolCandidates.length) { showToast('Generate a pool first'); return; }
   const numSims = optoSettings.contestSims || 5000;
   const pool = _poolCandidates;
@@ -8578,14 +8578,10 @@ async function simulateContest() {
   const top10Cutoff = Math.max(1, Math.ceil(n * 0.10));
   const cashCutoff = Math.max(1, Math.ceil(n * (payoutPct / 100)));
 
-  // Generate opponent field — match pool size for stable metrics
-  const NUM_OPPONENTS = Math.max(1500, n);
-  showPoolLoading('Generating opponent field...');
-  const field = await generateOpponentField(NUM_OPPONENTS, contestDb);
-  const oppPids = field?.oppPids || [];
-  const fieldMult = field?.fieldMult || 1;
-  const hasField = oppPids.length > 0;
-  if (hasField) console.log(`Opponent field: ${oppPids.length} lineups, fieldMult=${fieldMult}`);
+  // Pool IS the field — our optimized lineups represent the sharp competition.
+  // Scale pool rank to contest field size for realistic positioning.
+  const fieldMult = Math.max(1, Math.round(fieldSize / n));
+  console.log(`Contest sim: ${n} pool lineups × ${fieldMult} fieldMult = ${n * fieldMult} effective field (actual: ${fieldSize})`);
 
   // Build payout lookup from contest data for ROI calculation
   let payoutTiers = null; // [{minPos, maxPos, value}]
@@ -8622,43 +8618,20 @@ async function simulateContest() {
         if (s > stats[i].maxPts) stats[i].maxPts = s;
       }
 
-      // Score opponent field (if generated)
-      let oppScores = null;
-      if (hasField) {
-        oppScores = new Float64Array(oppPids.length);
-        for (let oi = 0; oi < oppPids.length; oi++) {
-          let os = 0;
-          for (const pid of oppPids[oi]) os += simProj.get(pid) ?? 0;
-          oppScores[oi] = os;
-        }
-      }
-
-      // Rank pool lineups by score (for internal pool ranking + portfolio opt)
+      // Rank pool lineups by score
       const indices = Array.from({length: n}, (_, i) => i);
       indices.sort((a, b) => scores[b] - scores[a]);
 
-      // Record winner + top 1% (pool-internal for portfolio optimization)
+      // Record winner + top 1% (for portfolio optimization)
       simWinners.push(indices[0]);
       const thisTop1 = new Set();
       for (let rank = 0; rank < top1Cutoff && rank < n; rank++) thisTop1.add(indices[rank]);
       simTop1.push(thisTop1);
 
-      // Record positions — field-aware if opponents exist
+      // Record positions — scale pool rank to contest field size
       for (let rank = 0; rank < n; rank++) {
         const li = indices[rank];
-        const myScore = scores[li];
-
-        // Compute field position: how many opponents beat this lineup
-        let fieldPos;
-        if (hasField && oppScores) {
-          let betterOpps = 0;
-          for (let oi = 0; oi < oppScores.length; oi++) {
-            if (oppScores[oi] > myScore) betterOpps++;
-          }
-          fieldPos = betterOpps * fieldMult + rank + 1;
-        } else {
-          fieldPos = Math.max(1, Math.round((rank / n) * fieldSize));
-        }
+        const fieldPos = rank * fieldMult + 1;
 
         stats[li].finishSum += fieldPos;
         if (fieldPos === 1) stats[li].winCount++;
@@ -8687,8 +8660,7 @@ async function simulateContest() {
     }
 
     if (simIdx < numSims) {
-      const fieldLabel = hasField ? ` vs ${oppPids.length} opponents (${fieldSize.toLocaleString()} field)` : '';
-      updatePoolLoading(`${simIdx} / ${numSims}`, `Scoring ${n} lineups${fieldLabel}`, simIdx/numSims*100);
+      updatePoolLoading(`${simIdx} / ${numSims}`, `Scoring ${n} lineups (${fieldSize.toLocaleString()} field)`, simIdx/numSims*100);
       setTimeout(runBatch, 0);
     } else {
       hidePoolLoading();
@@ -8701,7 +8673,7 @@ async function simulateContest() {
 
 function finalizeContest(stats, simWinners, simTop1, numSims, contestDb, payoutTiers) {
   const n = _poolCandidates.length;
-  const entryFee = contestDb?.entry_fee || 0;
+  const entryFee = parseFloat(contestDb?.entry_fee || 0);
   const hasPayouts = !!(payoutTiers && entryFee > 0);
 
   // Compute pool-wide median for Sharpe ratio
