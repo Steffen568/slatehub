@@ -4340,7 +4340,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
         <span style="font-size:8px;color:var(--muted);">Cover</span>
       </div>
       <button class="bld-btn" style="background:rgba(99,179,237,.1);border-color:rgba(99,179,237,.35);color:#63b3ed;" onclick="addOptimalPortfolio()">Build Portfolio</button>
-      <button class="bld-btn" style="background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportPortfolioToBuild()">Save to Build</button>
+      <button class="bld-btn" style="background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportPortfolioDK()">Export DK</button>
     </div>
   </div>
   <!-- Filter bar -->
@@ -8934,30 +8934,51 @@ function addOptimalPortfolio() {
   showToast(`${stratLabel}: ${selected.length} lineups | Win coverage: ${coveredPct}%`);
 }
 
-function exportPortfolioToBuild() {
+function exportPortfolioDK() {
   if (!_portfolioLineups.length) { showToast('Build a portfolio first'); return; }
-  const stratNames = {balanced:'Balanced GPP',firstPlace:'First Place',contrarian:'Contrarian',cash:'Cash',maxCorr:'Max Correlation'};
-  const stratLabel = stratNames[optoSettings.portfolioStrategy||'balanced'] || 'Portfolio';
+  if (!_dkTemplate) { showToast('Upload DK CSV first'); return; }
 
-  const newBuild = { id: 'build_' + Date.now(), name: `${stratLabel} (${_portfolioLineups.length})`, ts: Date.now(), lineups: [] };
-  const allBuilds = getBuilds();
-  allBuilds.push(newBuild);
-  saveBuilds(allBuilds);
-  activeBuildId = newBuild.id;
+  // Find the selected contest
+  const contestId = _activeContestId;
+  if (!contestId) { showToast('Select a contest from the dropdown first'); return; }
 
-  const generated = _portfolioLineups.map((c, i) => ({
-    name: `Portfolio ${i+1}`,
-    totProj: c.metrics.proj,
-    lineup: c.lineup,
-    ts: Date.now()
-  }));
-  updateActiveBuild(generated);
-  renderSavedCards();
+  // Get entries for this contest
+  const entries = _dkTemplate.entries.filter(e => e.contestId === contestId);
+  if (!entries.length) { showToast('No entries found for this contest'); return; }
 
-  // Show lineups section so user can assign contests and export
-  const sec = document.getElementById('lineups-section');
-  if (sec) sec.style.display = '';
-  showToast(`${_portfolioLineups.length} lineups saved to "${newBuild.name}" — assign contests and export DK CSV`);
+  const header = 'Entry ID,Contest Name,Contest ID,Entry Fee,P,P,C,1B,2B,3B,SS,OF,OF,OF';
+  const csvRows = [header];
+  const unmatchedPlayers = new Set();
+
+  // Round-robin portfolio lineups across entries
+  for (let i = 0; i < entries.length; i++) {
+    const lu = _portfolioLineups[i % _portfolioLineups.length];
+    const { row, unmatched } = lineupToEntryRow(entries[i], lu);
+    csvRows.push(row);
+    unmatched.forEach(n => unmatchedPlayers.add(n));
+  }
+
+  // Also include entries from OTHER contests as empty rows
+  for (const entry of _dkTemplate.entries) {
+    if (entry.contestId === contestId) continue;
+    csvRows.push(`${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},,,,,,,,,,`);
+  }
+
+  if (unmatchedPlayers.size > 0) {
+    console.warn('[Portfolio Export] Unmatched players:', [...unmatchedPlayers]);
+    showToast(`Warning: ${unmatchedPlayers.size} unmatched players — check console`);
+  }
+
+  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `DKEntries_portfolio_${new Date().toISOString().slice(0,16).replace(':','')}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  const contest = _dkTemplate.contests.find(c => c.contestId === contestId);
+  showToast(`Exported ${entries.length} entries for ${contest?.contestName?.slice(0,40) || contestId}`);
 }
 
 function setPoolSort(col) {
