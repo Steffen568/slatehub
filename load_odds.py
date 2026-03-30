@@ -173,16 +173,21 @@ def run():
     # stores full names. Build a reverse map: short → full for flexible matching.
     short_to_full = {v: k for k, v in TEAM_NAME_MAP.items()}
 
+    # Build flexible lookup — index each game by every possible name combination
+    # DB stores a mix of full names ("Toronto Blue Jays") and short ("Athletics")
+    # Odds API always uses full names ("Oakland Athletics")
+    # We need to match regardless of which format either side uses
+    full_to_short = TEAM_NAME_MAP  # "Oakland Athletics" → "Athletics"
     db_lookup = {}
     for g in db_games:
-        # Store both the raw DB name AND the full Odds API name as keys
         home = g["home_team"]
         away = g["away_team"]
-        db_lookup[(home, away)] = g
-        # Also index by Odds API full name → game, using reverse map
-        home_full = short_to_full.get(home, home)
-        away_full = short_to_full.get(away, away)
-        db_lookup[(home_full, away_full)] = g
+        # Generate all name variants for home and away
+        home_variants = {home, full_to_short.get(home, home), short_to_full.get(home, home)}
+        away_variants = {away, full_to_short.get(away, away), short_to_full.get(away, away)}
+        for h in home_variants:
+            for a in away_variants:
+                db_lookup[(h, a)] = g
 
     # Fetch odds
     print("  Fetching from The Odds API...")
