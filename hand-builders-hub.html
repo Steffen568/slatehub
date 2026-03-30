@@ -4340,6 +4340,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
         <span style="font-size:8px;color:var(--muted);">Cover</span>
       </div>
       <button class="bld-btn" style="background:rgba(99,179,237,.1);border-color:rgba(99,179,237,.35);color:#63b3ed;" onclick="addOptimalPortfolio()">Build Portfolio</button>
+      <button class="bld-btn" style="background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportPortfolioToBuild()">Save to Build</button>
     </div>
   </div>
   <!-- Filter bar -->
@@ -8931,6 +8932,32 @@ function addOptimalPortfolio() {
     return (covered.size / _contestSimResults.numSims * 100).toFixed(1);
   })() : '?';
   showToast(`${stratLabel}: ${selected.length} lineups | Win coverage: ${coveredPct}%`);
+}
+
+function exportPortfolioToBuild() {
+  if (!_portfolioLineups.length) { showToast('Build a portfolio first'); return; }
+  const stratNames = {balanced:'Balanced GPP',firstPlace:'First Place',contrarian:'Contrarian',cash:'Cash',maxCorr:'Max Correlation'};
+  const stratLabel = stratNames[optoSettings.portfolioStrategy||'balanced'] || 'Portfolio';
+
+  const newBuild = { id: 'build_' + Date.now(), name: `${stratLabel} (${_portfolioLineups.length})`, ts: Date.now(), lineups: [] };
+  const allBuilds = getBuilds();
+  allBuilds.push(newBuild);
+  saveBuilds(allBuilds);
+  activeBuildId = newBuild.id;
+
+  const generated = _portfolioLineups.map((c, i) => ({
+    name: `Portfolio ${i+1}`,
+    totProj: c.metrics.proj,
+    lineup: c.lineup,
+    ts: Date.now()
+  }));
+  updateActiveBuild(generated);
+  renderSavedCards();
+
+  // Show lineups section so user can assign contests and export
+  const sec = document.getElementById('lineups-section');
+  if (sec) sec.style.display = '';
+  showToast(`${_portfolioLineups.length} lineups saved to "${newBuild.name}" — assign contests and export DK CSV`);
 }
 
 function setPoolSort(col) {
