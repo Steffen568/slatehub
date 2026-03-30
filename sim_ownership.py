@@ -100,10 +100,18 @@ def fetch_data(target_date):
         if len(rows) < 1000:
             break
     sal_map = {}
+    sal_name_map = {}  # normalized name → salary row (fallback for ID mismatches)
     for s in sals:
         if s.get('player_id') and s.get('salary'):
             sal_map[s['player_id']] = s
-    print(f"  Salaries: {len(sal_map)}")
+        if s.get('name') and s.get('salary'):
+            # Normalize: lowercase, strip suffixes
+            norm = s['name'].lower().replace('.', '').replace("'", '').strip()
+            for suffix in [' jr', ' sr', ' ii', ' iii', ' iv']:
+                if norm.endswith(suffix):
+                    norm = norm[:-len(suffix)].strip()
+            sal_name_map[norm] = s
+    print(f"  Salaries: {len(sal_map)} by ID, {len(sal_name_map)} by name")
 
     # Lineups (for confirmed status)
     lineups = sb.table('lineups').select(
@@ -149,7 +157,8 @@ def fetch_data(target_date):
 
     return {
         'games': games, 'projs': projs, 'sal_map': sal_map,
-        'lineup_map': lineup_map, 'odds': odds, 'pitcher_k': pitcher_k,
+        'sal_name_map': sal_name_map, 'lineup_map': lineup_map,
+        'odds': odds, 'pitcher_k': pitcher_k,
     }
 
 
@@ -159,9 +168,19 @@ def build_pool(data):
     """Build the player pool with public-biased scores for ownership sim."""
     pool = []
 
+    name_fallback_count = 0
     for p in data['projs']:
         pid = p['player_id']
         sal_row = data['sal_map'].get(pid)
+        # Fallback: match by normalized name if ID doesn't match
+        if (not sal_row or not sal_row.get('salary')) and p.get('full_name'):
+            norm = p['full_name'].lower().replace('.', '').replace("'", '').strip()
+            for suffix in [' jr', ' sr', ' ii', ' iii', ' iv']:
+                if norm.endswith(suffix):
+                    norm = norm[:-len(suffix)].strip()
+            sal_row = data['sal_name_map'].get(norm)
+            if sal_row:
+                name_fallback_count += 1
         if not sal_row or not sal_row.get('salary'):
             continue
 
@@ -244,6 +263,8 @@ def build_pool(data):
             'base_score': base_score,
         })
 
+    if name_fallback_count:
+        print(f"  Name-matched {name_fallback_count} players with ID mismatches")
     return pool
 
 
