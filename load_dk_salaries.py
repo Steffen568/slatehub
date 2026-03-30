@@ -222,6 +222,10 @@ PLAYER_ID_REMAP = {
     657041  : 700951,   # Lane Thomas (auto-fixed)
     702284  : 673784,   # Cole Young (auto-fixed)
     805779  : 814526,   # Jacob Wilson (auto-fixed)
+    573262  : 569209,   # Mike Yastrzemski (auto-fixed)
+    641933  : 828468,   # Tyler O'Neill (auto-fixed)
+    664040  : 446184,   # Brandon Lowe (auto-fixed)
+    596142  : 566435,   # Gary Sanchez (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids
@@ -363,6 +367,19 @@ for dgid in all_dg_ids:
                     'start_time':     comp.get('startTime', ''),
                     'season':         SEASON,
                 }
+
+        # Refine Classic slate label using game count — time-only classification
+        # can't distinguish a 4-game turbo from a 10-game main at the same start time
+        if not is_showdown and len(seen_comps) > 0:
+            n_games = len(seen_comps)
+            # Find the DG with the MOST games at the same time slot — that's the true "main"
+            # Anything with significantly fewer games is a turbo/sub-slate
+            if slate_label == 'main' and n_games <= 5:
+                slate_label = 'turbo'
+                dg_meta[dgid]['slate_label'] = slate_label
+            elif slate_label == 'late' and n_games <= 2:
+                slate_label = 'late_night'
+                dg_meta[dgid]['slate_label'] = slate_label
 
         # Fetch CSV for this DG to get position info
         # For Showdown: CSV position column is 'CPT' or the real position ('SP','OF', etc.)
