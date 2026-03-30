@@ -391,3 +391,31 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### Auto-fixed DK ID mismatches: Carson Kelly, Cole Young, David Hamilton, Gabriel Arias, Ivan Herrera, Jacob Wilson, Jose Ramirez, Josh Smith, Julio Rodriguez, Miguel Rojas, Miguel Vargas
 **What happened:** Pipeline auto-fixed 11 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+---
+
+## Session 31 — Ownership & Pitcher Calibration (2026-03-30)
+
+### Ownership floor/cap clamp compresses the distribution
+**What happened:** `clip(calibrated[pid], 0.1, 75.0)` in sim_ownership.py gave every player a 0.1% floor and 75% cap. P10 pred was 3.2% vs actual 0.1%.
+**Rule:** Don't apply artificial floor/cap. Let the sim and calibration determine the natural range. Clamp to [0, 100] only.
+
+### Linear calibration with intercept lifts the floor
+**What happened:** Actual ownership calibration used `actual = slope * pred + intercept`. The intercept (+3.86) lifted every player's ownership, destroying the low end of the distribution.
+**Rule:** Use multiplicative-only calibration (`pred * scale`) to preserve distribution shape. No intercept.
+
+### Additive noise can't overcome large base_score gaps
+**What happened:** Pitcher ownership was winner-take-all because additive noise (SD ~10) couldn't overcome base_score gaps of 200+. Top pitcher absorbed all SP1 picks.
+**Rule:** Use multiplicative noise (`score * (1 + N(0, sd))`) so noise scales with the score. Pitchers need SD ~0.50 (50%) for the top 3-4 SPs to compete for 2 slots.
+
+### Value (pts/$) has near-zero correlation with actual ownership
+**What happened:** Weighted value at 35% in ownership sim. Analysis showed r=-0.055 with actual ownership. Projection (r=0.557) and salary (r=0.536) are the real drivers.
+**Rule:** Weight projection and salary highest. Value weight should be minimal (~5%).
+
+### SP calibration was compressing projections, not widening them
+**What happened:** `sp_cal = 0.87 + 0.03 * era_ratio` gave aces 0.894 and scrubs 0.910 — barely different, and aces got a BIGGER haircut. SD ratio was 0.39 (projections 61% too flat).
+**Rule:** Replace compression calibration with spread amplification: `spread_mult = 2.0 - era_ratio` clamped to [0.78, 1.25]. Aces get boosted, bad arms get penalized. SD ratio improved to 0.68.
+
+### Per-slate ownership requires separate table
+**What happened:** player_projections PK is (player_id, game_pk) — can't store different ownership per slate. Same player got same ownership on main and late slates.
+**Rule:** Use dedicated `slate_ownership` table with PK (player_id, game_pk, dk_slate). Frontend overlays slate-specific ownership from this table.

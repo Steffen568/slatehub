@@ -5217,6 +5217,26 @@ async function loadPlayerPool(date, slate) {
     projMap[r.player_id] = r;
     if (r.full_name) projNameMap[normName(r.full_name)] = r;
   });
+
+  // 5b. Per-slate ownership overlay (from slate_ownership table)
+  if (effectiveDate && effectiveDate !== 'all' && slate && _contestMode !== 'showdown') {
+    const { data: slateOwnRows } = await sb.from('slate_ownership')
+      .select('player_id,proj_ownership')
+      .eq('game_date', effectiveDate)
+      .eq('dk_slate', slate)
+      .limit(5000);
+    if (slateOwnRows && slateOwnRows.length) {
+      slateOwnRows.forEach(r => {
+        if (projMap[r.player_id]) projMap[r.player_id].proj_ownership = r.proj_ownership;
+      });
+      // Also overlay pitcher projections
+      pitcherProjRaw.forEach(p => {
+        const ownRow = slateOwnRows.find(o => o.player_id === p.player_id);
+        if (ownRow) p.proj_ownership = ownRow.proj_ownership;
+      });
+    }
+  }
+
   // 6. Park factors (keyed by venue_id — the home park for each game)
   const venueIds = [...new Set(_games.map(g=>g.venue_id).filter(Boolean))];
   const pfRaw = venueIds.length

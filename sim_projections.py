@@ -517,11 +517,17 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
         is_nh.astype(float) * 5.0
     )
 
-    # Skill-scaled calibration: same as analytical engine.
-    # Aces (low ERA) get lighter haircut (~5%), bad SPs get more (~13%).
+    # Spread amplification: proj mean is correct (13.6 actual vs 13.6 proj)
+    # but SD is 2.5x too narrow (3.5 proj vs 8.8 actual, 66 matched starts).
+    # The ERA anchor naturally differentiates aces from back-end starters —
+    # amplify that signal by scaling DK points away from league average.
+    #
+    # Better pitchers (low ERA) get boosted, worse pitchers get penalized.
+    # era_ratio < 1.0 → ace (boost), > 1.0 → bad (penalize)
+    # Multiplier range: ~0.88 for bad arms to ~1.12 for aces
     era_ratio = clip(era_anchor / LEAGUE_AVG_XFIP, 0.65, 1.55)
-    sp_cal = clip(0.87 + 0.03 * era_ratio, 0.87, 0.95)
-    dk_pts = dk_pts * sp_cal
+    spread_mult = clip(2.0 - era_ratio, 0.78, 1.25)
+    dk_pts = dk_pts * spread_mult
 
     return dk_pts
 

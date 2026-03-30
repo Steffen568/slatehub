@@ -40,11 +40,13 @@ POS_SLOTS = {'SP': 2, 'C': 1, '1B': 1, '2B': 1, '3B': 1, 'SS': 1, 'OF': 3}
 # Canonical position priority for multi-pos players
 POS_PRIORITY = ['C', 'SS', '2B', '3B', '1B', 'OF', 'SP']
 
-# Public bias adjustments — the field overweights these factors
-SALARY_CURVE_EXP = 1.1    # public loves value but not as extremely as pure optimizers
-PITCHER_BOOST = 2.5        # pitchers get concentrated ownership (field gravitates to top 3-4 SPs)
-CONFIRMED_BOOST = 1.5      # confirmed lineup players get rostered more
-UNCONFIRMED_PENALTY = 0.4  # unconfirmed players get heavily discounted
+# Public bias adjustments — calibrated from actual DK ownership data (2026-03-28, 2026-03-30)
+# Key finding: projection (r=0.557) and salary (r=0.536) drive ownership.
+# Value (pts/$1k) has near-zero correlation (r=-0.055) — public rosters stars, not value.
+SALARY_CURVE_EXP = 0.6     # value matters much less than raw projection/salary
+PITCHER_BOOST = 5.0         # top SPs get 30-47% actual ownership — need heavy concentration
+CONFIRMED_BOOST = 1.5       # confirmed lineup players get rostered more
+UNCONFIRMED_PENALTY = 0.4   # unconfirmed players get heavily discounted
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -90,28 +92,41 @@ def fetch_data(target_date):
             break
     print(f"  Projections: {len(projs)}")
 
-    # DK Salaries
+    # DK Salaries — fetch ALL classic salaries with dk_slate info
     sals = []
     for i in range(0, 5000, 1000):
         rows = sb.table('dk_salaries').select(
-            'player_id,name,position,salary,team'
+            'player_id,name,position,salary,team,dk_slate'
         ).eq('season', SEASON).eq('contest_type', 'classic').range(i, i + 999).execute().data or []
         sals.extend(rows)
         if len(rows) < 1000:
             break
-    sal_map = {}
-    sal_name_map = {}  # normalized name → salary row (fallback for ID mismatches)
-    for s in sals:
-        if s.get('player_id') and s.get('salary'):
-            sal_map[s['player_id']] = s
-        if s.get('name') and s.get('salary'):
-            # Normalize: lowercase, strip suffixes
-            norm = s['name'].lower().replace('.', '').replace("'", '').strip()
-            for suffix in [' jr', ' sr', ' ii', ' iii', ' iv']:
-                if norm.endswith(suffix):
-                    norm = norm[:-len(suffix)].strip()
-            sal_name_map[norm] = s
-    print(f"  Salaries: {len(sal_map)} by ID, {len(sal_name_map)} by name")
+
+    # Detect all distinct slates
+    all_slates = sorted({s['dk_slate'] for s in sals if s.get('dk_slate')})
+
+    # Build per-slate salary maps: {slate: {player_id: sal_row}}
+    # Also build per-slate name maps for fallback matching
+    slate_sal_maps = {}
+    slate_sal_name_maps = {}
+    for slate in all_slates:
+        sal_map = {}
+        sal_name_map = {}
+        for s in sals:
+            if s.get('dk_slate') != slate:
+                continue
+            if s.get('player_id') and s.get('salary'):
+                sal_map[s['player_id']] = s
+            if s.get('name') and s.get('salary'):
+                norm = s['name'].lower().replace('.', '').replace("'", '').strip()
+                for suffix in [' jr', ' sr', ' ii', ' iii', ' iv']:
+                    if norm.endswith(suffix):
+                        norm = norm[:-len(suffix)].strip()
+                sal_name_map[norm] = s
+        slate_sal_maps[slate] = sal_map
+        slate_sal_name_maps[slate] = sal_name_map
+        print(f"  Salaries [{slate}]: {len(sal_map)} by ID, {len(sal_name_map)} by name")
+    print(f"  Slates detected: {all_slates}")
 
     # Lineups (for confirmed status)
     lineups = sb.table('lineups').select(
@@ -156,29 +171,49 @@ def fetch_data(target_date):
                         }
 
     return {
-        'games': games, 'projs': projs, 'sal_map': sal_map,
-        'sal_name_map': sal_name_map, 'lineup_map': lineup_map,
+        'games': games, 'projs': projs,
+        'all_slates': all_slates,
+        'slate_sal_maps': slate_sal_maps,
+        'slate_sal_name_maps': slate_sal_name_maps,
+        'lineup_map': lineup_map,
         'odds': odds, 'pitcher_k': pitcher_k,
     }
 
 
 # ── Build Player Pool ────────────────────────────────────────────────────────
 
-def build_pool(data):
-    """Build the player pool with public-biased scores for ownership sim."""
+def build_pool(data, slate=None):
+    """Build the player pool with public-biased scores for ownership sim.
+    If slate is given, only include players on that slate."""
+    # Select the right salary maps
+    if slate:
+        sal_map = data['slate_sal_maps'].get(slate, {})
+        sal_name_map = data['slate_sal_name_maps'].get(slate, {})
+    else:
+        # Fallback: merge all slates (prefer 'main' if exists)
+        sal_map = {}
+        sal_name_map = {}
+        for s in data['all_slates']:
+            for pid, row in data['slate_sal_maps'].get(s, {}).items():
+                if pid not in sal_map or s == 'main':
+                    sal_map[pid] = row
+            for nm, row in data['slate_sal_name_maps'].get(s, {}).items():
+                if nm not in sal_name_map or s == 'main':
+                    sal_name_map[nm] = row
+
     pool = []
 
     name_fallback_count = 0
     for p in data['projs']:
         pid = p['player_id']
-        sal_row = data['sal_map'].get(pid)
+        sal_row = sal_map.get(pid)
         # Fallback: match by normalized name if ID doesn't match
         if (not sal_row or not sal_row.get('salary')) and p.get('full_name'):
             norm = p['full_name'].lower().replace('.', '').replace("'", '').strip()
             for suffix in [' jr', ' sr', ' ii', ' iii', ' iv']:
                 if norm.endswith(suffix):
                     norm = norm[:-len(suffix)].strip()
-            sal_row = data['sal_name_map'].get(norm)
+            sal_row = sal_name_map.get(norm)
             if sal_row:
                 name_fallback_count += 1
         if not sal_row or not sal_row.get('salary'):
@@ -213,33 +248,41 @@ def build_pool(data):
         game_total = safe(odds_row.get('game_total'), 8.5) if odds_row else 8.5
 
         # ── Public-biased score ───────────────────────────────────────────
-        # Value score: proj per $1000 salary (public loves value)
-        value = (proj / salary * 1000) if salary > 0 else 0
-        value_score = value ** SALARY_CURVE_EXP  # amplify value advantage
+        # Weights calibrated from actual DK ownership data:
+        #   Projection r=0.557, Salary r=0.536, Value r=-0.055, BatOrder r=0.203
 
-        # Raw projection (star power — public recognizes big names via high proj)
-        proj_score = proj ** 1.3  # slight amplification
+        # Raw projection magnitude — strongest driver (public rosters high-proj stars)
+        proj_score = proj ** 1.5
+
+        # Salary / star power — public gravitates to expensive, recognizable names
+        salary_score = (salary / 3500) ** 1.3  # $3500 baseline → 1.0
+
+        # Value score — near-zero actual correlation, minimal weight
+        value = (proj / salary * 1000) if salary > 0 else 0
+        value_score = value ** SALARY_CURVE_EXP
 
         # Game environment boost (public loves high-total games)
         env_score = (game_total / 8.5) ** 1.5
 
-        # Batting order premium (public heavily weights top of order)
+        # Batting order premium (r=0.203 — matters but less than proj/salary)
         if not is_pitcher and batting_order:
-            bo_score = {1: 1.4, 2: 1.35, 3: 1.3, 4: 1.25, 5: 1.1,
-                        6: 0.95, 7: 0.85, 8: 0.75, 9: 0.65}.get(batting_order, 0.8)
+            bo_score = {1: 1.5, 2: 1.4, 3: 1.35, 4: 1.25, 5: 1.05,
+                        6: 0.85, 7: 0.70, 8: 0.55, 9: 0.45}.get(batting_order, 0.7)
         else:
             bo_score = 1.0
 
-        # Combine
-        base_score = (value_score * 0.35 + proj_score * 0.40 + env_score * 0.15 + bo_score * 0.10)
+        # Combine — projection + salary dominate (match actual correlations)
+        base_score = (proj_score * 0.40 + salary_score * 0.30 + value_score * 0.05 +
+                      env_score * 0.10 + bo_score * 0.15)
 
         # Pitcher concentration boost (public heavily rosters top SPs)
-        # Three factors: salary (expensive = popular), K rate (exciting), Stuff+ (hype)
+        # Actual data: top SPs get 30-47%, 2nd tier 8-15%, rest <5%
+        # Use moderate amplification — the sim noise creates the spread
         if is_pitcher:
-            salary_tier = clip((salary - 5000) / 3000, 0.2, 2.0) ** 1.5
+            salary_tier = clip((salary - 5000) / 3000, 0.2, 2.0)
             pk = data.get('pitcher_k', {}).get(pid, {})
-            k_excitement = clip((pk.get('k_pct', 0.22) - 0.18) / 0.10, 0.5, 2.0)  # 28% K = 1.5x, 18% = 0.5x
-            stuff_hype = clip((pk.get('stuff_plus', 100) - 90) / 20, 0.5, 1.5)  # 110 Stuff+ = 1.5x
+            k_excitement = clip((pk.get('k_pct', 0.22) - 0.18) / 0.10, 0.5, 2.0)
+            stuff_hype = clip((pk.get('stuff_plus', 100) - 90) / 20, 0.5, 1.5)
             base_score *= PITCHER_BOOST * (0.3 + salary_tier) * k_excitement * stuff_hype
 
         # Confirmed/unconfirmed modifier
@@ -361,16 +404,17 @@ def simulate_ownership(pool, n_sims, rng):
     feasible = 0
 
     for sim in range(n_sims):
-        # Perturb scores: each player gets noise based on their projection SD
+        # Perturb scores with MULTIPLICATIVE noise so all players have a
+        # realistic chance of being selected. Additive noise can't overcome
+        # large base_score gaps between top pitchers.
         scores = np.zeros(len(pool))
         for i, p in enumerate(pool):
-            sd = (p['ceiling'] - p['floor']) / 3.3 if p['ceiling'] > p['floor'] else p['proj'] * 0.15
-            sd = max(sd, 0.5)
-            noise = rng.normal(0, sd)
-            # Public-biased score + noise. Pitchers get more noise to spread ownership
-            # across multiple SPs (public field is split, not unanimous)
-            noise_scale = 0.8 if p['is_pitcher'] else 0.5
-            scores[i] = p['base_score'] + noise * noise_scale
+            # Multiplicative noise: score * (1 + noise)
+            # Pitchers: SD=0.50 (±50%) so top 3-4 SPs compete for 2 slots
+            # Hitters: SD=0.30 (±30%) — less volatile, more projection-driven
+            noise_sd = 0.50 if p['is_pitcher'] else 0.30
+            mult = 1.0 + rng.normal(0, noise_sd)
+            scores[i] = p['base_score'] * max(mult, 0.05)  # floor at 5% to avoid negatives
 
         lineup = build_lineup_greedy(pool, scores)
         if lineup:
@@ -396,114 +440,79 @@ def calibrate_ownership(pool, appear, feasible, target_date):
     if feasible == 0:
         return {}
 
-    # Raw rates
-    raw_rates = {}
+    # Raw appearance rates: appear_count / feasible_sims * 100 → percentage
+    # Each sim picks exactly 2 SP + 8 hitters, so across all sims the
+    # raw rates within each position group naturally sum to (slots × 100%).
+    # No need for additional normalization — the sim structure handles it.
+    calibrated = {}
     for p in pool:
         pid = p['player_id']
-        raw_rates[pid] = appear.get(pid, 0) / feasible * 100  # as percentage
-
-    # Group by position
-    pos_groups = defaultdict(list)
-    for p in pool:
-        pos_groups[p['pos']].append(p)
-
-    # Normalize each position group so total = slots × 100%
-    calibrated = {}
-    for pos, players in pos_groups.items():
-        slots = POS_SLOTS.get(pos, 1)
-        target_sum = slots * 100.0
-
-        raw_sum = sum(raw_rates.get(p['player_id'], 0) for p in players)
-        if raw_sum <= 0:
-            for p in players:
-                calibrated[p['player_id']] = 0.0
-            continue
-
-        scale = target_sum / raw_sum
-        for p in players:
-            calibrated[p['player_id']] = raw_rates.get(p['player_id'], 0) * scale
+        calibrated[pid] = appear.get(pid, 0) / feasible * 100
 
     # ── Actual ownership calibration (if available) ──────────────────────
+    # Use multiplicative scaling (no intercept) to preserve the shape of the
+    # distribution. Linear regression with an intercept lifts the floor
+    # artificially, compressing the tails.
     actual_rows = sb.table('actual_ownership').select(
         'player_id,ownership_pct'
     ).eq('game_date', target_date).execute().data or []
 
     if len(actual_rows) >= 20:
         actual_map = {r['player_id']: r['ownership_pct'] for r in actual_rows}
-        # Fit a simple linear correction: actual = a * predicted + b
         matched_pred = []
         matched_act = []
         for pid, pred in calibrated.items():
-            if pid in actual_map:
+            if pid in actual_map and pred > 0:
                 matched_pred.append(pred)
                 matched_act.append(actual_map[pid])
 
         if len(matched_pred) >= 10:
             pred_arr = np.array(matched_pred)
             act_arr = np.array(matched_act)
-            # Linear regression
-            if np.std(pred_arr) > 0:
-                slope = np.sum((pred_arr - pred_arr.mean()) * (act_arr - act_arr.mean())) / np.sum((pred_arr - pred_arr.mean())**2)
-                intercept = act_arr.mean() - slope * pred_arr.mean()
-                print(f"  Calibration fit: actual = {slope:.2f} × predicted + {intercept:.2f}")
-                print(f"  Calibration based on {len(matched_pred)} matched players from {target_date}")
-                # Apply correction
-                for pid in calibrated:
-                    calibrated[pid] = max(0.1, calibrated[pid] * slope + intercept)
-            else:
-                print("  Calibration: insufficient variance in predictions")
+            # Multiplicative scale: find ratio that minimizes squared error
+            # actual ≈ scale * predicted (no intercept)
+            scale = np.sum(pred_arr * act_arr) / np.sum(pred_arr ** 2)
+            scale = clip(scale, 0.3, 3.0)  # sanity bounds
+            print(f"  Calibration: scale = {scale:.2f}× (from {len(matched_pred)} matched players)")
+            for pid in calibrated:
+                calibrated[pid] = calibrated[pid] * scale
         else:
             print(f"  Calibration: only {len(matched_pred)} matched players — using uncalibrated")
     else:
         print(f"  No actual ownership data for {target_date} — using uncalibrated rates")
 
-    # Final clamp
+    # No artificial floor/cap — let the sim and calibration determine natural range.
+    # Only clamp to valid percentage range [0, 100].
     for pid in calibrated:
-        calibrated[pid] = clip(calibrated[pid], 0.1, 75.0)
+        calibrated[pid] = clip(calibrated[pid], 0.0, 100.0)
 
     return calibrated
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def run():
-    target_date = None
-    n_sims = NUM_SIMS
-    args = sys.argv[1:]
-    i = 0
-    while i < len(args):
-        if args[i] == '--date' and i+1 < len(args):
-            target_date = args[i+1]; i += 2
-        elif args[i] == '--sims' and i+1 < len(args):
-            n_sims = int(args[i+1]); i += 2
-        else:
-            target_date = target_date or args[i]; i += 1
-    if not target_date:
-        target_date = str(date.today())
+def run_slate(data, slate, target_date, n_sims, rng):
+    """Run ownership sim for a single slate. Returns (pool, calibrated) or None."""
+    print(f"\n{'─'*55}")
+    print(f"  Slate: {slate}")
+    print(f"{'─'*55}")
 
-    print(f"\nSim Ownership Engine — {target_date} ({n_sims:,} sims)")
-    print("=" * 55)
-
-    data = fetch_data(target_date)
-    if not data:
-        print("  No games found — exiting")
-        return
-
-    pool = build_pool(data)
-    print(f"  Player pool: {len(pool)} ({sum(1 for p in pool if p['is_pitcher'])} pitchers, {sum(1 for p in pool if not p['is_pitcher'])} hitters)")
+    pool = build_pool(data, slate=slate)
+    n_pit = sum(1 for p in pool if p['is_pitcher'])
+    n_hit = sum(1 for p in pool if not p['is_pitcher'])
+    print(f"  Pool: {len(pool)} ({n_pit} SP, {n_hit} hitters)")
 
     if len(pool) < 10:
-        print("  Pool too small — exiting")
-        return
+        print("  Pool too small — skipping")
+        return None
 
-    rng = np.random.default_rng(seed=123)
-    print(f"\n  Running {n_sims:,} ownership simulations...")
+    print(f"  Running {n_sims:,} sims...")
     appear, feasible = simulate_ownership(pool, n_sims, rng)
-    print(f"  Feasible lineups: {feasible}/{n_sims} ({100*feasible/n_sims:.0f}%)")
+    print(f"  Feasible: {feasible}/{n_sims} ({100*feasible/n_sims:.0f}%)")
 
     calibrated = calibrate_ownership(pool, appear, feasible, target_date)
 
-    # Upsert to player_projections
+    # ── Upsert to slate_ownership table ──────────────────────────────────
     computed_at = datetime.now(timezone.utc).isoformat()
     records = []
     for p in pool:
@@ -512,31 +521,56 @@ def run():
             'player_id': p['player_id'],
             'game_pk': p['game_pk'],
             'game_date': target_date,
+            'dk_slate': slate,
             'proj_ownership': round(own, 1),
             'computed_at': computed_at,
         })
 
-    # Deduplicate
+    # Deduplicate (player can appear in multiple game_pks on same slate)
     seen = {}
     for r in records:
-        seen[(r['player_id'], r['game_pk'])] = r
+        seen[(r['player_id'], r['game_pk'], r['dk_slate'])] = r
     records = list(seen.values())
 
     BATCH = 500
     uploaded = 0
     for i in range(0, len(records), BATCH):
         batch = records[i:i+BATCH]
-        sb.table('player_projections').upsert(
-            batch, on_conflict='player_id,game_pk', ignore_duplicates=False
+        sb.table('slate_ownership').upsert(
+            batch, on_conflict='player_id,game_pk,dk_slate', ignore_duplicates=False
         ).execute()
         uploaded += len(batch)
-    print(f"  Uploaded {uploaded} ownership projections")
+    print(f"  Uploaded {uploaded} to slate_ownership [{slate}]")
+
+    # ── Also update player_projections.proj_ownership for 'main' slate (backward compat)
+    if slate == 'main':
+        proj_records = []
+        for p in pool:
+            own = calibrated.get(p['player_id'], 0)
+            proj_records.append({
+                'player_id': p['player_id'],
+                'game_pk': p['game_pk'],
+                'game_date': target_date,
+                'proj_ownership': round(own, 1),
+                'computed_at': computed_at,
+            })
+        seen_proj = {}
+        for r in proj_records:
+            seen_proj[(r['player_id'], r['game_pk'])] = r
+        proj_records = list(seen_proj.values())
+        for i in range(0, len(proj_records), BATCH):
+            batch = proj_records[i:i+BATCH]
+            sb.table('player_projections').upsert(
+                batch, on_conflict='player_id,game_pk', ignore_duplicates=False
+            ).execute()
+        print(f"  Also updated {len(proj_records)} in player_projections (main compat)")
 
     # ── Validation against actuals ────────────────────────────────────────
     actual_rows = sb.table('actual_ownership').select(
         'player_id,dk_name,ownership_pct'
-    ).eq('game_date', target_date).execute().data or []
+    ).eq('game_date', target_date).eq('dk_slate', slate).execute().data or []
 
+    actual_map = {}
     if actual_rows:
         actual_map = {r['player_id']: r for r in actual_rows}
         matched = []
@@ -562,24 +596,77 @@ def run():
 
     # ── Sample output ─────────────────────────────────────────────────────
     pool_sorted = sorted(pool, key=lambda p: calibrated.get(p['player_id'], 0), reverse=True)
-    pitchers = [p for p in pool_sorted if p['is_pitcher']][:10]
-    hitters = [p for p in pool_sorted if not p['is_pitcher']][:15]
+    pitchers = [p for p in pool_sorted if p['is_pitcher']][:8]
+    hitters = [p for p in pool_sorted if not p['is_pitcher']][:10]
 
-    print(f"\n  Top pitcher ownership:")
+    print(f"\n  Top SP ownership [{slate}]:")
     for p in pitchers:
         own = calibrated.get(p['player_id'], 0)
-        actual_row = actual_map.get(p['player_id']) if actual_rows else None
+        actual_row = actual_map.get(p['player_id'])
         act = f"  actual={actual_row['ownership_pct']:.1f}%" if actual_row else ""
         print(f"    {p['name']:25s}  {own:5.1f}%  (${p['salary']:,}  proj={p['proj']:.1f}){act}")
 
-    print(f"\n  Top hitter ownership:")
+    print(f"\n  Top hitter ownership [{slate}]:")
     for p in hitters:
         own = calibrated.get(p['player_id'], 0)
-        actual_row = actual_map.get(p['player_id']) if actual_rows else None
+        actual_row = actual_map.get(p['player_id'])
         act = f"  actual={actual_row['ownership_pct']:.1f}%" if actual_row else ""
         print(f"    {p['name']:25s}  {own:5.1f}%  (${p['salary']:,}  proj={p['proj']:.1f}  {p['pos']}){act}")
 
-    print(f"\nOwnership projection complete.")
+    return pool, calibrated
+
+
+def run():
+    target_date = None
+    n_sims = NUM_SIMS
+    slate_arg = None
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] == '--date' and i+1 < len(args):
+            target_date = args[i+1]; i += 2
+        elif args[i] == '--sims' and i+1 < len(args):
+            n_sims = int(args[i+1]); i += 2
+        elif args[i] == '--slate' and i+1 < len(args):
+            slate_arg = args[i+1]; i += 2
+        else:
+            target_date = target_date or args[i]; i += 1
+    if not target_date:
+        target_date = str(date.today())
+
+    print(f"\nSim Ownership Engine — {target_date} ({n_sims:,} sims)")
+    print("=" * 55)
+
+    data = fetch_data(target_date)
+    if not data:
+        print("  No games found — exiting")
+        return
+
+    slates = data['all_slates']
+    if slate_arg:
+        if slate_arg not in slates:
+            print(f"  Slate '{slate_arg}' not found. Available: {slates}")
+            return
+        slates = [slate_arg]
+
+    if not slates:
+        print("  No slates found in dk_salaries — exiting")
+        return
+
+    print(f"\n  Running per-slate ownership for: {slates}")
+
+    rng = np.random.default_rng(seed=123)
+    total_uploaded = 0
+
+    for slate in slates:
+        result = run_slate(data, slate, target_date, n_sims, rng)
+        if result:
+            pool, calibrated = result
+            total_uploaded += len(pool)
+
+    print(f"\n{'='*55}")
+    print(f"  All slates complete. {total_uploaded} total ownership records.")
+    print(f"{'='*55}\n")
 
 
 if __name__ == '__main__':

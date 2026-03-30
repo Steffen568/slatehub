@@ -6515,6 +6515,18 @@ async function showPitcherPicker(teamId) {
   const projMap = {};
   (projRows || []).forEach(r => projMap[r.player_id] = r);
 
+  // Per-slate ownership overlay
+  if (activeSlate && activeSlate !== 'all' && activeDate) {
+    const { data: slateOwnRows } = await sb.from('slate_ownership')
+      .select('player_id,proj_ownership')
+      .eq('game_date', activeDate)
+      .eq('dk_slate', activeSlate)
+      .in('player_id', pids);
+    (slateOwnRows || []).forEach(r => {
+      if (projMap[r.player_id]) projMap[r.player_id].proj_ownership = r.proj_ownership;
+    });
+  }
+
   const enriched = pitchers.map(p => ({
     ...p,
     salary:      salaryMap[p.player_id]?.salary      || null,
@@ -6720,6 +6732,15 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
       .eq('game_date', activeDate)
       .maybeSingle(),
   ]);
+
+  // Per-slate ownership overlay for SP hero
+  if (projData && activeSlate && activeSlate !== 'all' && activeDate) {
+    const { data: soRow } = await sb.from('slate_ownership')
+      .select('proj_ownership')
+      .eq('player_id', spId).eq('game_date', activeDate).eq('dk_slate', activeSlate)
+      .maybeSingle();
+    if (soRow) projData.proj_ownership = soRow.proj_ownership;
+  }
 
   // Update projection display in hero
   const spProjEl = document.getElementById('spProjDisplay');
@@ -8263,6 +8284,19 @@ async function loadBatterStats(playerIds, lineupPlayers, year = '2026') {
   // Build projection map
   const projMap = {};
   (projRes.data || []).forEach(p => { projMap[String(p.player_id)] = p; });
+
+  // Per-slate ownership overlay
+  if (activeSlate && activeSlate !== 'all' && activeDate && playerIds.length) {
+    const { data: slateOwnRows } = await sb.from('slate_ownership')
+      .select('player_id,proj_ownership')
+      .eq('game_date', activeDate)
+      .eq('dk_slate', activeSlate)
+      .in('player_id', playerIds);
+    (slateOwnRows || []).forEach(r => {
+      const key = String(r.player_id);
+      if (projMap[key]) projMap[key].proj_ownership = r.proj_ownership;
+    });
+  }
 
   // Build splits map: player_id -> { L: {...}, R: {...} }
   // For 3yr: group by (player_id, split) and average rate stats across seasons
