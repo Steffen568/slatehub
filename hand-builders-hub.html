@@ -4315,8 +4315,11 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 <!-- ── POOL RESULTS PANEL ──────────────────────────────────────────────────── -->
 <section class="lineups-section" id="pool-section" style="display:none;">
   <div class="lineups-section-hd">
-    <span class="lineups-section-title">Lineup Pool</span>
-    <span id="pool-count" style="font-size:11px;color:var(--muted);margin-left:8px;"></span>
+    <div class="opto-toggle-group" style="margin-right:8px;">
+      <button class="opto-tog-btn active" id="pool-tab-pool" onclick="switchPoolTab('pool')">Pool</button>
+      <button class="opto-tog-btn" id="pool-tab-portfolio" onclick="switchPoolTab('portfolio')">Portfolio</button>
+    </div>
+    <span id="pool-count" style="font-size:11px;color:var(--muted);margin-left:4px;"></span>
     <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
       <select id="contest-picker" style="display:none;font-size:10px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;max-width:260px;" title="Select a real DK contest for simulation">
         <option value="">-- select contest --</option>
@@ -4361,9 +4364,14 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
   <!-- Two-column body -->
   <div class="lineups-body">
     <div class="lineups-saved-col">
-      <div class="lineups-grid" id="pool-cards" style="overflow-y:auto;max-height:600px;"></div>
-      <div id="pool-show-more" style="display:none;padding:8px;text-align:center;">
-        <button class="bld-btn" onclick="showMorePoolCards()">Show More</button>
+      <div id="pool-view-pool">
+        <div class="lineups-grid" id="pool-cards" style="overflow-y:auto;max-height:calc(100vh - 300px);"></div>
+        <div id="pool-show-more" style="display:none;padding:8px;text-align:center;">
+          <button class="bld-btn" onclick="showMorePoolCards()">Show More</button>
+        </div>
+      </div>
+      <div id="pool-view-portfolio" style="display:none;">
+        <div class="lineups-grid" id="portfolio-cards" style="overflow-y:auto;max-height:calc(100vh - 300px);"></div>
       </div>
     </div>
     <div class="lineups-exposure-col">
@@ -7927,11 +7935,84 @@ function generatePool() {
   setTimeout(runBatch, 30);
 }
 
-let _poolCardsShown = 50;
+let _poolCardsShown = 150;
 let _poolExpTargets = {};
 let _poolExpPosFilter = 'ALL';
 let _poolExpStackFilter = 0;
 let _poolExpTab = 'players';
+let _portfolioLineups = []; // lineups selected by Build Portfolio, with contest metrics
+
+function switchPoolTab(tab) {
+  document.getElementById('pool-tab-pool')?.classList.toggle('active', tab === 'pool');
+  document.getElementById('pool-tab-portfolio')?.classList.toggle('active', tab === 'portfolio');
+  document.getElementById('pool-view-pool').style.display = tab === 'pool' ? '' : 'none';
+  document.getElementById('pool-view-portfolio').style.display = tab === 'portfolio' ? '' : 'none';
+  if (tab === 'portfolio') renderPortfolioCards();
+}
+
+function renderPortfolioCards() {
+  const container = document.getElementById('portfolio-cards');
+  if (!container) return;
+  if (!_portfolioLineups.length) {
+    container.innerHTML = '<div class="pool-empty">Build a portfolio from the pool to see lineups here.</div>';
+    return;
+  }
+  const fmtSal  = v => v ? `$${(v/1000).toFixed(1)}k` : '—';
+  const fmtProj = v => v != null ? (+v).toFixed(1) : '—';
+
+  container.innerHTML = _portfolioLineups.map((c, i) => {
+    const m = c.metrics;
+    const ct = c.contest;
+    const lu = c.lineup;
+
+    const borderClr = ct ? (ct.winPct > 0 ? '#4ade80' : ct.top1Pct >= 5 ? '#63b3ed' : 'var(--border)') : 'var(--border)';
+
+    // ROI badge
+    const roiBadge = ct?.roi != null
+      ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;${ct.roi > 0 ? 'background:rgba(74,222,128,.15);color:#4ade80;' : 'background:rgba(248,113,113,.12);color:#f87171;'}">${ct.roi > 0 ? '+' : ''}${ct.roi}% ROI</span>`
+      : '';
+    // Contest badge
+    const contestBadge = ct
+      ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;${ct.winPct > 0 ? 'background:rgba(74,222,128,.15);color:#4ade80;' : ct.top1Pct >= 3 ? 'background:rgba(99,179,237,.12);color:#63b3ed;' : 'color:var(--muted);'}">${ct.winPct > 0 ? 'Win '+ct.winPct+'%' : 'T1 '+ct.top1Pct+'%'}</span>
+         <span style="font-size:8px;color:var(--muted);">Cash ${ct.cashPct}%</span> ${roiBadge}`
+      : '';
+    // Static badges
+    const ownClr = m.totalOwn <= 80 ? '#4ade80' : m.totalOwn <= 120 ? '#fbbf24' : '#f87171';
+    const levClr = m.leverage >= 50 ? '#4ade80' : m.leverage >= 30 ? '#fbbf24' : 'var(--muted)';
+    const staticBadges = `<span style="font-size:8px;color:${ownClr};">${m.totalOwn}%own</span>`
+      + `<span style="font-size:8px;color:${levClr};">${m.leverage}lev</span>`;
+    const simBadges = ct
+      ? `<span style="font-size:8px;color:${ct.boomPct >= 10 ? '#4ade80' : 'var(--muted)'};">${ct.boomPct}%boom</span>`
+      : '';
+
+    const pitcherSlots = LINEUP_SLOTS.filter(sl => sl.pos === 'SP');
+    const hitterSlots  = LINEUP_SLOTS.filter(sl => sl.pos !== 'SP');
+    const pitRows = pitcherSlots.map(sl => {
+      const p = lu[sl.key]; if (!p) return '';
+      const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
+      return `<div class="lc-slot-pitcher"><span class="lc-slot-pos" style="background:${posColor('SP').bg};color:${posColor('SP').tx};">SP</span><span class="lc-slot-name">${last}</span><span class="lc-slot-sal">${fmtSal(p.salary)}</span><span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span></div>`;
+    }).join('');
+    const hitRows = hitterSlots.map(sl => {
+      const p = lu[sl.key]; if (!p) return '';
+      const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
+      const bo = p.batting_order ? `<span style="font-size:8px;color:var(--muted);">${p.batting_order}</span>` : '';
+      return `<div class="lc-slot-hitter"><span class="lc-slot-pos" style="background:${posColor(sl.pos).bg};color:${posColor(sl.pos).tx};">${sl.pos}</span><span class="lc-slot-name">${last}</span>${bo}<span class="lc-slot-sal">${fmtSal(p.salary)}</span><span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span></div>`;
+    }).join('');
+
+    return `<div class="lc-chip" style="border-color:${borderClr};">
+      <div class="lc-chip-hd">
+        <span class="lc-chip-name">#${i+1}</span>
+        <span class="lc-chip-pts">${m.proj} pts</span>
+        <span class="lc-chip-sal">$${m.salary.toLocaleString()}</span>
+        <span class="stack-size-badge" style="margin-left:4px;">${m.stack}</span>
+        ${m.sub !== '—' ? `<span class="stack-size-badge">${m.sub}</span>` : ''}
+        ${staticBadges} ${simBadges}
+        ${contestBadge}
+      </div>
+      <div class="lc-chip-slots">${pitRows}${hitRows}</div>
+    </div>`;
+  }).join('');
+}
 
 function showMorePoolCards() { _poolCardsShown += 50; renderPoolCards(); }
 
@@ -7990,19 +8071,18 @@ function renderPoolCards() {
   const countEl = document.getElementById('pool-count');
   if (countEl) countEl.textContent = `${filtered.length} lineups`;
 
-  // Sort by selected column
+  // Sort by selected column — "best" always first on initial pick
   const sc = _poolSortCol;
   const dir = _poolSortDir;
   const getVal = (c) => {
-    // Contest metrics
     if (c.contest && sc in c.contest) return c.contest[sc] || 0;
-    // Static metrics
     if (sc in (c.metrics || {})) return c.metrics[sc] || 0;
     return c.metrics?.proj || 0;
   };
-  // For totalOwn, lower is better (sort ascending by default)
-  const effectiveDir = sc === 'totalOwn' ? -dir : dir;
-  filtered.sort((a,b) => (getVal(b) - getVal(a)) * effectiveDir || b.metrics.proj - a.metrics.proj);
+  // totalOwn and bustPct: lower is better, so negate for "best first"
+  const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
+  const sign = lowerIsBetter ? 1 : -1;
+  filtered.sort((a,b) => (getVal(a) - getVal(b)) * sign * dir || b.metrics.proj - a.metrics.proj);
 
   const show = filtered.slice(0, _poolCardsShown);
   const moreBtn = document.getElementById('pool-show-more');
@@ -8231,7 +8311,7 @@ function renderPoolExposure() {
 function setPoolFilter(key, val) {
   if (val === '' || val == null) delete _poolFilter[key];
   else _poolFilter[key] = isNaN(+val) ? val : +val;
-  _poolCardsShown = 50;
+  _poolCardsShown = 150;
   renderPoolCards();
 }
 
@@ -8750,6 +8830,9 @@ function addOptimalPortfolio() {
   saveBuilds(allBuilds);
   activeBuildId = newBuild.id;
 
+  // Store full pool candidates with metrics for portfolio tab
+  _portfolioLineups = selected;
+
   const generated = selected.map((c, i) => ({
     name: `Portfolio ${i+1}`,
     totProj: c.metrics.proj,
@@ -8758,6 +8841,9 @@ function addOptimalPortfolio() {
   }));
   updateActiveBuild(generated);
   renderSavedCards();
+
+  // Switch to portfolio tab
+  switchPoolTab('portfolio');
 
   const coveredPct = _contestSimResults ? (() => {
     const covered = new Set();
@@ -8772,7 +8858,7 @@ function addOptimalPortfolio() {
 function setPoolSort(col) {
   if (_poolSortCol === col) _poolSortDir *= -1;
   else { _poolSortCol = col; _poolSortDir = -1; }
-  _poolCardsShown = 50;
+  _poolCardsShown = 150;
   renderPoolCards();
   renderPoolExposure();
 }
