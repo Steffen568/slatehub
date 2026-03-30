@@ -7672,45 +7672,37 @@ function simSolveWithStacks(allElig, rule, simProj, stackAppearCount, totalN) {
 
   const windows = optoStackWindows(rule);
 
-  // Try top 2 sim-ranked teams (reduced from 3 for speed)
-  const tryTeams = mainCandidates.slice(0, 2);
+  // Try top sim-ranked teams — pick one randomly weighted by sim score
+  // so we don't always try the same 2 teams. More teams = fewer failures.
+  if (!mainCandidates.length) return null;
+  const weights = mainCandidates.map(t => Math.max(teamSimScores[t] || 1, 1));
+  const mainTeam = weightedRandomChoice(mainCandidates, weights);
 
-  for (const mainTeam of tryTeams) {
-    const win = windows[Math.floor(Math.random() * windows.length)];
-    const teamHitters = ctx.teamHittersMap[mainTeam] || [];
-    const mainPlayerIds = win.length === 0
-      ? teamHitters.map(h => h.player_id)
-      : teamHitters.filter(h => h.batting_order != null && win.includes(h.batting_order)).map(h => h.player_id);
-    if (mainPlayerIds.length < rule.primarySize) continue;
+  const win = windows[Math.floor(Math.random() * windows.length)];
+  const teamHitters = ctx.teamHittersMap[mainTeam] || [];
+  const mainPlayerIds = win.length === 0
+    ? teamHitters.map(h => h.player_id)
+    : teamHitters.filter(h => h.batting_order != null && win.includes(h.batting_order)).map(h => h.player_id);
+  if (mainPlayerIds.length < rule.primarySize) return null;
 
-    const subCandidates = rule.subSize === 0 ? [null]
-      : (ctx.subPrefs.length > 0 ? ctx.subPrefs : rankedTeams).filter(t => t !== mainTeam).slice(0,2);
-    const subTeam = subCandidates[Math.floor(Math.random() * subCandidates.length)] ?? null;
+  const subCandidates = rule.subSize === 0 ? [null]
+    : (ctx.subPrefs.length > 0 ? ctx.subPrefs : rankedTeams).filter(t => t !== mainTeam).slice(0, 4);
+  const subTeam = subCandidates[Math.floor(Math.random() * subCandidates.length)] ?? null;
 
-    const problem = optoBuildLP(allElig, {
-      mainTeam, mainPlayerIds, mainSize: rule.primarySize,
-      subTeam, subSize: rule.subSize
-    }, [], simProj);
+  const problem = optoBuildLP(allElig, {
+    mainTeam, mainPlayerIds, mainSize: rule.primarySize,
+    subTeam, subSize: rule.subSize
+  }, [], simProj);
 
-    const ids = optoSolve(problem);
-    if (!ids || ids.length !== 10) continue;
-    const totSal = ids.reduce((s, id) => s + (ctx.eligById.get(id)?.salary || 0), 0);
-    if (totSal > optoSalaryCap) continue;
+  const ids = optoSolve(problem);
+  if (!ids || ids.length !== 10) return null;
+  const totSal = ids.reduce((s, id) => s + (ctx.eligById.get(id)?.salary || 0), 0);
+  if (totSal > optoSalaryCap) return null;
 
-    const assembled = optoAssembleLineup(ids, allElig);
-    assembled._mainTeam = mainTeam;
-    assembled._subTeam = subTeam;
-    return assembled;
-  }
-
-  // Fallback: no-stack solve
-  const prob = optoBuildLP(allElig, {mainTeam:null, mainPlayerIds:[], mainSize:0, subTeam:null, subSize:0}, [], simProj);
-  const ids = optoSolve(prob);
-  if (ids && ids.length === 10) {
-    const sal = ids.reduce((s, id) => s + (ctx.eligById.get(id)?.salary || 0), 0);
-    if (sal <= optoSalaryCap) return optoAssembleLineup(ids, allElig);
-  }
-  return null;
+  const assembled = optoAssembleLineup(ids, allElig);
+  assembled._mainTeam = mainTeam;
+  assembled._subTeam = subTeam;
+  return assembled;
 }
 
 function scorePoolLineup(lineupObj) {
