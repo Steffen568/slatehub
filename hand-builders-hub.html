@@ -8343,7 +8343,10 @@ function generateOpponentField(numOpponents, contestDb) {
   for (const pos of Object.keys(OPP_POS_SLOTS)) posBuckets[pos] = [];
 
   allElig.forEach((p, idx) => {
-    const positions = (p.positions || p.position || 'OF').split('/');
+    const positions = Array.isArray(p.positions) ? p.positions
+      : typeof p.positions === 'string' ? p.positions.split('/')
+      : typeof p.position === 'string' ? p.position.split('/')
+      : ['OF'];
     const isPitcher = positions.includes('SP') || positions.includes('P') || positions.includes('RP');
     // Add player to EVERY eligible position bucket (multi-pos eligibility)
     if (isPitcher) {
