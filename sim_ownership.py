@@ -265,9 +265,11 @@ def build_pool(data, slate=None):
         env_score = (game_total / 8.5) ** 1.5
 
         # Batting order premium (r=0.203 — matters but less than proj/salary)
+        # Softened: bo=1 was 1.5x causing 40%+ concentration on leadoff hitters.
+        # Real data shows top-of-order premium is moderate, not extreme.
         if not is_pitcher and batting_order:
-            bo_score = {1: 1.5, 2: 1.4, 3: 1.35, 4: 1.25, 5: 1.05,
-                        6: 0.85, 7: 0.70, 8: 0.55, 9: 0.45}.get(batting_order, 0.7)
+            bo_score = {1: 1.30, 2: 1.25, 3: 1.20, 4: 1.15, 5: 1.05,
+                        6: 0.90, 7: 0.80, 8: 0.70, 9: 0.60}.get(batting_order, 0.75)
         else:
             bo_score = 1.0
 
@@ -308,7 +310,67 @@ def build_pool(data, slate=None):
 
     if name_fallback_count:
         print(f"  Name-matched {name_fallback_count} players with ID mismatches")
-    return pool
+
+    # Deduplicate by name: same player can have multiple IDs (MLBAM vs DK).
+    # Keep the entry with the highest base_score (best combination of proj + batting order + salary).
+    # But first inherit batting_order across duplicates so the best-projected
+    # row isn't penalized for missing batting_order.
+    from collections import defaultdict as _dd
+    name_groups = _dd(list)
+    for p in pool:
+        name_groups[p['name'].lower().strip()].append(p)
+
+    deduped = []
+    merges = 0
+    for key, group in name_groups.items():
+        if len(group) == 1:
+            deduped.append(group[0])
+            continue
+        # Merge batting_order: use the first non-None
+        bo = next((p['batting_order'] for p in group if p['batting_order']), None)
+        # Find which row has lineup data (for confirmed status lookup)
+        lineup_pid = next((p['player_id'] for p in group if data['lineup_map'].get(p['player_id'])), None)
+        for p in group:
+            p['batting_order'] = bo
+        # Pick the row with the highest projection (it has the best data)
+        best = max(group, key=lambda p: p['proj'])
+        best['batting_order'] = bo
+        # Use the player_id that has lineup data (so confirmed/unconfirmed lookup works)
+        if lineup_pid:
+            best['player_id'] = lineup_pid
+        # Recalculate base_score with merged batting_order
+        if not best['is_pitcher'] and bo:
+            bo_score = {1: 1.30, 2: 1.25, 3: 1.20, 4: 1.15, 5: 1.05,
+                        6: 0.90, 7: 0.80, 8: 0.70, 9: 0.60}.get(bo, 0.75)
+        else:
+            bo_score = 1.0
+        proj_score = best['proj'] ** 1.5
+        salary_score = (best['salary'] / 3500) ** 1.3
+        value = (best['proj'] / best['salary'] * 1000) if best['salary'] > 0 else 0
+        value_score = value ** SALARY_CURVE_EXP
+        odds_row = data['odds'].get(best.get('game_pk'))
+        game_total = safe(odds_row.get('game_total'), 8.5) if odds_row else 8.5
+        env_score = (game_total / 8.5) ** 1.5
+        best['base_score'] = (proj_score * 0.40 + salary_score * 0.30 + value_score * 0.05 +
+                              env_score * 0.10 + bo_score * 0.15)
+        if best['is_pitcher']:
+            pk_data = data.get('pitcher_k', {}).get(best['player_id'], {})
+            salary_tier = clip((best['salary'] - 5000) / 3000, 0.2, 2.0)
+            k_excitement = clip((pk_data.get('k_pct', 0.22) - 0.18) / 0.10, 0.5, 2.0)
+            stuff_hype = clip((pk_data.get('stuff_plus', 100) - 90) / 20, 0.5, 1.5)
+            best['base_score'] *= PITCHER_BOOST * (0.3 + salary_tier) * k_excitement * stuff_hype
+        lu = data['lineup_map'].get(best['player_id'])
+        confirmed = lu and lu.get('batting_order') and lu['batting_order'] >= 1
+        if confirmed:
+            best['base_score'] *= CONFIRMED_BOOST
+        elif not best['is_pitcher'] and not confirmed:
+            best['base_score'] *= UNCONFIRMED_PENALTY
+        deduped.append(best)
+        merges += len(group) - 1
+
+    if merges:
+        print(f"  Deduped: {len(pool)} → {len(deduped)} (merged {merges} duplicate players)")
+    return deduped
 
 
 # ── Greedy Lineup Builder ────────────────────────────────────────────────────
