@@ -4248,7 +4248,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
   <div class="lineups-section-hd">
     <span class="lineups-section-title">Saved Lineups</span>
     <div style="margin-left:auto;display:flex;gap:6px;">
-      <button class="bld-btn" onclick="exportSavedCSV()" title="Export active build to DK CSV">↓ CSV</button>
+      <label class="bld-btn" style="cursor:pointer;background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.35);color:#fbbf24;" title="Import DK entries CSV to match builds to contests">
+        ↑ DK CSV <input type="file" accept=".csv" style="display:none" onchange="importDKTemplate(this.files[0])">
+      </label>
       <button class="bld-btn classic-only" id="lateswap-all-btn" style="display:none;background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.35);color:#fbbf24;" onclick="lateSwapAllLineups()" title="Re-optimize unlocked slots in all saved lineups">Late Swap All</button>
       <button class="bld-btn" id="lateswap-refresh-btn" style="display:none;background:rgba(99,179,237,.1);border-color:rgba(99,179,237,.35);color:#63b3ed;" onclick="refreshLateSwapStatus()" title="Re-check game lock times">Refresh Status</button>
       <button class="bld-btn danger" onclick="clearActiveBuild()">Clear Build</button>
@@ -9723,7 +9725,9 @@ function importDKTemplate(file) {
     const entries = [];
     const cptIds = {};
     const utilIds = {};
+    const classicIds = {};  // name → dkId for Classic mode (all roster positions)
     const contestMap = {};  // contestId → { contestId, contestName, entryFee, entryCount }
+    let isSD = false;
 
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
@@ -9746,14 +9750,24 @@ function importDKTemplate(file) {
       if (name && dkId && /^\d+$/.test(dkId)) {
         const nName = normName(name);
         const lName = name.toLowerCase();
-        if (rosterPos === 'CPT') { cptIds[nName] = dkId; cptIds[lName] = dkId; }
-        else if (rosterPos === 'UTIL') { utilIds[nName] = dkId; utilIds[lName] = dkId; }
+        if (rosterPos === 'CPT') {
+          cptIds[nName] = dkId; cptIds[lName] = dkId;
+          isSD = true;
+        } else if (rosterPos === 'UTIL') {
+          utilIds[nName] = dkId; utilIds[lName] = dkId;
+          isSD = true;
+        }
+        // Classic positions: P, C, 1B, 2B, 3B, SS, OF — store all by name
+        classicIds[nName] = dkId;
+        classicIds[lName] = dkId;
       }
     }
 
     const contests = Object.values(contestMap);
-    _dkTemplate = { entries, contests, cptIds, utilIds };
+    _dkTemplate = { entries, contests, cptIds, utilIds, classicIds, isSD };
     _contestAssignments = {};
+    // Also populate dkDraftgroupMap so fillDKTemplate-dependent code still works
+    dkDraftgroupMap = classicIds;
     showToast(`DK CSV imported: ${contests.length} contests, ${entries.length} entries`);
     renderContestDash();
   };
@@ -9798,25 +9812,42 @@ function assignContest(contestId, buildId) {
 
 function lookupDkId(playerName, role) {
   if (!_dkTemplate) return null;
-  const map = role === 'cpt' ? _dkTemplate.cptIds : _dkTemplate.utilIds;
+  let map;
+  if (role === 'cpt')       map = _dkTemplate.cptIds;
+  else if (role === 'util') map = _dkTemplate.utilIds;
+  else                      map = _dkTemplate.classicIds || {};
   return map[playerName.toLowerCase()] || map[normName(playerName)] || null;
 }
 
 function lineupToEntryRow(entry, lu) {
   const lineup = lu.lineup || {};
   const unmatchedPlayers = [];
-  const cptPlayer = lineup.cpt;
-  const cptId = cptPlayer ? lookupDkId(cptPlayer.name, 'cpt') : '';
-  if (cptPlayer && !cptId) unmatchedPlayers.push(cptPlayer.name + ' (CPT)');
-  const flexIds = [];
-  for (let f = 1; f <= 5; f++) {
-    const fp = lineup[`flex${f}`];
-    const fId = fp ? lookupDkId(fp.name, 'util') : '';
-    if (fp && !fId) unmatchedPlayers.push(fp.name + ' (UTIL)');
-    flexIds.push(fId || '');
+  if (lu.mode === 'showdown') {
+    // SD: CPT + 5 FLEX
+    const cptPlayer = lineup.cpt;
+    const cptId = cptPlayer ? lookupDkId(cptPlayer.name, 'cpt') : '';
+    if (cptPlayer && !cptId) unmatchedPlayers.push(cptPlayer.name + ' (CPT)');
+    const flexIds = [];
+    for (let f = 1; f <= 5; f++) {
+      const fp = lineup[`flex${f}`];
+      const fId = fp ? lookupDkId(fp.name, 'util') : '';
+      if (fp && !fId) unmatchedPlayers.push(fp.name + ' (UTIL)');
+      flexIds.push(fId || '');
+    }
+    const row = `${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},${cptId || ''},${flexIds.join(',')}`;
+    return { row, unmatched: unmatchedPlayers };
+  } else {
+    // Classic: P,P,C,1B,2B,3B,SS,OF,OF,OF
+    const slotIds = LINEUP_SLOTS.map(sl => {
+      const p = lineup[sl.key];
+      if (!p) return '';
+      const id = lookupDkId(p.name, 'classic');
+      if (!id) unmatchedPlayers.push(p.name + ' (' + sl.pos + ')');
+      return id || '';
+    });
+    const row = `${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},${slotIds.join(',')}`;
+    return { row, unmatched: unmatchedPlayers };
   }
-  const row = `${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},${cptId || ''},${flexIds.join(',')}`;
-  return { row, unmatched: unmatchedPlayers };
 }
 
 function exportToDK() {
@@ -9830,7 +9861,13 @@ function exportToDK() {
     return;
   }
 
-  const csvRows = ['Entry ID,Contest Name,Contest ID,Entry Fee,CPT,UTIL,UTIL,UTIL,UTIL,UTIL'];
+  // Detect mode from first assigned build's lineups
+  const firstBuild = Object.values(_contestAssignments).map(bid => builds.find(b => b.id === bid)).find(Boolean);
+  const isSD = firstBuild?.lineups?.[0]?.mode === 'showdown';
+  const header = isSD
+    ? 'Entry ID,Contest Name,Contest ID,Entry Fee,CPT,UTIL,UTIL,UTIL,UTIL,UTIL'
+    : 'Entry ID,Contest Name,Contest ID,Entry Fee,P,P,C,1B,2B,3B,SS,OF,OF,OF';
+  const csvRows = [header];
   const unmatchedPlayers = new Set();
   let filled = 0, skipped = 0;
 
@@ -9857,7 +9894,8 @@ function exportToDK() {
   // Also include unassigned entries as empty rows so the CSV stays complete
   for (const entry of _dkTemplate.entries) {
     if (_contestAssignments[entry.contestId]) continue;  // already handled
-    csvRows.push(`${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},,,,,,`);
+    const emptyCols = isSD ? ',,,,,,' : ',,,,,,,,,,';
+    csvRows.push(`${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee}${emptyCols}`);
     skipped++;
   }
 
