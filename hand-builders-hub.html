@@ -7995,14 +7995,29 @@ function renderPortfolioCards() {
     const hitterSlots  = LINEUP_SLOTS.filter(sl => sl.pos !== 'SP');
     const pitRows = pitcherSlots.map(sl => {
       const p = lu[sl.key]; if (!p) return '';
+      const tc = abbrColor(p.team || '');
       const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
-      return `<div class="lc-slot-pitcher"><span class="lc-slot-pos" style="background:${posColor('SP').bg};color:${posColor('SP').tx};">SP</span><span class="lc-slot-name">${last}</span><span class="lc-slot-sal">${fmtSal(p.salary)}</span><span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span></div>`;
+      return `<div class="lc-slot-pitcher">
+        <span class="lc-slot-pos" style="background:${posColor('SP').bg};color:${posColor('SP').tx};">SP</span>
+        <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
+        <span class="lc-slot-name">${last}</span>
+        <span class="lc-slot-sal">${fmtSal(p.salary)}</span>
+        <span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span>
+      </div>`;
     }).join('');
     const hitRows = hitterSlots.map(sl => {
       const p = lu[sl.key]; if (!p) return '';
+      const tc = abbrColor(p.team || '');
       const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
       const bo = p.batting_order ? `<span style="font-size:8px;color:var(--muted);">${p.batting_order}</span>` : '';
-      return `<div class="lc-slot-hitter"><span class="lc-slot-pos" style="background:${posColor(sl.pos).bg};color:${posColor(sl.pos).tx};">${sl.pos}</span><span class="lc-slot-name">${last}</span>${bo}<span class="lc-slot-sal">${fmtSal(p.salary)}</span><span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span></div>`;
+      return `<div class="lc-slot-hitter">
+        <span class="lc-slot-pos" style="background:${posColor(sl.pos).bg};color:${posColor(sl.pos).tx};">${sl.pos}</span>
+        <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
+        <span class="lc-slot-name">${last}</span>
+        ${bo}
+        <span class="lc-slot-sal">${fmtSal(p.salary)}</span>
+        <span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span>
+      </div>`;
     }).join('');
 
     return `<div class="lc-chip" style="border-color:${borderClr};">
