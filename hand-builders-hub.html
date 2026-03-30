@@ -8344,56 +8344,65 @@ function generateOpponentField(numOpponents, contestDb) {
 
   allElig.forEach((p, idx) => {
     const positions = (p.positions || p.position || 'OF').split('/');
-    // Assign to scarcest matching position
-    const priority = ['C','SS','2B','3B','1B','OF','SP'];
-    let assignedPos = 'OF';
-    for (const pp of priority) {
-      if (positions.includes(pp)) { assignedPos = pp; break; }
-    }
     const isPitcher = positions.includes('SP') || positions.includes('P') || positions.includes('RP');
-    if (isPitcher) assignedPos = 'SP';
-
-    posBuckets[assignedPos]?.push({
-      idx, pid: p.player_id, salary: p.salary || 3000, baseScore: baseScores[idx],
-    });
+    // Add player to EVERY eligible position bucket (multi-pos eligibility)
+    if (isPitcher) {
+      posBuckets['SP']?.push({
+        idx, pid: p.player_id, salary: p.salary || 3000, baseScore: baseScores[idx],
+      });
+    } else {
+      const entry = { idx, pid: p.player_id, salary: p.salary || 3000, baseScore: baseScores[idx] };
+      let added = false;
+      for (const pos of positions) {
+        if (posBuckets[pos]) { posBuckets[pos].push({...entry}); added = true; }
+      }
+      if (!added) posBuckets['OF']?.push({...entry}); // fallback
+    }
   });
 
   // Sort each bucket by baseScore descending
   for (const pos in posBuckets) posBuckets[pos].sort((a,b) => b.baseScore - a.baseScore);
+  console.log('Opponent buckets:', Object.fromEntries(Object.entries(posBuckets).map(([k,v]) => [k, v.length])));
 
-  // Generate opponent lineups
+  // Generate opponent lineups (returns a Promise for async batching)
   const oppPids = [];
-  let attempts = 0;
   const maxAttempts = numOpponents * 3;
   const seen = new Set();
-
-  while (oppPids.length < numOpponents && attempts < maxAttempts) {
-    attempts++;
-    // Apply multiplicative noise to scores
-    const noisyBuckets = {};
-    for (const pos in posBuckets) {
-      noisyBuckets[pos] = posBuckets[pos].map(p => {
-        const sd = p.baseScore > 50 ? 0.50 : 0.30; // pitchers (high score) get more noise
-        const mult = 1.0 + (Math.random() * 2 - 1) * sd * 1.5; // approx normal via uniform
-        return {...p, noisyScore: p.baseScore * Math.max(0.05, mult)};
-      });
-      noisyBuckets[pos].sort((a,b) => b.noisyScore - a.noisyScore);
-    }
-
-    const lineup = buildOpponentGreedy(noisyBuckets, null, 50000);
-    if (!lineup) continue;
-
-    const key = lineup.sort((a,b) => a-b).join(',');
-    if (seen.has(key)) continue;
-    seen.add(key);
-    oppPids.push(lineup);
-  }
-
   const fieldSize = contestDb?.max_entries || 5000;
-  const fieldMult = Math.max(1, Math.round(fieldSize / Math.max(1, oppPids.length)));
 
-  _opponentField = { oppPids, fieldMult };
-  return _opponentField;
+  return new Promise(resolve => {
+    let attempts = 0;
+    function genBatch() {
+      const batchEnd = Math.min(attempts + 200, maxAttempts);
+      while (attempts < batchEnd && oppPids.length < numOpponents) {
+        attempts++;
+        const noisyBuckets = {};
+        for (const pos in posBuckets) {
+          noisyBuckets[pos] = posBuckets[pos].map(p => {
+            const sd = p.baseScore > 50 ? 0.50 : 0.30;
+            const mult = 1.0 + (Math.random() * 2 - 1) * sd * 1.5;
+            return {...p, noisyScore: p.baseScore * Math.max(0.05, mult)};
+          });
+          noisyBuckets[pos].sort((a,b) => b.noisyScore - a.noisyScore);
+        }
+        const lineup = buildOpponentGreedy(noisyBuckets, null, 50000);
+        if (!lineup) continue;
+        const key = [...lineup].sort((a,b) => a-b).join(',');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        oppPids.push(lineup);
+      }
+      if (oppPids.length < numOpponents && attempts < maxAttempts) {
+        updatePoolLoading(`${oppPids.length} / ${numOpponents}`, 'Generating opponent field', oppPids.length/numOpponents*100);
+        setTimeout(genBatch, 0);
+      } else {
+        const fieldMult = Math.max(1, Math.round(fieldSize / Math.max(1, oppPids.length)));
+        _opponentField = { oppPids, fieldMult };
+        resolve(_opponentField);
+      }
+    }
+    genBatch();
+  });
 }
 
 // ── CONTEST SIMULATION ───────────────────────────────────────────────────────
@@ -8402,7 +8411,7 @@ let _contestSimResults = null; // { perLineup: [{winCount, top1Count, ...}], sim
 let _poolSortCol = 'proj';
 let _poolSortDir = -1;
 
-function simulateContest() {
+async function simulateContest() {
   if (!_poolCandidates.length) { showToast('Generate a pool first'); return; }
   const numSims = optoSettings.contestSims || 5000;
   const pool = _poolCandidates;
@@ -8443,7 +8452,7 @@ function simulateContest() {
   // Generate opponent field — match pool size for stable metrics
   const NUM_OPPONENTS = Math.max(1500, n);
   showPoolLoading('Generating opponent field...');
-  const field = generateOpponentField(NUM_OPPONENTS, contestDb);
+  const field = await generateOpponentField(NUM_OPPONENTS, contestDb);
   const oppPids = field?.oppPids || [];
   const fieldMult = field?.fieldMult || 1;
   const hasField = oppPids.length > 0;
