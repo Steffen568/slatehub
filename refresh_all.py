@@ -122,6 +122,9 @@ if MORNING:
         stats_future.result()  # wait for stats; results already in shared logger
         _, dk_passed = lineups_future.result()
 
+        # Contest data (entry fees, prize pools, payout structures)
+        run_script('load_contest_data.py --min-fee 1', 'DK Contest Data', logger)
+
         # Agent 3 only runs if Agent 2 passed its validation gate
         if dk_passed:
             try:
@@ -152,6 +155,9 @@ if FULL:
 
         run_splits(logger)
 
+        # Contest data (entry fees, prize pools, payout structures)
+        run_script('load_contest_data.py --min-fee 1', 'DK Contest Data', logger)
+
         if dk_passed:
             try:
                 run_projections(logger)
@@ -173,6 +179,7 @@ if POSTGAME:
     print(f"{'='*55}")
     run_script('load_bullpen.py',            'Bullpen — final pitch counts', logger)
     run_script('load_game_logs.py --days 3', "Game Logs — today's results",  logger)
+    run_script('load_contest_data.py --min-fee 1', 'DK Contest Data — final counts', logger)
 
 # ── SPLITS (standalone, 7:30 AM) ─────────────────────────────────────────────
 if SPLITS:
