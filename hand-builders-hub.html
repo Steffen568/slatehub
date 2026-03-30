@@ -4341,6 +4341,22 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     <input type="number" placeholder="Max Games" style="width:58px;" class="opto-input" oninput="setPoolFilter('maxGames',this.value)">
     <input type="text" placeholder="Stack" style="width:50px;" class="opto-input" oninput="setPoolFilter('stack',this.value)">
     <input type="number" placeholder="Min Win%" style="width:58px;" class="opto-input" oninput="setPoolFilter('minWin',this.value)">
+    <input type="number" placeholder="Max Own" style="width:58px;" class="opto-input" oninput="setPoolFilter('maxOwn',this.value)" title="Max total lineup ownership %">
+    <input type="number" placeholder="Min Lev" style="width:58px;" class="opto-input" oninput="setPoolFilter('minLeverage',this.value)" title="Min leverage (ceil/own)">
+    <input type="number" placeholder="Min Boom" style="width:58px;" class="opto-input" oninput="setPoolFilter('minBoom',this.value)" title="Min boom% (top 5% of sims)">
+    <span style="color:var(--border);margin:0 2px;">|</span>
+    <label style="color:var(--muted);font-weight:700;">Sort:</label>
+    <select class="opto-input" style="width:80px;" onchange="setPoolSort(this.value)">
+      <option value="proj">Proj</option>
+      <option value="leverage">Leverage</option>
+      <option value="totalOwn">Own (low)</option>
+      <option value="winPct">Win%</option>
+      <option value="boomPct">Boom%</option>
+      <option value="sharpe">Sharpe</option>
+      <option value="winUpside">Win Upside</option>
+      <option value="roi">ROI</option>
+      <option value="cashPct">Cash%</option>
+    </select>
   </div>
   <!-- Two-column body -->
   <div class="lineups-body">
@@ -7750,7 +7766,7 @@ function scorePoolLineup(lineupObj) {
   const players = Object.entries(lineupObj).filter(([k,v]) => v && typeof v === 'object' && v.player_id);
   const pids = new Set(players.map(([k,p]) => p.player_id));
 
-  let proj = 0, ceil = 0, floor = 0, sigma = 0, salary = 0;
+  let proj = 0, ceil = 0, floor = 0, sigma = 0, salary = 0, totalOwn = 0;
   const gamePks = new Set();
   const teamCounts = {};
   players.forEach(([k, p]) => {
@@ -7759,6 +7775,7 @@ function scorePoolLineup(lineupObj) {
     floor  += p.proj_floor ?? 0;
     sigma  += p.sim_sd ?? ((p.proj_ceiling ?? 0) - (p.proj_floor ?? 0)) / 3.3;
     salary += p.salary ?? 0;
+    totalOwn += p.proj_ownership ?? 0;
     if (p.game_pk) gamePks.add(p.game_pk);
   });
   hitterSlots.forEach(k => {
@@ -7786,10 +7803,22 @@ function scorePoolLineup(lineupObj) {
     });
   }
 
+  // GPP metrics
+  const leverage = totalOwn > 0 ? +(ceil / totalOwn * 100).toFixed(1) : 0;
+  // Correlation quality: stack size + bring-back + sub-stack
+  const mainSize = stackEntries[0]?.[1] || 0;
+  const subSize = stackEntries[1]?.[1] || 0;
+  const corrScore = +(
+    (mainSize >= 5 ? 4 : mainSize >= 4 ? 3 : mainSize >= 3 ? 1.5 : 0) +
+    (bringBacks >= 2 ? 2.5 : bringBacks >= 1 ? 1.5 : 0) +
+    (subSize >= 2 ? 1 : 0)
+  ).toFixed(1);
+
   return {
     proj: +proj.toFixed(1), ceil: +ceil.toFixed(1), floor: +floor.toFixed(1),
     sigma: +sigma.toFixed(1), salary, games: gamePks.size,
-    stack: mainStack, sub: subStack, bringBacks, pids
+    stack: mainStack, sub: subStack, bringBacks, pids,
+    totalOwn: +totalOwn.toFixed(1), leverage, corrScore
   };
 }
 
@@ -7933,6 +7962,9 @@ function filterPoolCandidates() {
   if (f.maxGames) filtered = filtered.filter(c => c.metrics.games <= f.maxGames);
   if (f.stack) filtered = filtered.filter(c => c.metrics.stack.startsWith(f.stack));
   if (f.minWin && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.winPct || 0) >= f.minWin);
+  if (f.maxOwn) filtered = filtered.filter(c => (c.metrics.totalOwn || 999) <= f.maxOwn);
+  if (f.minLeverage) filtered = filtered.filter(c => (c.metrics.leverage || 0) >= f.minLeverage);
+  if (f.minBoom && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.boomPct || 0) >= f.minBoom);
   if (f.mustInclude) { const pid = +f.mustInclude; filtered = filtered.filter(c => c.metrics.pids.has(pid)); }
   return filtered;
 }
@@ -7958,10 +7990,19 @@ function renderPoolCards() {
   const countEl = document.getElementById('pool-count');
   if (countEl) countEl.textContent = `${filtered.length} lineups`;
 
-  // Sort by contest metrics if available, else by projection
-  if (filtered[0]?.contest) {
-    filtered.sort((a,b) => (b.contest?.winPct||0) - (a.contest?.winPct||0) || b.metrics.proj - a.metrics.proj);
-  }
+  // Sort by selected column
+  const sc = _poolSortCol;
+  const dir = _poolSortDir;
+  const getVal = (c) => {
+    // Contest metrics
+    if (c.contest && sc in c.contest) return c.contest[sc] || 0;
+    // Static metrics
+    if (sc in (c.metrics || {})) return c.metrics[sc] || 0;
+    return c.metrics?.proj || 0;
+  };
+  // For totalOwn, lower is better (sort ascending by default)
+  const effectiveDir = sc === 'totalOwn' ? -dir : dir;
+  filtered.sort((a,b) => (getVal(b) - getVal(a)) * effectiveDir || b.metrics.proj - a.metrics.proj);
 
   const show = filtered.slice(0, _poolCardsShown);
   const moreBtn = document.getElementById('pool-show-more');
@@ -8022,6 +8063,17 @@ function renderPoolCards() {
       </div>`;
     }).join('');
 
+    // Static GPP badges (always visible)
+    const ownClr = m.totalOwn <= 80 ? '#4ade80' : m.totalOwn <= 120 ? '#fbbf24' : '#f87171';
+    const levClr = m.leverage >= 50 ? '#4ade80' : m.leverage >= 30 ? '#fbbf24' : 'var(--muted)';
+    const staticBadges = `<span style="font-size:8px;color:${ownClr};" title="Total lineup ownership">${m.totalOwn}%own</span>`
+      + `<span style="font-size:8px;color:${levClr};" title="Leverage: ceiling / ownership">${m.leverage}lev</span>`
+      + (m.corrScore >= 3 ? `<span style="font-size:8px;color:#a78bfa;" title="Correlation score">${m.corrScore}corr</span>` : '');
+    // Sim badges (if sim has run)
+    const simBadges = ct
+      ? `<span style="font-size:8px;color:${ct.boomPct >= 10 ? '#4ade80' : 'var(--muted)'};" title="Boom% (top 5% of sims)">${ct.boomPct}%boom</span>`
+      : '';
+
     return `<div class="lc-chip" style="border-color:${borderClr};" onclick="loadPoolLineup(${idx})">
       <div class="lc-chip-hd">
         <span class="lc-chip-name">#${i+1}</span>
@@ -8029,6 +8081,7 @@ function renderPoolCards() {
         <span class="lc-chip-sal">$${m.salary.toLocaleString()}</span>
         <span class="stack-size-badge" style="margin-left:4px;">${m.stack}</span>
         ${m.sub !== '—' ? `<span class="stack-size-badge">${m.sub}</span>` : ''}
+        ${staticBadges} ${simBadges}
         ${contestBadge}
       </div>
       <div class="lc-chip-slots">${pitRows}${hitRows}</div>
@@ -8182,6 +8235,167 @@ function setPoolFilter(key, val) {
   renderPoolCards();
 }
 
+// ── OPPONENT FIELD GENERATOR ─────────────────────────────────────────────────
+
+const OPP_POS_SLOTS = {SP: 2, C: 1, '1B': 1, '2B': 1, '3B': 1, SS: 1, OF: 3};
+
+function computePublicScore(p) {
+  const proj = p.proj_dk_pts || 0;
+  const sal = p.salary || 3000;
+  const bo = p.batting_order;
+  const isPitcher = (p.positions || p.position || '').includes('SP');
+
+  const projScore = Math.pow(proj, 1.5);
+  const salaryScore = Math.pow(sal / 3500, 1.3);
+  const value = proj / sal * 1000;
+  const valueScore = Math.pow(value, 0.6);
+  const envScore = 1.0; // neutral (game env not easily accessible per player here)
+  let boScore = 1.0;
+  if (!isPitcher && bo) {
+    boScore = {1:1.30,2:1.25,3:1.20,4:1.15,5:1.05,6:0.90,7:0.80,8:0.70,9:0.60}[bo] || 0.75;
+  }
+
+  let score = projScore * 0.40 + salaryScore * 0.30 + valueScore * 0.05 + envScore * 0.10 + boScore * 0.15;
+  if (isPitcher) score *= 5.0;
+  if (!isPitcher && !bo) score *= 0.4; // unconfirmed penalty
+  return score;
+}
+
+function buildOpponentGreedy(posBuckets, scores, salaryCap) {
+  // posBuckets: {SP: [{idx, salary},...], C: [...], ...} pre-sorted by score desc
+  const posOrder = Object.keys(OPP_POS_SLOTS);
+  // Shuffle position fill order
+  for (let i = posOrder.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [posOrder[i], posOrder[j]] = [posOrder[j], posOrder[i]];
+  }
+
+  const remaining = {...OPP_POS_SLOTS};
+  let salLeft = salaryCap;
+  const selected = [];
+  const usedIdx = new Set();
+
+  // Pre-compute cheapest per position
+  const cheapest = {};
+  for (const pos in posBuckets) {
+    cheapest[pos] = posBuckets[pos].length ? Math.min(...posBuckets[pos].map(p => p.salary)) : 3000;
+  }
+
+  for (const pos of posOrder) {
+    let slotsNeeded = remaining[pos];
+    while (slotsNeeded > 0) {
+      // Reserve salary for unfilled positions
+      let reserve = 0;
+      for (const rp in remaining) {
+        const rSlots = rp === pos ? Math.max(0, remaining[rp] - 1) : remaining[rp];
+        reserve += (cheapest[rp] || 3000) * rSlots;
+      }
+      const budget = salLeft - reserve;
+
+      let picked = false;
+      for (const p of posBuckets[pos]) {
+        if (usedIdx.has(p.idx)) continue;
+        if (p.salary <= budget) {
+          selected.push(p.pid);
+          usedIdx.add(p.idx);
+          salLeft -= p.salary;
+          remaining[pos]--;
+          slotsNeeded--;
+          picked = true;
+          break;
+        }
+      }
+      if (!picked) {
+        // Try cheapest available
+        for (let j = posBuckets[pos].length - 1; j >= 0; j--) {
+          const p = posBuckets[pos][j];
+          if (!usedIdx.has(p.idx) && p.salary <= salLeft) {
+            selected.push(p.pid);
+            usedIdx.add(p.idx);
+            salLeft -= p.salary;
+            remaining[pos]--;
+            slotsNeeded--;
+            picked = true;
+            break;
+          }
+        }
+        if (!picked) return null; // infeasible
+      }
+    }
+  }
+  return selected.length === 10 ? selected : null;
+}
+
+let _opponentField = null; // cached: {oppPids: [[pid,...]], fieldMult: number}
+
+function generateOpponentField(numOpponents, contestDb) {
+  const allElig = [
+    ...allHitters.filter(h => !isExcluded(h) && (h.salary||0) > 0 && (h.proj_dk_pts||0) > 0),
+    ...allPitchers.filter(p => !isExcluded(p) && (p.salary||0) > 0 && (p.proj_dk_pts||0) > 0),
+  ];
+  if (allElig.length < 15) return null;
+
+  // Compute public base scores
+  const baseScores = allElig.map(p => computePublicScore(p));
+
+  // Group by canonical position
+  const posBuckets = {};
+  for (const pos of Object.keys(OPP_POS_SLOTS)) posBuckets[pos] = [];
+
+  allElig.forEach((p, idx) => {
+    const positions = (p.positions || p.position || 'OF').split('/');
+    // Assign to scarcest matching position
+    const priority = ['C','SS','2B','3B','1B','OF','SP'];
+    let assignedPos = 'OF';
+    for (const pp of priority) {
+      if (positions.includes(pp)) { assignedPos = pp; break; }
+    }
+    const isPitcher = positions.includes('SP') || positions.includes('P') || positions.includes('RP');
+    if (isPitcher) assignedPos = 'SP';
+
+    posBuckets[assignedPos]?.push({
+      idx, pid: p.player_id, salary: p.salary || 3000, baseScore: baseScores[idx],
+    });
+  });
+
+  // Sort each bucket by baseScore descending
+  for (const pos in posBuckets) posBuckets[pos].sort((a,b) => b.baseScore - a.baseScore);
+
+  // Generate opponent lineups
+  const oppPids = [];
+  let attempts = 0;
+  const maxAttempts = numOpponents * 3;
+  const seen = new Set();
+
+  while (oppPids.length < numOpponents && attempts < maxAttempts) {
+    attempts++;
+    // Apply multiplicative noise to scores
+    const noisyBuckets = {};
+    for (const pos in posBuckets) {
+      noisyBuckets[pos] = posBuckets[pos].map(p => {
+        const sd = p.baseScore > 50 ? 0.50 : 0.30; // pitchers (high score) get more noise
+        const mult = 1.0 + (Math.random() * 2 - 1) * sd * 1.5; // approx normal via uniform
+        return {...p, noisyScore: p.baseScore * Math.max(0.05, mult)};
+      });
+      noisyBuckets[pos].sort((a,b) => b.noisyScore - a.noisyScore);
+    }
+
+    const lineup = buildOpponentGreedy(noisyBuckets, null, 50000);
+    if (!lineup) continue;
+
+    const key = lineup.sort((a,b) => a-b).join(',');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    oppPids.push(lineup);
+  }
+
+  const fieldSize = contestDb?.max_entries || 5000;
+  const fieldMult = Math.max(1, Math.round(fieldSize / Math.max(1, oppPids.length)));
+
+  _opponentField = { oppPids, fieldMult };
+  return _opponentField;
+}
+
 // ── CONTEST SIMULATION ───────────────────────────────────────────────────────
 
 let _contestSimResults = null; // { perLineup: [{winCount, top1Count, ...}], simWinners: [[]] }
@@ -8211,7 +8425,8 @@ function simulateContest() {
   // Per-lineup accumulators
   const stats = pool.map(() => ({
     winCount: 0, top1Count: 0, top10Count: 0, cashCount: 0,
-    totalPts: 0, maxPts: 0, finishSum: 0, totalPayout: 0
+    totalPts: 0, totalPtsSq: 0, maxPts: 0, finishSum: 0, totalPayout: 0,
+    boomCount: 0, bustCount: 0
   }));
   // Track which lineups finish top-1% per sim (for portfolio optimization)
   const simWinners = []; // simIdx → winning lineup index
@@ -8224,6 +8439,15 @@ function simulateContest() {
   const top1Cutoff = Math.max(1, Math.ceil(n * 0.01));
   const top10Cutoff = Math.max(1, Math.ceil(n * 0.10));
   const cashCutoff = Math.max(1, Math.ceil(n * (payoutPct / 100)));
+
+  // Generate opponent field for realistic contest simulation
+  const NUM_OPPONENTS = 1000;
+  showPoolLoading('Generating opponent field...');
+  const field = generateOpponentField(NUM_OPPONENTS, contestDb);
+  const oppPids = field?.oppPids || [];
+  const fieldMult = field?.fieldMult || 1;
+  const hasField = oppPids.length > 0;
+  if (hasField) console.log(`Opponent field: ${oppPids.length} lineups, fieldMult=${fieldMult}`);
 
   // Build payout lookup from contest data for ROI calculation
   let payoutTiers = null; // [{minPos, maxPos, value}]
@@ -8256,30 +8480,56 @@ function simulateContest() {
         for (const pid of lineupPids[i]) s += simProj.get(pid) ?? 0;
         scores[i] = s;
         stats[i].totalPts += s;
+        stats[i].totalPtsSq += s * s;
         if (s > stats[i].maxPts) stats[i].maxPts = s;
       }
 
-      // Rank by score (descending) — build index array
+      // Score opponent field (if generated)
+      let oppScores = null;
+      if (hasField) {
+        oppScores = new Float64Array(oppPids.length);
+        for (let oi = 0; oi < oppPids.length; oi++) {
+          let os = 0;
+          for (const pid of oppPids[oi]) os += simProj.get(pid) ?? 0;
+          oppScores[oi] = os;
+        }
+      }
+
+      // Rank pool lineups by score (for internal pool ranking + portfolio opt)
       const indices = Array.from({length: n}, (_, i) => i);
       indices.sort((a, b) => scores[b] - scores[a]);
 
-      // Record winner + top 1%
+      // Record winner + top 1% (pool-internal for portfolio optimization)
       simWinners.push(indices[0]);
       const thisTop1 = new Set();
       for (let rank = 0; rank < top1Cutoff && rank < n; rank++) thisTop1.add(indices[rank]);
       simTop1.push(thisTop1);
 
-      // Record positions + payout
+      // Record positions — field-aware if opponents exist
       for (let rank = 0; rank < n; rank++) {
         const li = indices[rank];
-        stats[li].finishSum += rank + 1;
-        if (rank === 0) stats[li].winCount++;
-        if (rank < top1Cutoff) stats[li].top1Count++;
-        if (rank < top10Cutoff) stats[li].top10Count++;
-        if (rank < cashCutoff) stats[li].cashCount++;
-        // Payout from real tiers: scale rank to field size position
+        const myScore = scores[li];
+
+        // Compute field position: how many opponents beat this lineup
+        let fieldPos;
+        if (hasField && oppScores) {
+          let betterOpps = 0;
+          for (let oi = 0; oi < oppScores.length; oi++) {
+            if (oppScores[oi] > myScore) betterOpps++;
+          }
+          fieldPos = betterOpps * fieldMult + rank + 1;
+        } else {
+          fieldPos = Math.max(1, Math.round((rank / n) * fieldSize));
+        }
+
+        stats[li].finishSum += fieldPos;
+        if (fieldPos === 1) stats[li].winCount++;
+        if (fieldPos <= Math.ceil(fieldSize * 0.01)) stats[li].top1Count++;
+        if (fieldPos <= Math.ceil(fieldSize * 0.10)) stats[li].top10Count++;
+        if (fieldPos <= Math.ceil(fieldSize * payoutPct / 100)) stats[li].cashCount++;
+
+        // Payout from real tiers
         if (payoutTiers) {
-          const fieldPos = Math.max(1, Math.round((rank / n) * fieldSize));
           for (const t of payoutTiers) {
             if (fieldPos >= t.minPos && fieldPos <= t.maxPos) {
               stats[li].totalPayout += t.value;
@@ -8288,10 +8538,19 @@ function simulateContest() {
           }
         }
       }
+
+      // Boom/bust thresholds for this sim (pool-internal)
+      const boomThresh = scores[indices[Math.max(0, Math.floor(n * 0.05))]];
+      const bustThresh = scores[indices[Math.min(n-1, Math.floor(n * 0.70))]];
+      for (let i = 0; i < n; i++) {
+        if (scores[i] >= boomThresh) stats[i].boomCount++;
+        if (scores[i] <= bustThresh) stats[i].bustCount++;
+      }
     }
 
     if (simIdx < numSims) {
-      updatePoolLoading(`${simIdx} / ${numSims}`, `Scoring ${n} lineups per sim`, simIdx/numSims*100);
+      const fieldLabel = hasField ? ` vs ${oppPids.length} opponents (${fieldSize.toLocaleString()} field)` : '';
+      updatePoolLoading(`${simIdx} / ${numSims}`, `Scoring ${n} lineups${fieldLabel}`, simIdx/numSims*100);
       setTimeout(runBatch, 0);
     } else {
       hidePoolLoading();
@@ -8307,11 +8566,19 @@ function finalizeContest(stats, simWinners, simTop1, numSims, contestDb, payoutT
   const entryFee = contestDb?.entry_fee || 0;
   const hasPayouts = !!(payoutTiers && entryFee > 0);
 
+  // Compute pool-wide median for Sharpe ratio
+  const poolAvgs = stats.map(s => s.totalPts / numSims);
+  const sortedAvgs = [...poolAvgs].sort((a,b) => a - b);
+  const poolMedian = sortedAvgs[Math.floor(sortedAvgs.length / 2)] || 0;
+
   // Enrich each candidate with contest metrics
   for (let i = 0; i < n; i++) {
     const s = stats[i];
     const avgPayout = hasPayouts ? s.totalPayout / numSims : 0;
     const roi = hasPayouts ? ((avgPayout - entryFee) / entryFee * 100) : null;
+    const avgPts = s.totalPts / numSims;
+    const simSD = Math.sqrt(Math.max(0, s.totalPtsSq / numSims - avgPts * avgPts));
+    const totalOwn = _poolCandidates[i].metrics?.totalOwn || 1;
 
     _poolCandidates[i].contest = {
       winPct:    +(s.winCount / numSims * 100).toFixed(2),
@@ -8319,10 +8586,15 @@ function finalizeContest(stats, simWinners, simTop1, numSims, contestDb, payoutT
       top10Pct:  +(s.top10Count / numSims * 100).toFixed(1),
       cashPct:   +(s.cashCount / numSims * 100).toFixed(1),
       avgFinish: +(s.finishSum / numSims).toFixed(0),
-      avgSimPts: +(s.totalPts / numSims).toFixed(1),
+      avgSimPts: +avgPts.toFixed(1),
       maxSimPts: +s.maxPts.toFixed(1),
       avgPayout: hasPayouts ? +avgPayout.toFixed(2) : null,
       roi:       roi !== null ? +roi.toFixed(1) : null,
+      boomPct:   +(s.boomCount / numSims * 100).toFixed(1),
+      bustPct:   +(s.bustCount / numSims * 100).toFixed(1),
+      simSD:     +simSD.toFixed(1),
+      sharpe:    simSD > 0 ? +((avgPts - poolMedian) / simSD).toFixed(2) : 0,
+      winUpside: totalOwn > 0 ? +((s.winCount / numSims * 100) / (totalOwn / 100)).toFixed(2) : 0,
     };
   }
   _contestSimResults = { stats, simWinners, simTop1, numSims, contestDb };
@@ -8488,7 +8760,9 @@ function addOptimalPortfolio() {
 function setPoolSort(col) {
   if (_poolSortCol === col) _poolSortDir *= -1;
   else { _poolSortCol = col; _poolSortDir = -1; }
-  renderPoolTable();
+  _poolCardsShown = 50;
+  renderPoolCards();
+  renderPoolExposure();
 }
 
 function generateLineups() {
