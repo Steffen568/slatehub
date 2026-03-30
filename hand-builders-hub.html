@@ -6697,10 +6697,17 @@ function renderExposure() {
     });
   });
 
-  const rows = Object.values(counts).sort((a,b) => b.count - a.count);
+  let rows = Object.values(counts).sort((a,b) => b.count - a.count);
+
+  // Position filter (Classic mode only)
+  const positions = ['ALL', 'SP', 'C', '1B', '2B', '3B', 'SS', 'OF'];
+  const posFilterHtml = isSD ? '' : `<div style="display:flex;gap:3px;padding:6px 8px;border-bottom:1px solid var(--border);">
+    ${positions.map(p => `<button class="exp-tab${_expPosFilter===p?' active':''}" onclick="_expPosFilter='${p}';renderExposure();" style="font-size:9px;padding:2px 6px;">${p}</button>`).join('')}
+  </div>`;
+  if (_expPosFilter !== 'ALL' && !isSD) rows = rows.filter(r => r.pos === _expPosFilter);
 
   const roleHeader = isSD ? '<th style="width:36px;">Role</th>' : '';
-  el.innerHTML = `
+  el.innerHTML = posFilterHtml + `
     <table class="exp-table">
       <thead><tr>
         <th style="width:34px;"></th>
@@ -6748,6 +6755,7 @@ function setExpTarget(pid, val) {
 
 // ── EXPOSURE TABS ─────────────────────────────────────────────────────────────
 let _activeExpTab = 'players';
+let _expPosFilter = 'ALL';
 
 function switchExpTab(tab) {
   _activeExpTab = tab;
