@@ -8877,25 +8877,11 @@ function addOptimalPortfolio() {
   const selected = indices.map(i => _poolCandidates[i]);
   const stratNames = {balanced:'Balanced GPP',firstPlace:'First Place',contrarian:'Contrarian',cash:'Cash',maxCorr:'Max Correlation'};
   const stratLabel = stratNames[optoSettings.portfolioStrategy||'balanced'] || 'Portfolio';
-  const newBuild = { id: 'build_' + Date.now(), name: `${stratLabel} (${selected.length})`, ts: Date.now(), lineups: [] };
-  const allBuilds = getBuilds();
-  allBuilds.push(newBuild);
-  saveBuilds(allBuilds);
-  activeBuildId = newBuild.id;
 
-  // Store full pool candidates with metrics for portfolio tab
+  // Store full pool candidates with sim metrics for portfolio tab
   _portfolioLineups = selected;
 
-  const generated = selected.map((c, i) => ({
-    name: `Portfolio ${i+1}`,
-    totProj: c.metrics.proj,
-    lineup: c.lineup,
-    ts: Date.now()
-  }));
-  updateActiveBuild(generated);
-  renderSavedCards();
-
-  // Switch to portfolio tab
+  // Switch to portfolio tab (no old build creation — portfolio tab IS the view)
   switchPoolTab('portfolio');
 
   const coveredPct = _contestSimResults ? (() => {
