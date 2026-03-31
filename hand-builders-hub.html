@@ -4333,9 +4333,13 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     <input type="number" placeholder="Max Games" style="width:58px;" class="opto-input" oninput="setPoolFilter('maxGames',this.value)">
     <input type="text" placeholder="Stack" style="width:50px;" class="opto-input" oninput="setPoolFilter('stack',this.value)">
     <input type="number" placeholder="Min Win%" style="width:58px;" class="opto-input" oninput="setPoolFilter('minWin',this.value)">
+    <input type="number" placeholder="Min Cash%" style="width:62px;" class="opto-input" oninput="setPoolFilter('minCash',this.value)">
+    <input type="number" placeholder="Min ROI" style="width:55px;" class="opto-input" oninput="setPoolFilter('minROI',this.value)">
     <input type="number" placeholder="Max Own" style="width:58px;" class="opto-input" oninput="setPoolFilter('maxOwn',this.value)" title="Max total lineup ownership %">
-    <input type="number" placeholder="Min Lev" style="width:58px;" class="opto-input" oninput="setPoolFilter('minLeverage',this.value)" title="Min leverage (ceil/own)">
+    <input type="number" placeholder="Min Lev" style="width:52px;" class="opto-input" oninput="setPoolFilter('minLeverage',this.value)" title="Min leverage (ceil/own)">
     <input type="number" placeholder="Min Boom" style="width:58px;" class="opto-input" oninput="setPoolFilter('minBoom',this.value)" title="Min boom% (top 5% of sims)">
+    <input type="number" placeholder="Max Bust" style="width:58px;" class="opto-input" oninput="setPoolFilter('maxBust',this.value)" title="Max bust% (bottom 30% of sims)">
+    <input type="number" placeholder="Min Sharpe" style="width:62px;" class="opto-input" oninput="setPoolFilter('minSharpe',this.value)">
     <span style="color:var(--border);margin:0 2px;">|</span>
     <label style="color:var(--muted);font-weight:700;">Sort:</label>
     <select class="opto-input" style="width:80px;" onchange="setPoolSort(this.value)">
@@ -7991,8 +7995,11 @@ function _deadCode_renderPortfolioCards() {
   const sc = _poolSortCol, dir = _poolSortDir;
   const getVal = (c) => { if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
   const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
-  const sign = lowerIsBetter ? 1 : -1;
-  filtered.sort((a,b) => (getVal(a) - getVal(b)) * sign * dir || b.metrics.proj - a.metrics.proj);
+  if (lowerIsBetter) {
+    filtered.sort((a,b) => (getVal(a) - getVal(b)) * dir || b.metrics.proj - a.metrics.proj);
+  } else {
+    filtered.sort((a,b) => (getVal(b) - getVal(a)) * dir || b.metrics.proj - a.metrics.proj);
+  }
   const fmtSal  = v => v ? `$${(v/1000).toFixed(1)}k` : '—';
   const fmtProj = v => v != null ? (+v).toFixed(1) : '—';
 
@@ -8096,9 +8103,13 @@ function filterPoolCandidates() {
   if (f.maxGames) filtered = filtered.filter(c => c.metrics.games <= f.maxGames);
   if (f.stack) filtered = filtered.filter(c => c.metrics.stack.startsWith(f.stack));
   if (f.minWin && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.winPct || 0) >= f.minWin);
+  if (f.minCash && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.cashPct || 0) >= f.minCash);
+  if (f.minROI && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.roi || -999) >= f.minROI);
   if (f.maxOwn) filtered = filtered.filter(c => (c.metrics.totalOwn || 999) <= f.maxOwn);
   if (f.minLeverage) filtered = filtered.filter(c => (c.metrics.leverage || 0) >= f.minLeverage);
   if (f.minBoom && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.boomPct || 0) >= f.minBoom);
+  if (f.maxBust && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.bustPct || 100) <= f.maxBust);
+  if (f.minSharpe && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.sharpe || -999) >= f.minSharpe);
   if (f.mustInclude) { const pid = +f.mustInclude; filtered = filtered.filter(c => c.metrics.pids.has(pid)); }
   return filtered;
 }
@@ -8184,8 +8195,11 @@ function renderPoolCards() {
     return c.metrics?.proj || 0;
   };
   const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
-  const sign = lowerIsBetter ? 1 : -1;
-  filtered.sort((a,b) => (getVal(a) - getVal(b)) * sign * dir || b.metrics.proj - a.metrics.proj);
+  if (lowerIsBetter) {
+    filtered.sort((a,b) => (getVal(a) - getVal(b)) * dir || b.metrics.proj - a.metrics.proj);
+  } else {
+    filtered.sort((a,b) => (getVal(b) - getVal(a)) * dir || b.metrics.proj - a.metrics.proj);
+  }
 
   // Active exposure filtering: enforce max targets + min unique after sort
   filtered = filterByExposure(filtered);
@@ -9124,8 +9138,11 @@ function exportPoolDK() {
   const sc = _poolSortCol, dir = _poolSortDir;
   const getVal = (c) => { if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
   const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
-  const sign = lowerIsBetter ? 1 : -1;
-  pool.sort((a,b) => (getVal(a) - getVal(b)) * sign * dir || b.metrics.proj - a.metrics.proj);
+  if (lowerIsBetter) {
+    pool.sort((a,b) => (getVal(a) - getVal(b)) * dir || b.metrics.proj - a.metrics.proj);
+  } else {
+    pool.sort((a,b) => (getVal(b) - getVal(a)) * dir || b.metrics.proj - a.metrics.proj);
+  }
   pool = filterByExposure(pool);
 
   const header = _dkTemplate.originalHeader || 'Entry ID,Contest Name,Contest ID,Entry Fee,SP,SP,C,1B,2B,3B,SS,OF,OF,OF';
