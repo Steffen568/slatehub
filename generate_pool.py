@@ -282,15 +282,7 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                     picked_main += 1
                     assigned = True
                     break
-            if not assigned:
-                # Try OF as fallback
-                if remaining.get('OF', 0) > 0:
-                    selected.append(p['player_id'])
-                    used_pids.add(p['player_id'])
-                    sal_left -= p['salary']
-                    remaining['OF'] -= 1
-                    pid_to_pos[p['player_id']] = 'OF'
-                    picked_main += 1
+            # If no eligible slot available, skip this player (don't force into wrong position)
 
         if picked_main < main_size:
             return None  # couldn't fill main stack
