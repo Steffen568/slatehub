@@ -419,3 +419,47 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### Per-slate ownership requires separate table
 **What happened:** player_projections PK is (player_id, game_pk) — can't store different ownership per slate. Same player got same ownership on main and late slates.
 **Rule:** Use dedicated `slate_ownership` table with PK (player_id, game_pk, dk_slate). Frontend overlays slate-specific ownership from this table.
+
+---
+
+## Session 32 — Pool Generator + Contest Sim Overhaul (2026-03-31)
+
+### LP solver produces duplicates because it's deterministic
+**What happened:** jsLPSolver returns the same optimal lineup for similar inputs. With correlated noise (game+team = 0.834 SD), the top 10 players barely change between sims. Result: only ~1500 unique from 2000 attempts.
+**Rule:** Use greedy randomized builder (top-3 weighted random per slot) instead of LP. Near-zero dupe rate, 10-30x faster.
+
+### Weighted random team selection concentrates on top 3-4 teams
+**What happened:** Pool only had 3-4 different main stacks because weighted random heavily favored top-scored teams.
+**Rule:** Round-robin team selection ensures ALL viable teams get coverage (~5% each for 21 teams).
+
+### DK lobby includes tomorrow's slates with different salaries
+**What happened:** Two DGs labeled "main" — today's and tomorrow's — with different prices. Frontend picked wrong salary, lineups exceeded cap on DK upload.
+**Rule:** Skip DGs with future start dates in load_dk_salaries.py. Also `discard()` from classic_dg_ids/showdown_dg_ids.
+
+### Supabase delete has 1000-row limit
+**What happened:** `delete().eq('season', 2026)` only removed 1000 rows, leaving stale data.
+**Rule:** Loop deletes until 0 returned: `while True: res = delete()...; if len(res.data)==0: break`
+
+### Old season data persists across season transitions
+**What happened:** Spring training data had season=2025 but config switched to 2026. Delete only cleared 2026, leaving 2025 rows.
+**Rule:** Clear both current and prior season in load_dk_salaries.py.
+
+### Pool builder needs multiple stack configurations
+**What happened:** Fixed 4-2 stacks limited diversity and missed realistic constructions.
+**Rule:** 6 configs: 5-3, 5-2, 5-naked, 4-3-1 (bring-back), 4-4, 4-2-2. Round-robin through configs × teams.
+
+### Move pool generation to Python for scale
+**What happened:** Browser-based LP solver capped at ~1500-2000 lineups due to JS performance and deterministic solver. Need 5K-25K per slate.
+**Rule:** Python greedy builder (`generate_pool.py`) stores in `sim_pool` table. Frontend fetches from DB. No browser generation limit.
+
+### Portfolio builder over-diversifies
+**What happened:** Portfolio selection strategies (Balanced, First Place, Contrarian, etc.) spread lineups too thin. User couldn't hone in on specific exposure targets.
+**Rule:** Removed portfolio builder entirely. Active exposure filtering on the pool replaces it — max targets filter lineups directly, min targets highlight in exposure panel.
+
+### Auto-fixed DK ID mismatches: Carson Kelly, Cole Young, David Hamilton, Gabriel Arias, Jacob Wilson, Jose Ramirez, Josh Smith, Julio Rodriguez, Miguel Rojas, Vladimir Guerrero Jr.
+**What happened:** Pipeline auto-fixed 10 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Gabriel Arias, Jose Caballero, Jose Ramirez, Miguel Rojas, Tyler O'Neill, Vladimir Guerrero Jr.
+**What happened:** Pipeline auto-fixed 6 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
