@@ -32,6 +32,7 @@ sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
 POS_SLOTS = {'SP': 2, 'C': 1, '1B': 1, '2B': 1, '3B': 1, 'SS': 1, 'OF': 3}
 POS_PRIORITY = ['C', 'SS', '2B', '3B', '1B', 'OF', 'SP']
 SALARY_CAP = 50000
+SALARY_FLOOR = 48500
 
 def safe(val, default=None):
     if val is None: return default
@@ -214,14 +215,13 @@ STACK_CONFIGS = [
     {'name': '5-3',       'main': 5, 'subs': [3]},
     {'name': '5-2',       'main': 5, 'subs': [2]},
     {'name': '5-naked',   'main': 5, 'subs': []},
-    {'name': '4-3-1',     'main': 4, 'subs': [3], 'bringback': 1},
+    {'name': '4-3',       'main': 4, 'subs': [3]},
     {'name': '4-4',       'main': 4, 'subs': [4]},
     {'name': '4-2-2',     'main': 4, 'subs': [2, 2]},
 ]
 
 def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
-                         sub_teams=None, sub_sizes=None,
-                         bringback_team=None, bringback_size=0, rng=None):
+                         sub_teams=None, sub_sizes=None, rng=None):
     """
     Build one DK Classic lineup using greedy randomized selection.
     Supports multiple sub-stacks and bring-backs.
@@ -314,25 +314,6 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                     picked_sub += 1
                     break
 
-    # Force bring-back (opponent hitter from the main stack's game)
-    if bringback_team and bringback_size > 0:
-        bb_hitters = [(i, s, p) for pos in ['OF','1B','2B','3B','SS','C'] for i, s, p in pos_players.get(pos, [])
-                      if p['team'] == bringback_team and p['player_id'] not in used_pids and not p['is_pitcher']]
-        bb_hitters.sort(key=lambda x: x[1], reverse=True)
-        seen_bb = set()
-        unique_bb = [item for item in bb_hitters if item[0] not in seen_bb and not seen_bb.add(item[0])]
-        picked_bb = 0
-        for idx, score, p in unique_bb:
-            if picked_bb >= bringback_size: break
-            for pp in p['all_positions']:
-                if pp in remaining and remaining[pp] > 0 and pp != 'SP':
-                    selected.append(p['player_id'])
-                    used_pids.add(p['player_id'])
-                    sal_left -= p['salary']
-                    remaining[pp] -= 1
-                    picked_bb += 1
-                    break
-
     # Fill remaining slots greedily with randomization
     # Track per-team hitter counts to cap at 5 (DK Classic max practical stacking)
     team_hitter_count = defaultdict(int)
@@ -386,7 +367,12 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
             remaining[pos] -= 1
             slots_needed -= 1
 
-    return selected if len(selected) == 10 else None
+    if len(selected) != 10:
+        return None
+    total_sal = SALARY_CAP - sal_left
+    if total_sal < SALARY_FLOOR:
+        return None
+    return selected
 
 
 # ── Noise Sampling ───────────────────────────────────────────────────────────
@@ -477,22 +463,6 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None):
     # Teams that can support 3-man sub stacks
     viable_3sub = [t for t, hs in team_hitters.items() if len(hs) >= 3]
 
-    # Build game-to-teams map for bring-backs
-    game_teams = defaultdict(set)
-    for p in pool:
-        if p.get('game_pk') and p.get('team'):
-            game_teams[p['game_pk']].add(p['team'])
-    team_game = {}
-    for p in pool:
-        if p.get('team') and p.get('game_pk'):
-            team_game[p['team']] = p['game_pk']
-
-    def get_opponent(team):
-        gk = team_game.get(team)
-        if not gk: return None
-        opps = [t for t in game_teams[gk] if t != team]
-        return opps[0] if opps else None
-
     lineups = []
     seen = set()
     attempts = 0
@@ -527,19 +497,12 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None):
             else:
                 sub_teams.append(None)
 
-        # Bring-back: opponent of main team
-        bb_team = None
-        bb_size = config.get('bringback', 0)
-        if bb_size > 0:
-            bb_team = get_opponent(main_team)
-
         # Sample noisy scores
         scores = sample_noisy_scores(pool, rng, mode=mode)
 
         # Build lineup
         lu = build_lineup_greedy(pool, scores, main_team=main_team, main_size=main_size,
-                                  sub_teams=sub_teams, sub_sizes=sub_sizes,
-                                  bringback_team=bb_team, bringback_size=bb_size, rng=rng)
+                                  sub_teams=sub_teams, sub_sizes=sub_sizes, rng=rng)
         if lu is None:
             continue
 
