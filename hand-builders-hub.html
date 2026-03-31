@@ -7882,8 +7882,9 @@ let _contestPoolFieldMult = 1;
 
 async function loadPoolFromDB() {
   // Determine which slate is active
-  const slateEl = document.querySelector('.slate-selector select, .slate-select');
+  const slateEl = document.getElementById('slate-select');
   const slate = slateEl?.value || 'main';
+  console.warn(`[loadPoolFromDB] Loading slate="${slate}" for date=${new Date().toISOString().split('T')[0]}`);
   const today = new Date().toISOString().split('T')[0];
 
   showPoolLoading('Loading pool from database...');
