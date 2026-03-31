@@ -96,8 +96,8 @@ def classify_slate(start_est):
 def run():
     args = sys.argv[1:]
     slate_filter = None
-    min_fee = 0
-    max_contests = 50  # limit payout API calls
+    min_fee = 0.25     # default: include $0.25+ contests
+    max_contests = 100  # payout API calls
 
     i = 0
     while i < len(args):
