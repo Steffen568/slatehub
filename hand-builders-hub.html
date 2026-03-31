@@ -8584,8 +8584,7 @@ function simulateContest() {
   //   lineup. In a 53K GPP, thousands of lineups from other sharp players will
   //   finish above our #1. Estimate: ~10% of the field is at our level or better.
   const fieldMult = Math.max(1, Math.round(fieldSize / n));
-  const sharpPct = 0.02; // ~2% of field is sharp competition above our level
-  const fieldOffset = Math.round(fieldSize * sharpPct); // ~1000 lineups ahead of us in a 53K field
+  // No fixed offset — randomize per sim inside the loop
   console.log(`Contest sim: ${n} lineups, fieldMult=${fieldMult}, fieldOffset=${fieldOffset} (${fieldSize.toLocaleString()} field)`);
 
   // Build payout lookup from contest data for ROI calculation
@@ -8634,12 +8633,13 @@ function simulateContest() {
       simTop1.push(thisTop1);
 
       // Record positions — scale pool rank to contest field size.
-      // Add random offset within each fieldMult gap to model the other
-      // sharp lineups that exist between our pool lineups in the real field.
-      // Without this, rank 0 ALWAYS gets position 1 and wins $50K every sim.
+      // Random jitter per slot models other lineups between ours in the field.
+      // Per-sim offset models variance in how our pool competes vs the field:
+      // sometimes we're near the top, sometimes we're mid-pack.
+      const simOffset = Math.floor(Math.random() * fieldMult * 2); // 0 to 2×fieldMult
       for (let rank = 0; rank < n; rank++) {
         const li = indices[rank];
-        const fieldPos = fieldOffset + rank * fieldMult + Math.floor(Math.random() * fieldMult) + 1;
+        const fieldPos = simOffset + rank * fieldMult + Math.floor(Math.random() * fieldMult) + 1;
 
         stats[li].finishSum += fieldPos;
         if (fieldPos === 1) stats[li].winCount++;
