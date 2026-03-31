@@ -6143,8 +6143,9 @@ function toggleTeamExclude(abbr) {
     if (btn.dataset.teamAbbr === abbr) btn.classList.toggle('team-excl', teamExcludes.has(abbr));
   });
   renderPool();
-  const count = teamExcludes.size;
-  showToast(teamExcludes.has(abbr) ? `${abbr} excluded from optimizer` : `${abbr} re-included`, 1500);
+  // Also re-filter sim pool if it's loaded
+  if (_poolCandidates.length > 0) { renderPoolCards(); renderPoolExposure(); }
+  showToast(teamExcludes.has(abbr) ? `${abbr} excluded from pool + optimizer` : `${abbr} re-included`, 1500);
 }
 
 // ── RENDER POOL ───────────────────────────────────────────────────────────────
@@ -8231,6 +8232,16 @@ function applyExpFilters() {
 
 function filterPoolCandidates() {
   let filtered = _poolCandidates;
+  // Exclude teams that are right-click excluded in the team selector bar
+  if (teamExcludes.size > 0) {
+    filtered = filtered.filter(c => {
+      for (const sl of LINEUP_SLOTS) {
+        const p = c.lineup[sl.key];
+        if (p?.team && teamExcludes.has(p.team)) return false;
+      }
+      return true;
+    });
+  }
   const f = _poolFilter;
   if (f.minProj) filtered = filtered.filter(c => c.metrics.proj >= f.minProj);
   if (f.maxProj) filtered = filtered.filter(c => c.metrics.proj <= f.maxProj);
