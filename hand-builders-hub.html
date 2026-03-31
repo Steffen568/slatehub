@@ -4331,6 +4331,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
         <option value="balanced">Balanced GPP</option>
         <option value="firstPlace">First Place</option>
         <option value="contrarian">Contrarian</option>
+        <option value="leverage">Leverage</option>
         <option value="cash">Cash / Consistency</option>
         <option value="maxCorr">Max Correlation</option>
       </select>
@@ -7713,7 +7714,7 @@ function buildSimContext(allElig) {
   return { eligById, allTeams, blockedMain, mainPrefs, subPrefs, teamHittersMap };
 }
 
-function simSolveWithStacks(allElig, rule, simProj, stackAppearCount, totalN) {
+function simSolveWithStacks(allElig, rule, simProj, stackAppearCount, totalN, teamLastUsed, simIdx) {
   const ctx = _simCtx;
 
   // Rank teams by SIMULATED top-5 score (lightweight — just map lookups)
@@ -7746,7 +7747,14 @@ function simSolveWithStacks(allElig, rule, simProj, stackAppearCount, totalN) {
   // Try top sim-ranked teams — pick one randomly weighted by sim score
   // so we don't always try the same 2 teams. More teams = fewer failures.
   if (!mainCandidates.length) return null;
-  const weights = mainCandidates.map(t => Math.max(teamSimScores[t] || 1, 1));
+  const weights = mainCandidates.map(t => {
+    let w = Math.max(teamSimScores[t] || 1, 1);
+    // Team cooldown: reduce weight for recently-used teams to force diversity
+    const lastUsed = teamLastUsed?.[t] ?? -999;
+    const simsSince = (simIdx || 0) - lastUsed;
+    if (simsSince < 4) w *= Math.max(0.1, simsSince / 4); // ramp from 10% to 100% over 4 sims
+    return w;
+  });
   const mainTeam = weightedRandomChoice(mainCandidates, weights);
 
   const win = windows[Math.floor(Math.random() * windows.length)];
@@ -7757,7 +7765,7 @@ function simSolveWithStacks(allElig, rule, simProj, stackAppearCount, totalN) {
   if (mainPlayerIds.length < rule.primarySize) return null;
 
   const subCandidates = rule.subSize === 0 ? [null]
-    : (ctx.subPrefs.length > 0 ? ctx.subPrefs : rankedTeams).filter(t => t !== mainTeam).slice(0, 4);
+    : (ctx.subPrefs.length > 0 ? ctx.subPrefs : rankedTeams).filter(t => t !== mainTeam).slice(0, 8);
   const subTeam = subCandidates[Math.floor(Math.random() * subCandidates.length)] ?? null;
 
   const problem = optoBuildLP(allElig, {
@@ -7829,11 +7837,29 @@ function scorePoolLineup(lineupObj) {
     (subSize >= 2 ? 1 : 0)
   ).toFixed(1);
 
+  // Stack leverage: opposing pitcher ownership × game environment
+  // When a high-ownership pitcher fails, lineups stacking against him gain massive leverage
+  let stackLeverage = 0;
+  if (stackEntries[0]) {
+    const mainTeam = stackEntries[0][0];
+    // Find a hitter from the main stack to get the opposing pitcher info
+    const stackHitter = hitterSlots.map(k => lineupObj[k]).find(p => p?.team === mainTeam);
+    if (stackHitter) {
+      // Opposing pitcher ownership = leverage when that pitcher busts
+      const oppPitcherOwn = allPitchers.find(sp =>
+        sp.game_pk === stackHitter.game_pk && sp.team !== mainTeam
+      )?.proj_ownership || 0;
+      // Scale by implied runs (higher implied = more leverage)
+      const gameImplied = stackHitter.implied_runs || 4.5;
+      stackLeverage = +(oppPitcherOwn * (gameImplied / 4.5)).toFixed(1);
+    }
+  }
+
   return {
     proj: +proj.toFixed(1), ceil: +ceil.toFixed(1), floor: +floor.toFixed(1),
     sigma: +sigma.toFixed(1), salary, games: gamePks.size,
     stack: mainStack, sub: subStack, bringBacks, pids,
-    totalOwn: +totalOwn.toFixed(1), leverage, corrScore
+    totalOwn: +totalOwn.toFixed(1), leverage, corrScore, stackLeverage
   };
 }
 
@@ -7882,6 +7908,8 @@ function generatePool() {
   _poolCandidates = [];
   const seenKeys = new Set();
   const stackAppearCount = {};
+  const teamLastUsed = {};  // team → last simIdx used as main stack (for cooldown)
+  const playerPoolCount = {};  // player_id → count of appearances in pool (for diversity nudge)
   const hitterSlotKeys = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
   let simIdx = 0;
   let consecDupes = 0; // track consecutive duplicate/failed sims for early termination
@@ -7898,8 +7926,16 @@ function generatePool() {
     const end = Math.min(simIdx + BATCH, poolSize);
     for (; simIdx < end; simIdx++) {
       const simProj = sampleSimProjections(simParams, gameKeys, teamKeys);
+      // Diversity nudge: slightly penalize overexposed players so LP explores new combos
+      const currentPoolSize = _poolCandidates.length || 1;
+      if (currentPoolSize > 50) {
+        for (const [pid, val] of simProj) {
+          const pct = (playerPoolCount[pid] || 0) / currentPoolSize;
+          if (pct > 0.25) simProj.set(pid, val * (1 - 0.15 * Math.min(pct, 0.8))); // up to -12% for heavily used players
+        }
+      }
       const rule = optoPickRule(simIdx, poolSize);
-      const lineup = simSolveWithStacks(allElig, rule, simProj, stackAppearCount, poolSize);
+      const lineup = simSolveWithStacks(allElig, rule, simProj, stackAppearCount, poolSize, teamLastUsed, simIdx);
       if (!lineup) { consecDupes++; continue; }
 
       // Dedup
@@ -7912,17 +7948,23 @@ function generatePool() {
       // Track stack appearances
       const teamCounts = {};
       hitterSlotKeys.forEach(k => { const p = lineup[k]; if (p?.team) teamCounts[p.team] = (teamCounts[p.team]||0)+1; });
+      // Find main stack team (highest count) and record for cooldown
+      let mainStackTeam = null, mainStackCnt = 0;
       Object.entries(teamCounts).forEach(([team, cnt]) => {
         for (let s = 2; s <= cnt; s++) { const k = `${team}_${s}`; stackAppearCount[k] = (stackAppearCount[k]||0)+1; }
+        if (cnt > mainStackCnt) { mainStackCnt = cnt; mainStackTeam = team; }
       });
+      if (mainStackTeam) teamLastUsed[mainStackTeam] = simIdx;
+      // Track player appearances for diversity nudge
+      for (const pid of ids) { playerPoolCount[pid] = (playerPoolCount[pid] || 0) + 1; }
 
       const metrics = scorePoolLineup(lineup);
       _poolCandidates.push({ lineup, metrics, dedupKey: key });
     }
 
-    // Early termination: if 80+ consecutive sims produced no new unique lineup,
-    // the solution space is exhausted — stop instead of grinding
-    const exhausted = consecDupes >= 80;
+    // Early termination: dynamic threshold based on pool size
+    const dupeThreshold = Math.max(200, Math.floor(poolSize * 0.15));
+    const exhausted = consecDupes >= dupeThreshold;
 
     if (simIdx < poolSize && !exhausted) {
       updatePoolLoading(`${simIdx} / ${poolSize}`, `${_poolCandidates.length} unique lineups`, simIdx/poolSize*100);
@@ -8770,6 +8812,7 @@ function selectOptimalPortfolio(k) {
   const maxCashPct = norm(pool.map(c => c.contest?.cashPct || 0));
   const maxBoomPct = norm(pool.map(c => c.contest?.boomPct || 0));
   const maxWinUpside = norm(pool.map(c => c.contest?.winUpside || 0));
+  const maxStackLev = norm(pool.map(c => c.metrics.stackLeverage || 0));
 
   const covered = new Uint8Array(numSims);
   const selected = [];
@@ -8810,7 +8853,63 @@ function selectOptimalPortfolio(k) {
   const maxLineupOwn = optoSettings.maxLineupOwn || 120;
   const stackDivWt = (optoSettings.stackDivWt ?? 50) / 100;
 
-  for (let pick = 0; pick < k && pick < n; pick++) {
+  // Phase 1: Force-fill min targets (player and stack) before main greedy loop
+  function forceMinTargets() {
+    for (const [key, tgt] of Object.entries(_poolExpTargets)) {
+      if (!tgt.min) continue;
+      const stackMatch = key.match(/^(.+)_(\d+)$/);
+      const isStack = stackMatch && !(/^\d+$/.test(key));
+      const minCount = Math.ceil(k * tgt.min / 100);
+
+      while (selected.length < k) {
+        // Check if target is already met
+        if (isStack) {
+          if ((stackAppear[key] || 0) >= minCount) break;
+        } else {
+          if ((appearCount[key] || 0) >= minCount) break;
+        }
+
+        // Find best candidate matching this target
+        let bestIdx = -1, bestProj = -Infinity;
+        for (let i = 0; i < n; i++) {
+          if (selectedGlobal.has(globalIdx[i])) continue;
+          if (wouldViolateMax(pool[i])) continue;
+          const c = pool[i];
+
+          if (isStack) {
+            const [, team, size] = stackMatch;
+            const tc = {};
+            hitterSlotKeys.forEach(sk => { const p = c.lineup[sk]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
+            if ((tc[team] || 0) < +size) continue; // doesn't have the required stack
+          } else {
+            if (!c.metrics.pids.has(+key)) continue; // doesn't have the required player
+          }
+
+          if (c.metrics.proj > bestProj) { bestProj = c.metrics.proj; bestIdx = i; }
+        }
+
+        if (bestIdx === -1) break; // no candidate available for this target
+
+        // Add to portfolio
+        selected.push(globalIdx[bestIdx]);
+        selectedGlobal.add(globalIdx[bestIdx]);
+        for (const pid of pool[bestIdx].metrics.pids) { appearCount[pid] = (appearCount[pid] || 0) + 1; }
+        const tc = {};
+        hitterSlotKeys.forEach(sk => { const p = pool[bestIdx].lineup[sk]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
+        Object.entries(tc).forEach(([team, cnt]) => {
+          for (let s = 2; s <= cnt; s++) { stackAppear[`${team}_${s}`] = (stackAppear[`${team}_${s}`]||0)+1; }
+          stackTeamFreq[team] = (stackTeamFreq[team]||0) + 1;
+        });
+        // Mark coverage
+        if (strat !== 'cash') {
+          for (let s = 0; s < numSims; s++) { if (simTop1[s]?.has(globalIdx[bestIdx])) covered[s] = 1; }
+        }
+      }
+    }
+  }
+  forceMinTargets();
+
+  for (let pick = selected.length; pick < k && pick < n; pick++) {
     // Compute uncovered coverage per candidate
     const uncoveredTop1 = new Float64Array(n);
     const uncoveredWins = strat === 'firstPlace' ? new Float64Array(n) : null;
@@ -8851,6 +8950,10 @@ function selectOptimalPortfolio(k) {
         const overlapPen = Math.max(0.5, 1 - 0.03 * overlap);
         score = (0.30 * ((m.floor||0) / maxFloor) + 0.30 * ((ct.cashPct||0) / maxCashPct) + 0.25 * (m.proj / maxProj) + 0.15 * (1 - (ct.bustPct||50)/100)) * overlapPen;
 
+      } else if (strat === 'leverage') {
+        // Favor stacks vs high-ownership pitchers — when that SP busts, the field drops and we surge
+        score = 0.30 * ((m.stackLeverage||0) / maxStackLev) + 0.25 * (m.proj / maxProj) + 0.20 * (m.ceil / maxCeil) + 0.25 * (uncoveredTop1[i] / covNorm);
+
       } else if (strat === 'maxCorr') {
         const mainTeam = (m.stack || '').split(' ')[0];
         const teamN = stackTeamFreq[mainTeam] || 0;
@@ -8858,7 +8961,8 @@ function selectOptimalPortfolio(k) {
         score = (0.40 * ((m.corrScore||0) / maxCorr) + 0.25 * (m.proj / maxProj) + 0.15 * ((ct.boomPct||0) / maxBoomPct) + 0.20 * (uncoveredTop1[i] / covNorm)) * stackPen;
       }
 
-      if (needsMinBoost(c)) score *= 1.3;
+      // Min targets already force-filled in Phase 1; still boost to favor remaining mins
+      if (needsMinBoost(c)) score *= 1.2;
       if (score > bestScore) { bestScore = score; bestIdx = i; }
     }
 
@@ -8892,7 +8996,7 @@ function addOptimalPortfolio() {
   if (!indices.length) { showToast('No lineups selected'); return; }
 
   const selected = indices.map(i => _poolCandidates[i]);
-  const stratNames = {balanced:'Balanced GPP',firstPlace:'First Place',contrarian:'Contrarian',cash:'Cash',maxCorr:'Max Correlation'};
+  const stratNames = {balanced:'Balanced GPP',firstPlace:'First Place',contrarian:'Contrarian',leverage:'Leverage',cash:'Cash',maxCorr:'Max Correlation'};
   const stratLabel = stratNames[optoSettings.portfolioStrategy||'balanced'] || 'Portfolio';
 
   // Store full pool candidates with sim metrics for portfolio tab
