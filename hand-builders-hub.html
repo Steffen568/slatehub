@@ -7972,19 +7972,23 @@ async function loadPoolFromDB() {
         console.warn(`[loadPoolFromDB] Only ${players.length}/10 players found in playerMap for lineup`, pids);
       }
 
-      // Assign to lineup slots — most constrained positions first, OF last
+      // Assign to lineup slots using constraint propagation:
+      // For each slot (most constrained first), pick the eligible player with the
+      // FEWEST alternative positions. This ensures single-pos players (e.g. SS-only)
+      // get their slot before multi-pos players (e.g. SS/OF) who have alternatives.
       const lineup = {};
       const usedIds = new Set();
-      // Pass 1: exact position matches, ordered by constraint (SP, C, SS, 2B, 3B, 1B first, OF last)
-      const constraintOrder = LINEUP_SLOTS.slice().sort((a, b) => {
+      const slotOrder = LINEUP_SLOTS.slice().sort((a, b) => {
         const rank = { SP: 0, C: 1, SS: 2, '2B': 3, '3B': 4, '1B': 5, OF: 6 };
         return (rank[a.pos] ?? 9) - (rank[b.pos] ?? 9);
       });
-      for (const sl of constraintOrder) {
-        const match = players.find(p => !usedIds.has(p.player_id) && p.positions?.includes(sl.pos));
-        if (match) {
-          lineup[sl.key] = match;
-          usedIds.add(match.player_id);
+      for (const sl of slotOrder) {
+        const eligible = players.filter(p => !usedIds.has(p.player_id) && p.positions?.includes(sl.pos));
+        if (eligible.length > 0) {
+          // Pick player with fewest eligible positions (most constrained first)
+          eligible.sort((a, b) => (a.positions?.length || 1) - (b.positions?.length || 1));
+          lineup[sl.key] = eligible[0];
+          usedIds.add(eligible[0].player_id);
         }
       }
       // Pass 2: fill any remaining empty slots with unused players
