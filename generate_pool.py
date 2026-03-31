@@ -173,7 +173,7 @@ def build_player_pool(data):
         odds_row = data['odds'].get(p.get('game_pk'))
         game_total = safe(odds_row.get('game_total'), 8.5) if odds_row else 8.5
 
-        team = p.get('team') or sal_row.get('team', '')
+        team = sal_row.get('team', '') or p.get('team', '')
         own = data['ownership'].get(pid, 5.0)
 
         pool.append({
