@@ -210,10 +210,21 @@ def build_player_pool(data):
 
 # ── Greedy Lineup Builder ────────────────────────────────────────────────────
 
-def build_lineup_greedy(pool, scores, main_team=None, main_size=4, sub_team=None, sub_size=2, rng=None):
+STACK_CONFIGS = [
+    {'name': '5-3',       'main': 5, 'subs': [3]},
+    {'name': '5-2',       'main': 5, 'subs': [2]},
+    {'name': '5-naked',   'main': 5, 'subs': []},
+    {'name': '4-3-1',     'main': 4, 'subs': [3], 'bringback': 1},
+    {'name': '4-4',       'main': 4, 'subs': [4]},
+    {'name': '4-2-2',     'main': 4, 'subs': [2, 2]},
+]
+
+def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
+                         sub_teams=None, sub_sizes=None,
+                         bringback_team=None, bringback_size=0, rng=None):
     """
     Build one DK Classic lineup using greedy randomized selection.
-    Picks from top-3 candidates per slot (weighted random) for diversity.
+    Supports multiple sub-stacks and bring-backs.
     """
     if rng is None: rng = np.random.default_rng()
 
@@ -280,21 +291,20 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4, sub_team=None
         if picked_main < main_size:
             return None  # couldn't fill main stack
 
-    # Force sub stack
-    if sub_team and sub_size > 0:
+    # Force sub stacks (can be multiple: e.g., [3] or [2, 2])
+    if sub_teams is None: sub_teams = []
+    if sub_sizes is None: sub_sizes = []
+    for st, ss in zip(sub_teams, sub_sizes):
+        if not st or ss <= 0: continue
         sub_hitters = [(i, s, p) for pos in ['OF','1B','2B','3B','SS','C'] for i, s, p in pos_players.get(pos, [])
-                       if p['team'] == sub_team and p['player_id'] not in used_pids and not p['is_pitcher']]
+                       if p['team'] == st and p['player_id'] not in used_pids and not p['is_pitcher']]
         sub_hitters.sort(key=lambda x: x[1], reverse=True)
-        seen = set()
-        unique_sub = []
-        for item in sub_hitters:
-            if item[0] not in seen:
-                seen.add(item[0])
-                unique_sub.append(item)
+        seen_sub = set()
+        unique_sub = [item for item in sub_hitters if item[0] not in seen_sub and not seen_sub.add(item[0])]
 
         picked_sub = 0
         for idx, score, p in unique_sub:
-            if picked_sub >= sub_size: break
+            if picked_sub >= ss: break
             for pp in p['all_positions']:
                 if pp in remaining and remaining[pp] > 0 and pp != 'SP':
                     selected.append(p['player_id'])
@@ -302,6 +312,25 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4, sub_team=None
                     sal_left -= p['salary']
                     remaining[pp] -= 1
                     picked_sub += 1
+                    break
+
+    # Force bring-back (opponent hitter from the main stack's game)
+    if bringback_team and bringback_size > 0:
+        bb_hitters = [(i, s, p) for pos in ['OF','1B','2B','3B','SS','C'] for i, s, p in pos_players.get(pos, [])
+                      if p['team'] == bringback_team and p['player_id'] not in used_pids and not p['is_pitcher']]
+        bb_hitters.sort(key=lambda x: x[1], reverse=True)
+        seen_bb = set()
+        unique_bb = [item for item in bb_hitters if item[0] not in seen_bb and not seen_bb.add(item[0])]
+        picked_bb = 0
+        for idx, score, p in unique_bb:
+            if picked_bb >= bringback_size: break
+            for pp in p['all_positions']:
+                if pp in remaining and remaining[pp] > 0 and pp != 'SP':
+                    selected.append(p['player_id'])
+                    used_pids.add(p['player_id'])
+                    sal_left -= p['salary']
+                    remaining[pp] -= 1
+                    picked_bb += 1
                     break
 
     # Fill remaining slots greedily with randomization
@@ -426,26 +455,74 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None):
         print("    No viable teams — skipping")
         return []
 
+    # Teams that can support 5-man stacks
+    viable_5 = [t for t, hs in team_hitters.items() if len(hs) >= 5]
+    # Teams that can support 3-man sub stacks
+    viable_3sub = [t for t, hs in team_hitters.items() if len(hs) >= 3]
+
+    # Build game-to-teams map for bring-backs
+    game_teams = defaultdict(set)
+    for p in pool:
+        if p.get('game_pk') and p.get('team'):
+            game_teams[p['game_pk']].add(p['team'])
+    team_game = {}
+    for p in pool:
+        if p.get('team') and p.get('game_pk'):
+            team_game[p['team']] = p['game_pk']
+
+    def get_opponent(team):
+        gk = team_game.get(team)
+        if not gk: return None
+        opps = [t for t in game_teams[gk] if t != team]
+        return opps[0] if opps else None
+
     lineups = []
     seen = set()
     attempts = 0
     max_attempts = n_lineups * 4
+    config_idx = 0
 
     while len(lineups) < n_lineups and attempts < max_attempts:
-        # Round-robin main team selection (guaranteed coverage)
+        # Round-robin main team + stack config
         main_team = viable_teams[attempts % len(viable_teams)]
+        config = STACK_CONFIGS[config_idx % len(STACK_CONFIGS)]
+        config_idx += 1
         attempts += 1
 
-        # Sub team: random from others
-        sub_candidates = [t for t in viable_teams if t != main_team]
-        sub_team = rng.choice(sub_candidates) if sub_candidates else None
+        main_size = config['main']
+
+        # Skip 5-man configs for teams without enough hitters
+        if main_size >= 5 and main_team not in viable_5:
+            continue
+
+        # Determine sub teams
+        sub_candidates = [t for t in (viable_3sub if any(s >= 3 for s in config['subs']) else viable_teams)
+                          if t != main_team]
+        sub_teams = []
+        sub_sizes = config['subs']
+        used_sub = set()
+        for ss in sub_sizes:
+            cands = [t for t in sub_candidates if t not in used_sub and len(team_hitters.get(t, [])) >= ss]
+            if cands:
+                st = rng.choice(cands)
+                sub_teams.append(st)
+                used_sub.add(st)
+            else:
+                sub_teams.append(None)
+
+        # Bring-back: opponent of main team
+        bb_team = None
+        bb_size = config.get('bringback', 0)
+        if bb_size > 0:
+            bb_team = get_opponent(main_team)
 
         # Sample noisy scores
         scores = sample_noisy_scores(pool, rng, mode=mode)
 
         # Build lineup
-        lu = build_lineup_greedy(pool, scores, main_team=main_team, main_size=4,
-                                  sub_team=sub_team, sub_size=2, rng=rng)
+        lu = build_lineup_greedy(pool, scores, main_team=main_team, main_size=main_size,
+                                  sub_teams=sub_teams, sub_sizes=sub_sizes,
+                                  bringback_team=bb_team, bringback_size=bb_size, rng=rng)
         if lu is None:
             continue
 
