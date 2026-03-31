@@ -8580,12 +8580,9 @@ function simulateContest() {
 
   // Pool competes against itself, scaled to contest size.
   // fieldMult: how many contest entries each pool rank represents.
-  // fieldOffset: how many contest entries are likely BETTER than our best pool
-  //   lineup. In a 53K GPP, thousands of lineups from other sharp players will
-  //   finish above our #1. Estimate: ~10% of the field is at our level or better.
+  // Per-sim random offset models variance vs the rest of the field.
   const fieldMult = Math.max(1, Math.round(fieldSize / n));
-  // No fixed offset — randomize per sim inside the loop
-  console.log(`Contest sim: ${n} lineups, fieldMult=${fieldMult}, fieldOffset=${fieldOffset} (${fieldSize.toLocaleString()} field)`);
+  console.log(`Contest sim: ${n} lineups, fieldMult=${fieldMult} (${fieldSize.toLocaleString()} field)`);
 
   // Build payout lookup from contest data for ROI calculation
   let payoutTiers = null; // [{minPos, maxPos, value}]
