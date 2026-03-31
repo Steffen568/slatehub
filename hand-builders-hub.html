@@ -7446,8 +7446,7 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set(), stackAppearCou
     if (rule.subSize === 0) return [null];
     if (subPrefs.length > 0) return subPrefs.filter(t => t !== mainTeam);
     return rankedTeams
-      .filter(t => t !== mainTeam && allHitters.filter(h => optoTeamKey(h) === t && !isExcluded(h)).length >= rule.subSize)
-      .slice(0, 8);
+      .filter(t => t !== mainTeam && allHitters.filter(h => optoTeamKey(h) === t && !isExcluded(h)).length >= rule.subSize);
   }
 
   // Shared solve helper
@@ -7746,7 +7745,7 @@ function simSolveWithStacks(allElig, rule, simProj, stackAppearCount, totalN, te
   if (mainPlayerIds.length < rule.primarySize) return null;
 
   const subCandidates = rule.subSize === 0 ? [null]
-    : (ctx.subPrefs.length > 0 ? ctx.subPrefs : rankedTeams).filter(t => t !== mainTeam).slice(0, 8);
+    : (ctx.subPrefs.length > 0 ? ctx.subPrefs : rankedTeams).filter(t => t !== mainTeam);
   const subTeam = subCandidates[Math.floor(Math.random() * subCandidates.length)] ?? null;
 
   const problem = optoBuildLP(allElig, {
@@ -7927,36 +7926,33 @@ async function loadPoolFromDB() {
       if (!pids || pids.length !== 10) continue;
 
       // Build lineup object matching LINEUP_SLOTS
-      const pitchers = pids.map(pid => playerMap[pid]).filter(p => p && (p.positions?.includes('SP') || p.positions?.includes('P') || p.positions?.includes('RP')));
-      const hitters = pids.map(pid => playerMap[pid]).filter(p => p && !(p.positions?.includes('SP') || p.positions?.includes('P') || p.positions?.includes('RP')));
-
-      // Assign to lineup slots
-      const lineup = {};
-      let spIdx = 0;
-      for (const sl of LINEUP_SLOTS) {
-        if (sl.pos === 'SP') {
-          lineup[sl.key] = pitchers[spIdx] || null;
-          spIdx++;
-        }
+      const players = pids.map(pid => playerMap[pid]).filter(Boolean);
+      if (players.length < 10) {
+        console.warn(`[loadPoolFromDB] Only ${players.length}/10 players found in playerMap for lineup`, pids);
       }
-      // Assign hitters to matching position slots
-      const usedHitters = new Set();
-      for (const sl of LINEUP_SLOTS) {
-        if (sl.pos === 'SP') continue;
-        const match = hitters.find(h => !usedHitters.has(h.player_id) &&
-          (h.positions?.includes(sl.pos) || sl.pos === 'OF'));
+
+      // Assign to lineup slots — most constrained positions first, OF last
+      const lineup = {};
+      const usedIds = new Set();
+      // Pass 1: exact position matches, ordered by constraint (SP, C, SS, 2B, 3B, 1B first, OF last)
+      const constraintOrder = LINEUP_SLOTS.slice().sort((a, b) => {
+        const rank = { SP: 0, C: 1, SS: 2, '2B': 3, '3B': 4, '1B': 5, OF: 6 };
+        return (rank[a.pos] ?? 9) - (rank[b.pos] ?? 9);
+      });
+      for (const sl of constraintOrder) {
+        const match = players.find(p => !usedIds.has(p.player_id) && p.positions?.includes(sl.pos));
         if (match) {
           lineup[sl.key] = match;
-          usedHitters.add(match.player_id);
+          usedIds.add(match.player_id);
         }
       }
-      // Fill remaining with any unused hitters
+      // Pass 2: fill any remaining empty slots with unused players
       for (const sl of LINEUP_SLOTS) {
         if (!lineup[sl.key]) {
-          const remaining = hitters.find(h => !usedHitters.has(h.player_id));
-          if (remaining) {
-            lineup[sl.key] = remaining;
-            usedHitters.add(remaining.player_id);
+          const rem = players.find(p => !usedIds.has(p.player_id));
+          if (rem) {
+            lineup[sl.key] = rem;
+            usedIds.add(rem.player_id);
           }
         }
       }
@@ -8018,12 +8014,12 @@ function generatePool() {
     const end = Math.min(simIdx + BATCH, poolSize);
     for (; simIdx < end; simIdx++) {
       const simProj = sampleSimProjections(simParams, gameKeys, teamKeys);
-      // Diversity nudge: slightly penalize overexposed players so LP explores new combos
+      // Diversity nudge: penalize overexposed players so LP explores new combos
       const currentPoolSize = _poolCandidates.length || 1;
-      if (currentPoolSize > 50) {
+      if (currentPoolSize > 30) {
         for (const [pid, val] of simProj) {
           const pct = (playerPoolCount[pid] || 0) / currentPoolSize;
-          if (pct > 0.25) simProj.set(pid, val * (1 - 0.15 * Math.min(pct, 0.8))); // up to -12% for heavily used players
+          if (pct > 0.15) simProj.set(pid, val * (1 - 0.30 * Math.min(pct, 0.8))); // up to -24% for heavily used players
         }
       }
       const rule = optoPickRule(simIdx, poolSize);
@@ -8043,7 +8039,7 @@ function generatePool() {
       // Find main stack team (highest count) and record for cooldown
       let mainStackTeam = null, mainStackCnt = 0;
       Object.entries(teamCounts).forEach(([team, cnt]) => {
-        for (let s = 2; s <= cnt; s++) { const k = `${team}_${s}`; stackAppearCount[k] = (stackAppearCount[k]||0)+1; }
+        if (cnt >= 2) { const k = `${team}_${cnt}`; stackAppearCount[k] = (stackAppearCount[k]||0)+1; }
         if (cnt > mainStackCnt) { mainStackCnt = cnt; mainStackTeam = team; }
       });
       if (mainStackTeam) teamLastUsed[mainStackTeam] = simIdx;
@@ -8287,7 +8283,7 @@ function filterByExposure(lineups) {
     const tc = {};
     hitterSlotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
     for (const [team, cnt] of Object.entries(tc)) {
-      for (let s = 2; s <= cnt; s++) stackCount[`${team}_${s}`] = (stackCount[`${team}_${s}`] || 0) + 1;
+      if (cnt >= 2) stackCount[`${team}_${cnt}`] = (stackCount[`${team}_${cnt}`] || 0) + 1;
     }
   }
   return result;
@@ -8504,9 +8500,9 @@ function renderPoolExposure() {
     const teamCounts = {};
     hitterSlots.forEach(k => { const p = c.lineup[k]; if (p?.team) teamCounts[p.team] = (teamCounts[p.team]||0)+1; });
     Object.entries(teamCounts).forEach(([team, cnt]) => {
-      for (let s = 2; s <= cnt; s++) {
-        const key = `${team}_${s}`;
-        if (!stackCounts[key]) stackCounts[key] = { team, size: s, count: 0 };
+      if (cnt >= 2) {
+        const key = `${team}_${cnt}`;
+        if (!stackCounts[key]) stackCounts[key] = { team, size: cnt, count: 0 };
         stackCounts[key].count++;
       }
     });

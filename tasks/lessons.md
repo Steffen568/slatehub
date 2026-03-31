@@ -471,3 +471,7 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### Pitcher missing from projections after TJ surgery (McClanahan)
 **What happened:** Shane McClanahan only had 2023 pitcher_stats (missed 2024-2025 with Tommy John). The engine queried SEASON, SEASON-1, SEASON-2 (2024-2026) so found nothing and skipped him.
 **Rule:** Pitcher stats lookback must include SEASON-3 (4 years) to cover pitchers returning from long injuries.
+
+### Sim pool: 4 bugs — blank cards, 6/7-man stacks, limited pitchers/teams
+**What happened:** (1) loadPoolFromDB had `|| sl.pos === 'OF'` that matched any hitter to OF slots, causing position mis-assignment. (2) Stack counting looped `for s=2..cnt`, recording every sub-size (a 5-man stack also counted as 2/3/4-man). (3) Sub-team candidates were hard-capped at `.slice(0,8)` in two places. (4) Diversity nudge was too weak (>25% threshold, -15% penalty).
+**Rule:** Stack exposure must only count the actual size. Sub-team candidates must not be capped. Position assignment must use constraint ordering (most restricted first).
