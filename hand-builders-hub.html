@@ -4357,6 +4357,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     <span style="color:var(--border);margin:0 2px;">|</span>
     <label style="color:var(--muted);font-weight:700;">Min Uniq</label>
     <input type="number" id="pool-min-uniq" value="0" min="0" max="8" style="width:32px;" class="opto-input" oninput="setPoolFilter('minUnique',this.value)" title="Min unique players between any two lineups in filtered pool">
+    <span style="color:var(--border);margin:0 2px;">|</span>
+    <label style="color:var(--muted);font-weight:700;">Show</label>
+    <input type="number" id="pool-show-n" placeholder="All" min="1" style="width:48px;" class="opto-input" oninput="setPoolShowN(this.value)" title="Number of lineups to display">
   </div>
   <!-- Two-column body -->
   <div class="lineups-body">
@@ -8439,6 +8442,7 @@ function renderPoolCards() {
         ${m.sub !== '—' ? `<span class="stack-size-badge">${m.sub}</span>` : ''}
         ${staticBadges} ${simBadges}
         ${contestBadge}
+        <button onclick="event.stopPropagation();savePoolLineupToBuild(${idx});" style="margin-left:auto;font-size:8px;padding:1px 6px;background:rgba(74,222,128,.15);color:#4ade80;border:1px solid rgba(74,222,128,.3);border-radius:3px;cursor:pointer;" title="Save to active build">Save</button>
       </div>
       <div class="lc-chip-slots">${pitRows}${hitRows}</div>
     </div>`;
@@ -8768,7 +8772,7 @@ function generateOpponentField(numOpponents, contestDb) {
 
 let _contestSimResults = null; // { perLineup: [{winCount, top1Count, ...}], simWinners: [[]] }
 let _poolSortCol = 'proj';
-let _poolSortDir = -1;
+let _poolSortDir = 1;
 
 function simulateContest() {
   if (!_poolCandidates.length) { showToast('Generate a pool first'); return; }
@@ -9365,10 +9369,41 @@ function exportPoolDK() {
 
 function setPoolSort(col) {
   if (_poolSortCol === col) _poolSortDir *= -1;
-  else { _poolSortCol = col; _poolSortDir = -1; }
-  _poolCardsShown = Infinity;
+  else { _poolSortCol = col; _poolSortDir = 1; }
   renderPoolCards();
   renderPoolExposure();
+}
+
+function setPoolShowN(val) {
+  _poolCardsShown = val ? Math.max(1, +val) : Infinity;
+  renderPoolCards();
+  renderPoolExposure();
+}
+
+function savePoolLineupToBuild(idx) {
+  const c = _poolCandidates[idx];
+  if (!c) return;
+  // Ensure an active build exists
+  let allBuilds = getBuilds();
+  if (!activeBuildId || !allBuilds.find(b => b.id === activeBuildId)) {
+    const newBuild = { id: 'build_' + Date.now(), name: 'Sim Picks', ts: Date.now(), lineups: [] };
+    allBuilds.push(newBuild);
+    saveBuilds(allBuilds);
+    activeBuildId = newBuild.id;
+  }
+  const build = allBuilds.find(b => b.id === activeBuildId);
+  const existing = build.lineups || [];
+  const count = existing.length + 1;
+  existing.push({
+    name: `Sim #${count}`,
+    totProj: c.metrics.proj,
+    lineup: c.lineup,
+    ts: Date.now()
+  });
+  build.lineups = existing;
+  saveBuilds(allBuilds);
+  renderSavedCards();
+  showToast(`Lineup saved to "${build.name}" (${count} lineups)`);
 }
 
 function generateLineups() {
