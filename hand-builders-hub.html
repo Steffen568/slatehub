@@ -4373,6 +4373,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
         <div class="exp-tab-bar">
           <button class="exp-tab active" id="pool-exp-tab-players" onclick="switchPoolExpTab('players')">Players</button>
           <button class="exp-tab" id="pool-exp-tab-stacks" onclick="switchPoolExpTab('stacks')">Stacks</button>
+          <button onclick="applyExpFilters()" style="margin-left:auto;font-size:9px;font-weight:700;padding:3px 10px;background:rgba(167,139,250,.15);color:#a78bfa;border:1px solid rgba(167,139,250,.3);border-radius:3px;cursor:pointer;">Apply Filters</button>
         </div>
       </div>
       <div id="pool-exp-players" style="overflow-y:auto;flex:1;"></div>
@@ -8248,8 +8249,12 @@ function setPoolExpTarget(key, field, val) {
   if (!isNaN(n) && n >= 0 && n <= 100) _poolExpTargets[key][field] = n;
   else delete _poolExpTargets[key][field];
   if (!_poolExpTargets[key].min && !_poolExpTargets[key].max) delete _poolExpTargets[key];
-  // Re-render pool with new exposure constraints (max targets actively filter)
-  if (field === 'max') { renderPoolCards(); renderPoolExposure(); }
+  // Don't auto-apply — user clicks "Apply Filters" button
+}
+
+function applyExpFilters() {
+  renderPoolCards();
+  renderPoolExposure();
 }
 
 function filterPoolCandidates() {
@@ -8284,7 +8289,8 @@ function filterByExposure(lineups) {
   const playerCount = {};
   const stackCount = {};
   const hitterSlotKeys = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
-  const maxN = lineups.length;
+  // Use the target output size for cap calculations, not input pool size
+  const targetN = _poolCardsShown < Infinity ? _poolCardsShown : lineups.length;
 
   for (const c of lineups) {
     let skip = false;
@@ -8294,24 +8300,25 @@ function filterByExposure(lineups) {
       for (const pid of c.metrics.pids) {
         const tgt = _poolExpTargets[pid];
         if (tgt?.max != null) {
-          const maxCount = Math.max(1, Math.ceil(maxN * tgt.max / 100));
+          const maxCount = Math.max(1, Math.ceil(targetN * tgt.max / 100));
           if ((playerCount[pid] || 0) >= maxCount) { skip = true; break; }
         }
       }
     }
     if (skip) continue;
 
-    // Check stack max targets
+    // Check stack max targets (check actual stack size only, not sub-sizes)
     if (hasTargets) {
       const tc = {};
       hitterSlotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
       for (const [team, cnt] of Object.entries(tc)) {
         if (skip) break;
-        for (let s = 2; s <= cnt; s++) {
-          const tgt = _poolExpTargets[`${team}_${s}`];
+        if (cnt >= 2) {
+          const capped = Math.min(cnt, 5);
+          const tgt = _poolExpTargets[`${team}_${capped}`];
           if (tgt?.max != null) {
-            const maxCount = Math.max(1, Math.ceil(maxN * tgt.max / 100));
-            if ((stackCount[`${team}_${s}`] || 0) >= maxCount) { skip = true; break; }
+            const maxCount = Math.max(1, Math.ceil(targetN * tgt.max / 100));
+            if ((stackCount[`${team}_${capped}`] || 0) >= maxCount) { skip = true; break; }
           }
         }
       }
@@ -8334,7 +8341,10 @@ function filterByExposure(lineups) {
     const tc = {};
     hitterSlotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
     for (const [team, cnt] of Object.entries(tc)) {
-      if (cnt >= 2) stackCount[`${team}_${cnt}`] = (stackCount[`${team}_${cnt}`] || 0) + 1;
+      if (cnt >= 2) {
+        const capped = Math.min(cnt, 5);
+        stackCount[`${team}_${capped}`] = (stackCount[`${team}_${capped}`] || 0) + 1;
+      }
     }
   }
   return result;

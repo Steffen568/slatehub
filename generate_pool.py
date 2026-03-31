@@ -334,6 +334,15 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                     break
 
     # Fill remaining slots greedily with randomization
+    # Track per-team hitter counts to cap at 5 (DK Classic max practical stacking)
+    team_hitter_count = defaultdict(int)
+    for pid in selected:
+        for p in pool:
+            if p['player_id'] == pid and not p['is_pitcher']:
+                team_hitter_count[p['team']] += 1
+                break
+    MAX_HITTERS_PER_TEAM = 5
+
     pos_order = list(remaining.keys())
     rng.shuffle(pos_order)
 
@@ -346,14 +355,20 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
             budget = sal_left - reserve
 
             candidates = [(i, s, p) for i, s, p in pos_players.get(pos, [])
-                          if p['player_id'] not in used_pids and p['salary'] <= budget]
+                          if p['player_id'] not in used_pids and p['salary'] <= budget
+                          and (p['is_pitcher'] or team_hitter_count[p['team']] < MAX_HITTERS_PER_TEAM)]
 
             if not candidates:
-                # Fallback: cheapest available
+                # Fallback: cheapest available (still respect team cap)
                 fallback = [(i, s, p) for i, s, p in pos_players.get(pos, [])
-                            if p['player_id'] not in used_pids and p['salary'] <= sal_left]
+                            if p['player_id'] not in used_pids and p['salary'] <= sal_left
+                            and (p['is_pitcher'] or team_hitter_count[p['team']] < MAX_HITTERS_PER_TEAM)]
                 if not fallback:
-                    return None
+                    # Last resort: ignore team cap to avoid null lineup
+                    fallback = [(i, s, p) for i, s, p in pos_players.get(pos, [])
+                                if p['player_id'] not in used_pids and p['salary'] <= sal_left]
+                    if not fallback:
+                        return None
                 pick = fallback[-1]  # cheapest
             else:
                 # Weighted random from top 3
@@ -366,6 +381,8 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
             selected.append(pick[2]['player_id'])
             used_pids.add(pick[2]['player_id'])
             sal_left -= pick[2]['salary']
+            if not pick[2]['is_pitcher']:
+                team_hitter_count[pick[2]['team']] += 1
             remaining[pos] -= 1
             slots_needed -= 1
 
