@@ -3885,7 +3885,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 /* ── LINEUP CHIPS ─────────────────────────────────────────────────────────── */
 .lc-chip{width:440px;flex-shrink:0;background:var(--s2);border:1px solid var(--border2);border-radius:6px;overflow:hidden;box-shadow:0 3px 12px rgba(0,0,0,.45);transition:border-color .15s,box-shadow .15s;}
 .lc-chip:hover{border-color:rgba(96,165,250,.4);box-shadow:0 4px 16px rgba(0,0,0,.6);}
-.lc-chip-hd{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--s3);border-bottom:2px solid var(--border2);}
+.lc-chip-hd{display:flex;align-items:center;gap:4px;padding:5px 8px;background:var(--s3);border-bottom:2px solid var(--border2);flex-wrap:wrap;}
 .lc-chip-name{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:12px;color:var(--text2);flex:1;}
 .lc-chip-pts{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:13px;color:var(--hi);}
 .lc-chip-sal{font-size:10px;color:var(--muted);white-space:nowrap;}
@@ -3896,6 +3896,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 .lc-chip-slots{display:flex;flex-direction:column;gap:0;padding:0 8px 8px;}
 /* Pitcher rows: pos | team | name | sal | proj | own% | xFIP | K% | Win% */
 .lc-slot-pitcher,.lc-shdr-pitcher{display:grid;grid-template-columns:24px 28px 1fr 46px 34px 40px 36px 40px 34px;gap:3px;align-items:center;padding:2px 0;}
+.lc-slot-pitcher.sim-row,.lc-slot-hitter.sim-row{grid-template-columns:24px 28px 1fr 18px 46px 38px;}
 /* Hitter rows: pos | team | name | BO | sal | proj | own% | wRC+ | wOBA | PMS */
 .lc-slot-hitter,.lc-shdr-hitter{display:grid;grid-template-columns:24px 28px 1fr 18px 46px 34px 40px 32px 40px 30px;gap:3px;align-items:center;padding:2px 0;}
 .lc-slot-pitcher{border-bottom:1px solid rgba(255,255,255,.05);}
@@ -4322,6 +4323,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <select id="contest-picker" style="display:none;font-size:10px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;max-width:260px;" title="Select a real DK contest for simulation">
         <option value="">-- select contest --</option>
       </select>
+      <input type="number" id="sim-count" value="5000" min="100" max="50000" step="500" style="width:54px;font-size:10px;" class="opto-input" title="Number of Monte Carlo sims">
       <button class="bld-btn" style="background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.35);color:#a78bfa;" onclick="simulateContest()">Sim Contest</button>
       <button class="bld-btn" style="background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportPoolDK()">Export DK</button>
     </div>
@@ -8360,10 +8362,11 @@ function renderPoolCards() {
   // Active exposure filtering: enforce max targets + min unique after sort
   filtered = filterByExposure(filtered);
 
-  const countEl = document.getElementById('pool-count');
-  if (countEl) countEl.textContent = `${filtered.length} lineups`;
-
   const show = filtered.slice(0, _poolCardsShown);
+  _poolFilteredView = show; // store for exposure panel
+
+  const countEl = document.getElementById('pool-count');
+  if (countEl) countEl.textContent = `${show.length}${show.length < filtered.length ? ' / ' + filtered.length : ''} lineups`;
   const moreBtn = document.getElementById('pool-show-more');
   if (moreBtn) moreBtn.style.display = filtered.length > _poolCardsShown ? '' : 'none';
 
@@ -8397,10 +8400,11 @@ function renderPoolCards() {
       if (!p) return '';
       const tc = abbrColor(p.team || '');
       const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
-      return `<div class="lc-slot-pitcher">
+      return `<div class="lc-slot-pitcher sim-row">
         <span class="lc-slot-pos" style="background:${posColor('SP').bg};color:${posColor('SP').tx};">SP</span>
         <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
         <span class="lc-slot-name">${last}</span>
+        <span></span>
         <span class="lc-slot-sal">${fmtSal(p.salary)}</span>
         <span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span>
       </div>`;
@@ -8412,7 +8416,7 @@ function renderPoolCards() {
       const tc = abbrColor(p.team || '');
       const pc = posColor(sl.pos);
       const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
-      return `<div class="lc-slot-hitter">
+      return `<div class="lc-slot-hitter sim-row">
         <span class="lc-slot-pos" style="background:${pc.bg};color:${pc.tx};">${sl.pos}</span>
         <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
         <span class="lc-slot-name">${last}</span>
@@ -8492,7 +8496,7 @@ function addPoolToBuilds() {
 }
 
 function renderPoolExposure() {
-  const pool = _poolCandidates;
+  const pool = _poolFilteredView.length > 0 ? _poolFilteredView : _poolCandidates;
   if (!pool.length) return;
   const total = pool.length;
   const hitterSlots = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
@@ -8550,8 +8554,9 @@ function renderPoolExposure() {
     hitterSlots.forEach(k => { const p = c.lineup[k]; if (p?.team) teamCounts[p.team] = (teamCounts[p.team]||0)+1; });
     Object.entries(teamCounts).forEach(([team, cnt]) => {
       if (cnt >= 2) {
-        const key = `${team}_${cnt}`;
-        if (!stackCounts[key]) stackCounts[key] = { team, size: cnt, count: 0 };
+        const capped = Math.min(cnt, 5); // DK Classic max 5 hitters per team
+        const key = `${team}_${capped}`;
+        if (!stackCounts[key]) stackCounts[key] = { team, size: capped, count: 0 };
         stackCounts[key].count++;
       }
     });
@@ -8773,10 +8778,11 @@ function generateOpponentField(numOpponents, contestDb) {
 let _contestSimResults = null; // { perLineup: [{winCount, top1Count, ...}], simWinners: [[]] }
 let _poolSortCol = 'proj';
 let _poolSortDir = 1;
+let _poolFilteredView = []; // current filtered+sliced lineup list for exposure panel
 
 function simulateContest() {
   if (!_poolCandidates.length) { showToast('Generate a pool first'); return; }
-  const numSims = optoSettings.contestSims || 5000;
+  const numSims = +(document.getElementById('sim-count')?.value) || 5000;
   const pool = _poolCandidates;
   const n = pool.length;
 
