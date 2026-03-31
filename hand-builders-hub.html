@@ -7915,16 +7915,50 @@ async function loadPoolFromDB() {
       return;
     }
 
-    // Build player lookup from allHitters + allPitchers
+    // Collect all unique player IDs from pool lineups
+    const allPoolPids = [...new Set(userRes.flatMap(r => r.player_ids || []))];
+    updatePoolLoading(`Fetching ${allPoolPids.length} players`, 'Loading salary + projection data', 50);
+
+    // Fetch salary and projection data directly — don't depend on allHitters/allPitchers
+    const [salRows, projRows] = await Promise.all([
+      batchIn('dk_salaries', 'player_id,name,position,salary,team,dk_slate', 'player_id', allPoolPids,
+        q => q.eq('dk_slate', slate)),
+      batchIn('player_projections', 'player_id,full_name,team,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,is_pitcher,batting_order,proj_ip,proj_ks,proj_er,win_prob', 'player_id', allPoolPids,
+        q => q.eq('game_date', today)),
+    ]);
+
+    const salMap = {};
+    salRows.forEach(s => { if (s.player_id) salMap[s.player_id] = s; });
+    const projMap = {};
+    projRows.forEach(p => { if (p.player_id) projMap[p.player_id] = p; });
+
+    // Build playerMap from fetched data
     const playerMap = {};
-    [...allHitters, ...allPitchers].forEach(p => { playerMap[p.player_id] = p; });
-    console.log(`[loadPoolFromDB] playerMap size: ${Object.keys(playerMap).length} (hitters=${allHitters.length}, pitchers=${allPitchers.length})`);
-    if (userRes.length > 0) {
-      const samplePids = userRes[0].player_ids;
-      console.log(`[loadPoolFromDB] sample pids:`, samplePids, `types:`, samplePids.map(x => typeof x));
-      console.log(`[loadPoolFromDB] sample playerMap keys:`, Object.keys(playerMap).slice(0,5), `types:`, Object.keys(playerMap).slice(0,5).map(x => typeof x));
-      console.log(`[loadPoolFromDB] sample lookups:`, samplePids.map(pid => ({ pid, found: !!playerMap[pid], stringFound: !!playerMap[String(pid)] })));
+    for (const pid of allPoolPids) {
+      const sal = salMap[pid];
+      const proj = projMap[pid];
+      if (!sal && !proj) continue;
+      const rawPos = (sal?.position || '').split('/').map(p => mlbPosToDK(p.trim())).filter(p => p && p !== 'UTIL');
+      const positions = rawPos.length ? rawPos : (proj?.is_pitcher ? ['SP'] : ['UTIL']);
+      playerMap[pid] = {
+        player_id: pid,
+        name: sal?.name || proj?.full_name || '?',
+        positions,
+        salary: sal?.salary || 0,
+        team: sal?.team || proj?.team || '',
+        proj_dk_pts: proj?.proj_dk_pts ?? null,
+        proj_floor: proj?.proj_floor ?? null,
+        proj_ceiling: proj?.proj_ceiling ?? null,
+        proj_ownership: proj?.proj_ownership ?? null,
+        batting_order: proj?.batting_order ?? null,
+        is_pitcher: proj?.is_pitcher ?? positions.includes('SP'),
+        proj_ip: proj?.proj_ip ?? null,
+        proj_ks: proj?.proj_ks ?? null,
+        proj_er: proj?.proj_er ?? null,
+        win_prob: proj?.win_prob ?? null,
+      };
     }
+    console.warn(`[loadPoolFromDB] playerMap: ${Object.keys(playerMap).length} players from ${allPoolPids.length} unique IDs (sal=${salRows.length}, proj=${projRows.length})`);
 
     // Enrich user pool into _poolCandidates format
     _poolCandidates = [];
@@ -7933,7 +7967,7 @@ async function loadPoolFromDB() {
       if (!pids || pids.length !== 10) continue;
 
       // Build lineup object matching LINEUP_SLOTS
-      const players = pids.map(pid => playerMap[pid] || playerMap[String(pid)]).filter(Boolean);
+      const players = pids.map(pid => playerMap[pid]).filter(Boolean);
       if (players.length < 10) {
         console.warn(`[loadPoolFromDB] Only ${players.length}/10 players found in playerMap for lineup`, pids);
       }
