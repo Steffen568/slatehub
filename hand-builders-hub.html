@@ -7973,40 +7973,12 @@ async function loadPoolFromDB() {
       const pids = row.player_ids;
       if (!pids || pids.length !== 10) continue;
 
-      // Build lineup object matching LINEUP_SLOTS
-      const players = pids.map(pid => playerMap[pid]).filter(Boolean);
-      if (players.length < 10) {
-        console.warn(`[loadPoolFromDB] Only ${players.length}/10 players found in playerMap for lineup`, pids);
-      }
-
-      // Assign to lineup slots using constraint propagation:
-      // For each slot (most constrained first), pick the eligible player with the
-      // FEWEST alternative positions. This ensures single-pos players (e.g. SS-only)
-      // get their slot before multi-pos players (e.g. SS/OF) who have alternatives.
+      // player_ids are stored in DK slot order: SP,SP,C,1B,2B,3B,SS,OF,OF,OF
+      // Assign directly by index — no position reconstruction needed
       const lineup = {};
-      const usedIds = new Set();
-      const slotOrder = LINEUP_SLOTS.slice().sort((a, b) => {
-        const rank = { SP: 0, C: 1, SS: 2, '2B': 3, '3B': 4, '1B': 5, OF: 6 };
-        return (rank[a.pos] ?? 9) - (rank[b.pos] ?? 9);
-      });
-      for (const sl of slotOrder) {
-        const eligible = players.filter(p => !usedIds.has(p.player_id) && p.positions?.includes(sl.pos));
-        if (eligible.length > 0) {
-          // Pick player with fewest eligible positions (most constrained first)
-          eligible.sort((a, b) => (a.positions?.length || 1) - (b.positions?.length || 1));
-          lineup[sl.key] = eligible[0];
-          usedIds.add(eligible[0].player_id);
-        }
-      }
-      // Pass 2: fill any remaining empty slots with unused players
-      for (const sl of LINEUP_SLOTS) {
-        if (!lineup[sl.key]) {
-          const rem = players.find(p => !usedIds.has(p.player_id));
-          if (rem) {
-            lineup[sl.key] = rem;
-            usedIds.add(rem.player_id);
-          }
-        }
+      for (let i = 0; i < LINEUP_SLOTS.length && i < pids.length; i++) {
+        const p = playerMap[pids[i]];
+        if (p) lineup[LINEUP_SLOTS[i].key] = p;
       }
 
       const metrics = scorePoolLineup(lineup);

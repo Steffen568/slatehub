@@ -248,6 +248,8 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
     sal_left = SALARY_CAP
     selected = []
     used_pids = set()
+    # Track position assignment for each player so we can output in DK slot order
+    pid_to_pos = {}  # player_id → assigned position (e.g. 'SP', 'C', '1B', ...)
 
     # Force main stack players first
     if main_team and main_size > 0:
@@ -276,6 +278,7 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                     used_pids.add(p['player_id'])
                     sal_left -= p['salary']
                     remaining[pp] -= 1
+                    pid_to_pos[p['player_id']] = pp
                     picked_main += 1
                     assigned = True
                     break
@@ -286,6 +289,7 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                     used_pids.add(p['player_id'])
                     sal_left -= p['salary']
                     remaining['OF'] -= 1
+                    pid_to_pos[p['player_id']] = 'OF'
                     picked_main += 1
 
         if picked_main < main_size:
@@ -311,6 +315,7 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                     used_pids.add(p['player_id'])
                     sal_left -= p['salary']
                     remaining[pp] -= 1
+                    pid_to_pos[p['player_id']] = pp
                     picked_sub += 1
                     break
 
@@ -362,6 +367,7 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
             selected.append(pick[2]['player_id'])
             used_pids.add(pick[2]['player_id'])
             sal_left -= pick[2]['salary']
+            pid_to_pos[pick[2]['player_id']] = pos
             if not pick[2]['is_pitcher']:
                 team_hitter_count[pick[2]['team']] += 1
             remaining[pos] -= 1
@@ -372,7 +378,19 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
     total_sal = SALARY_CAP - sal_left
     if total_sal < SALARY_FLOOR:
         return None
-    return selected
+
+    # Output in DK slot order: SP, SP, C, 1B, 2B, 3B, SS, OF, OF, OF
+    DK_SLOT_ORDER = ['SP', 'SP', 'C', '1B', '2B', '3B', 'SS', 'OF', 'OF', 'OF']
+    pos_buckets = defaultdict(list)
+    for pid in selected:
+        pos_buckets[pid_to_pos[pid]].append(pid)
+    ordered = []
+    for pos in DK_SLOT_ORDER:
+        if pos_buckets[pos]:
+            ordered.append(pos_buckets[pos].pop(0))
+        else:
+            return None  # position couldn't be filled — shouldn't happen
+    return ordered
 
 
 # ── Noise Sampling ───────────────────────────────────────────────────────────
