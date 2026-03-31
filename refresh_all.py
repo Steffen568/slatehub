@@ -94,10 +94,10 @@ if QUICK:
             except Exception as e:
                 print(f"\n  ERROR in Agent 3 (quick projections): {e}")
                 logger.record('Agent 3 — Quick Projections', False, 0.0, str(e))
-            # Regenerate sim pools with updated projections/lineups
-            run_script('generate_pool.py', 'Sim Pool Generation', logger)
         else:
             print(f"\n  No new confirmations — projections unchanged")
+        # Always regenerate sim pools (reflects latest projections/lineups/odds)
+        run_script('generate_pool.py', 'Sim Pool Generation', logger)
     except Exception as e:
         print(f"\n  ERROR in Agent 2 (quick): {e}")
         logger.record('Agent 2 — Quick', False, 0.0, str(e))
