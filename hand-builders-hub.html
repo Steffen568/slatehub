@@ -4241,6 +4241,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
           <button class="opto-tog-btn" id="mode-btn-sim" onclick="setOptoMode(true)" title="Monte Carlo sim pool → contest sim → portfolio optimizer" style="position:relative;">Sim<span style="position:absolute;top:-4px;right:-4px;font-size:7px;background:#a78bfa;color:#fff;padding:0 3px;border-radius:4px;font-weight:800;line-height:1.4;">NEW</span></button>
         </div>
         <button class="bld-btn" id="generate-btn" style="background:rgba(99,179,237,.1);border-color:rgba(99,179,237,.35);color:#63b3ed;" onclick="generateLineups()">Generate</button>
+        <button class="bld-btn" style="background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.35);color:#a78bfa;" onclick="loadPoolFromDB()">Load Pool</button>
         <button class="bld-btn" id="ls-export-btn" style="display:none;background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportLateSwapCSV()">Export DK CSV</button>
         <button class="bld-btn primary" onclick="saveLineup()">Save Lineup</button>
         <button class="bld-btn" onclick="clearLineup()">Clear</button>
@@ -7872,6 +7873,117 @@ function selectDiverseFromPool(candidates, n) {
 // Pool state
 let _poolCandidates = [];  // [{lineup, metrics, dedupKey}]
 let _poolFilter = {};
+let _contestPool = [];     // contest pool player_id arrays for sim
+let _contestPoolFieldMult = 1;
+
+async function loadPoolFromDB() {
+  // Determine which slate is active
+  const slateEl = document.querySelector('.slate-selector select, .slate-select');
+  const slate = slateEl?.value || 'main';
+  const today = new Date().toISOString().split('T')[0];
+
+  showPoolLoading('Loading pool from database...');
+
+  try {
+    // Fetch user pool
+    const userRes = [];
+    for (let offset = 0; ; offset += 1000) {
+      const { data } = await sb.from('sim_pool')
+        .select('player_ids,salary,proj,stack_team,stack_size,sub_team,sub_size')
+        .eq('game_date', today).eq('dk_slate', slate).eq('pool_type', 'user')
+        .range(offset, offset + 999);
+      if (!data || !data.length) break;
+      userRes.push(...data);
+      if (data.length < 1000) break;
+    }
+    updatePoolLoading(`${userRes.length} user lineups`, 'Enriching with player data', 30);
+
+    // Fetch contest pool
+    const contestRes = [];
+    for (let offset = 0; ; offset += 1000) {
+      const { data } = await sb.from('sim_pool')
+        .select('player_ids')
+        .eq('game_date', today).eq('dk_slate', slate).eq('pool_type', 'contest')
+        .range(offset, offset + 999);
+      if (!data || !data.length) break;
+      contestRes.push(...data);
+      if (data.length < 1000) break;
+    }
+
+    if (!userRes.length) {
+      hidePoolLoading();
+      showToast('No pool data found. Run generate_pool.py first.');
+      return;
+    }
+
+    // Build player lookup from allHitters + allPitchers
+    const playerMap = {};
+    [...allHitters, ...allPitchers].forEach(p => { playerMap[p.player_id] = p; });
+
+    // Enrich user pool into _poolCandidates format
+    _poolCandidates = [];
+    for (const row of userRes) {
+      const pids = row.player_ids;
+      if (!pids || pids.length !== 10) continue;
+
+      // Build lineup object matching LINEUP_SLOTS
+      const pitchers = pids.map(pid => playerMap[pid]).filter(p => p && (p.positions?.includes('SP') || p.positions?.includes('P') || p.positions?.includes('RP')));
+      const hitters = pids.map(pid => playerMap[pid]).filter(p => p && !(p.positions?.includes('SP') || p.positions?.includes('P') || p.positions?.includes('RP')));
+
+      // Assign to lineup slots
+      const lineup = {};
+      let spIdx = 0;
+      for (const sl of LINEUP_SLOTS) {
+        if (sl.pos === 'SP') {
+          lineup[sl.key] = pitchers[spIdx] || null;
+          spIdx++;
+        }
+      }
+      // Assign hitters to matching position slots
+      const usedHitters = new Set();
+      for (const sl of LINEUP_SLOTS) {
+        if (sl.pos === 'SP') continue;
+        const match = hitters.find(h => !usedHitters.has(h.player_id) &&
+          (h.positions?.includes(sl.pos) || sl.pos === 'OF'));
+        if (match) {
+          lineup[sl.key] = match;
+          usedHitters.add(match.player_id);
+        }
+      }
+      // Fill remaining with any unused hitters
+      for (const sl of LINEUP_SLOTS) {
+        if (!lineup[sl.key]) {
+          const remaining = hitters.find(h => !usedHitters.has(h.player_id));
+          if (remaining) {
+            lineup[sl.key] = remaining;
+            usedHitters.add(remaining.player_id);
+          }
+        }
+      }
+
+      const metrics = scorePoolLineup(lineup);
+      const key = pids.sort((a,b) => a-b).join(',');
+      _poolCandidates.push({ lineup, metrics, dedupKey: key });
+    }
+
+    // Store contest pool for sim
+    _contestPool = contestRes.map(r => r.player_ids);
+
+    // Show pool section
+    const poolSec = document.getElementById('pool-section');
+    if (poolSec) poolSec.style.display = '';
+
+    hidePoolLoading();
+    showToast(`Pool loaded: ${_poolCandidates.length} user lineups + ${_contestPool.length} contest lineups`);
+    renderPoolCards();
+    renderPoolExposure();
+
+  } catch (e) {
+    hidePoolLoading();
+    console.error('Pool load error:', e);
+    showToast('Error loading pool: ' + e.message);
+  }
+}
 
 function generatePool() {
   const poolSize = optoSettings.poolSize || 2000;
@@ -8655,11 +8767,12 @@ function simulateContest() {
   const top10Cutoff = Math.max(1, Math.ceil(n * 0.10));
   const cashCutoff = Math.max(1, Math.ceil(n * (payoutPct / 100)));
 
-  // Pool competes against itself, scaled to contest size.
-  // fieldMult: how many contest entries each pool rank represents.
-  // Per-sim random offset models variance vs the rest of the field.
-  const fieldMult = Math.max(1, Math.round(fieldSize / n));
-  console.log(`Contest sim: ${n} lineups, fieldMult=${fieldMult} (${fieldSize.toLocaleString()} field)`);
+  // Contest pool: if loaded from DB, use it for realistic field positioning
+  const hasContestPool = _contestPool.length > 0;
+  const fieldMult = hasContestPool
+    ? Math.max(1, Math.round(fieldSize / _contestPool.length))
+    : Math.max(1, Math.round(fieldSize / n));
+  console.log(`Contest sim: ${n} user lineups${hasContestPool ? ` vs ${_contestPool.length} contest pool` : ' (self-competition)'}, fieldMult=${fieldMult} (${fieldSize.toLocaleString()} field)`);
 
   // Build payout lookup from contest data for ROI calculation
   let payoutTiers = null; // [{minPos, maxPos, value}]
@@ -8706,14 +8819,35 @@ function simulateContest() {
       for (let rank = 0; rank < top1Cutoff && rank < n; rank++) thisTop1.add(indices[rank]);
       simTop1.push(thisTop1);
 
-      // Record positions — scale pool rank to contest field size.
-      // Random jitter per slot models other lineups between ours in the field.
-      // Per-sim offset models variance in how our pool competes vs the field:
-      // sometimes we're near the top, sometimes we're mid-pack.
-      const simOffset = Math.floor(Math.random() * fieldMult * 2); // 0 to 2×fieldMult
+      // Score contest pool (if loaded from DB)
+      let contestScores = null;
+      if (hasContestPool) {
+        contestScores = new Float64Array(_contestPool.length);
+        for (let ci = 0; ci < _contestPool.length; ci++) {
+          let cs = 0;
+          for (const pid of _contestPool[ci]) cs += simProj.get(pid) ?? 0;
+          contestScores[ci] = cs;
+        }
+      }
+
+      // Record positions
       for (let rank = 0; rank < n; rank++) {
         const li = indices[rank];
-        const fieldPos = simOffset + rank * fieldMult + Math.floor(Math.random() * fieldMult) + 1;
+        const myScore = scores[li];
+
+        let fieldPos;
+        if (hasContestPool && contestScores) {
+          // Count how many contest pool lineups beat this lineup
+          let betterOpps = 0;
+          for (let ci = 0; ci < contestScores.length; ci++) {
+            if (contestScores[ci] > myScore) betterOpps++;
+          }
+          fieldPos = betterOpps * fieldMult + rank + 1;
+        } else {
+          // Self-competition fallback with jitter
+          const simOffset = Math.floor(Math.random() * fieldMult * 2);
+          fieldPos = simOffset + rank * fieldMult + Math.floor(Math.random() * fieldMult) + 1;
+        }
 
         stats[li].finishSum += fieldPos;
         if (fieldPos === 1) stats[li].winCount++;

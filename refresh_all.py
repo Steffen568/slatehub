@@ -180,6 +180,7 @@ if POSTGAME:
     run_script('load_bullpen.py',            'Bullpen — final pitch counts', logger)
     run_script('load_game_logs.py --days 3', "Game Logs — today's results",  logger)
     run_script('load_contest_data.py', 'DK Contest Data — final counts', logger)
+    run_script('load_actual_ownership.py',  'Actual Ownership — post-lock',  logger)
 
 # ── SPLITS (standalone, 7:30 AM) ─────────────────────────────────────────────
 if SPLITS:
