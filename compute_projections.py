@@ -811,14 +811,14 @@ def fetch_today_data(target_date: str) -> dict:
     if sp_ids:
         rows = sb.table('pitcher_stats').select(
             'player_id,season,ip,g,gs,xfip,stuff_plus,k_pct,bb_pct,era,fip,siera,full_name,stats_level,swstr_pct'
-        ).in_('player_id', list(sp_ids)).in_('season', [SEASON, SEASON-1, SEASON-2]).execute().data or []
+        ).in_('player_id', list(sp_ids)).in_('season', [SEASON, SEASON-1, SEASON-2, SEASON-3]).execute().data or []
         for r in rows:
             pid = r['player_id']
             yr  = r['season']
             pitcher_stats_all.setdefault(pid, {})[yr] = r
         # Build current-season map (fallback to most recent) for batter tier-2 mult
         for pid, seasons in pitcher_stats_all.items():
-            pitcher_stats[pid] = seasons.get(SEASON) or seasons.get(SEASON-1) or seasons.get(SEASON-2)
+            pitcher_stats[pid] = seasons.get(SEASON) or seasons.get(SEASON-1) or seasons.get(SEASON-2) or seasons.get(SEASON-3)
 
     # Bullpen quality — IP-weighted composite per team
     # Step 1: get pitcher player_ids on each team from rosters

@@ -467,3 +467,7 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### Auto-fixed DK ID mismatches: Brandon Lowe, Carson Kelly, Cole Young, Gabriel Arias, Gary Sanchez, Ivan Herrera, Jacob Wilson, Jose Caballero, Jose Ramirez, Josh Smith, Julio Rodriguez, Miguel Vargas, Mike Yastrzemski
 **What happened:** Pipeline auto-fixed 13 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Pitcher missing from projections after TJ surgery (McClanahan)
+**What happened:** Shane McClanahan only had 2023 pitcher_stats (missed 2024-2025 with Tommy John). The engine queried SEASON, SEASON-1, SEASON-2 (2024-2026) so found nothing and skipped him.
+**Rule:** Pitcher stats lookback must include SEASON-3 (4 years) to cover pitchers returning from long injuries.
