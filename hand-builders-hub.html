@@ -7918,6 +7918,13 @@ async function loadPoolFromDB() {
     // Build player lookup from allHitters + allPitchers
     const playerMap = {};
     [...allHitters, ...allPitchers].forEach(p => { playerMap[p.player_id] = p; });
+    console.log(`[loadPoolFromDB] playerMap size: ${Object.keys(playerMap).length} (hitters=${allHitters.length}, pitchers=${allPitchers.length})`);
+    if (userRes.length > 0) {
+      const samplePids = userRes[0].player_ids;
+      console.log(`[loadPoolFromDB] sample pids:`, samplePids, `types:`, samplePids.map(x => typeof x));
+      console.log(`[loadPoolFromDB] sample playerMap keys:`, Object.keys(playerMap).slice(0,5), `types:`, Object.keys(playerMap).slice(0,5).map(x => typeof x));
+      console.log(`[loadPoolFromDB] sample lookups:`, samplePids.map(pid => ({ pid, found: !!playerMap[pid], stringFound: !!playerMap[String(pid)] })));
+    }
 
     // Enrich user pool into _poolCandidates format
     _poolCandidates = [];
@@ -7926,7 +7933,7 @@ async function loadPoolFromDB() {
       if (!pids || pids.length !== 10) continue;
 
       // Build lineup object matching LINEUP_SLOTS
-      const players = pids.map(pid => playerMap[pid]).filter(Boolean);
+      const players = pids.map(pid => playerMap[pid] || playerMap[String(pid)]).filter(Boolean);
       if (players.length < 10) {
         console.warn(`[loadPoolFromDB] Only ${players.length}/10 players found in playerMap for lineup`, pids);
       }
