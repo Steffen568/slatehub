@@ -3972,8 +3972,8 @@ function buildSlateButtons(games) {
   // Collect all classic slates present for today's games
   const slatesPresent = new Set();
   games.forEach(g => getSlatesForGame(g).forEach(s => slatesPresent.add(s)));
-  const slateOrder  = ['all', 'early', 'afternoon', 'main', 'late'];
-  const slateLabels = { all:'All', early:'Early', afternoon:'Afternoon', main:'Main', late:'Late' };
+  const slateOrder  = ['all', 'early', 'afternoon', 'main', 'turbo', 'late', 'late_night'];
+  const slateLabels = { all:'All', early:'Early', afternoon:'Afternoon', main:'Main', turbo:'Turbo', late:'Late', late_night:'Late Night' };
 
   const container = document.getElementById('slateButtons');
   container.innerHTML = '';
@@ -5253,7 +5253,13 @@ const sb = supabase.createClient(SUPA_URL, SUPA_KEY);
 // Active game state
 let activeGame = null;
 let allGames   = [];
-let slateGameMap = {};  // "AWAY|HOME" → Set of slate labels (from dk_slate_games)
+let slateGameMap = {};  // "DATE|AWAY|HOME" → Set of slate labels (from dk_slate_games)
+
+// Normalize DK team abbreviations to match teamAbbr() output
+function dkTeamNorm(t) {
+  const m = {CHW:'CWS', OAK:'ATH', WAS:'WSH'};
+  return m[t] || t;
+}
 
 // ── Helpers
 function fmtTime(utc) {
@@ -5363,7 +5369,7 @@ async function loadGames() {
     const utc = new Date(r.start_time);
     const etMs = utc.getTime() - 4 * 3600000;
     const etDate = new Date(etMs).toISOString().split('T')[0];
-    const key = `${etDate}|${r.away_team}|${r.home_team}`;
+    const key = `${etDate}|${dkTeamNorm(r.away_team)}|${dkTeamNorm(r.home_team)}`;
     if (!slateGameMap[key]) slateGameMap[key] = new Set();
     slateGameMap[key].add(r.dk_slate);
   });

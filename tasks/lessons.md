@@ -463,3 +463,7 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### Auto-fixed DK ID mismatches: Gabriel Arias, Jose Caballero, Jose Ramirez, Miguel Rojas, Tyler O'Neill, Vladimir Guerrero Jr.
 **What happened:** Pipeline auto-fixed 6 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Brandon Lowe, Carson Kelly, Cole Young, Gabriel Arias, Gary Sanchez, Ivan Herrera, Jacob Wilson, Jose Caballero, Jose Ramirez, Josh Smith, Julio Rodriguez, Miguel Vargas, Mike Yastrzemski
+**What happened:** Pipeline auto-fixed 13 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
