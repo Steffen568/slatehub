@@ -4315,35 +4315,14 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 <!-- ── POOL RESULTS PANEL ──────────────────────────────────────────────────── -->
 <section class="lineups-section" id="pool-section" style="display:none;">
   <div class="lineups-section-hd">
-    <div class="opto-toggle-group" style="margin-right:8px;">
-      <button class="opto-tog-btn active" id="pool-tab-pool" onclick="switchResultsTab('pool')">Pool</button>
-      <button class="opto-tog-btn" id="pool-tab-portfolio" onclick="switchResultsTab('portfolio')">Portfolio</button>
-    </div>
+    <span class="lineups-section-title">Sim Pool</span>
     <span id="pool-count" style="font-size:11px;color:var(--muted);margin-left:4px;"></span>
     <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
       <select id="contest-picker" style="display:none;font-size:10px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;max-width:260px;" title="Select a real DK contest for simulation">
         <option value="">-- select contest --</option>
       </select>
       <button class="bld-btn" style="background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.35);color:#a78bfa;" onclick="simulateContest()">Sim Contest</button>
-      <label style="font-size:10px;color:var(--muted);">Select</label>
-      <input type="number" id="pool-select-n" value="20" min="1" max="150" style="width:40px;font-size:11px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;text-align:center;">
-      <label style="font-size:10px;color:var(--muted);">Min Uniq</label>
-      <input type="number" id="portfolio-min-uniq" value="2" min="0" max="8" style="width:32px;font-size:11px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;text-align:center;" title="Min unique players between any two portfolio lineups">
-      <select id="portfolio-strategy" style="font-size:10px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;" onchange="setPortfolioStrategy(this.value)">
-        <option value="balanced">Balanced GPP</option>
-        <option value="firstPlace">First Place</option>
-        <option value="contrarian">Contrarian</option>
-        <option value="leverage">Leverage</option>
-        <option value="cash">Cash / Consistency</option>
-        <option value="maxCorr">Max Correlation</option>
-      </select>
-      <div id="strategy-controls" style="display:flex;align-items:center;gap:3px;">
-        <span style="font-size:8px;color:var(--muted);">Quality</span>
-        <input type="range" id="pool-coverage-wt" min="0" max="100" value="50" style="width:60px;height:12px;" oninput="optoSettings.coverageWt=+this.value;saveSettings();">
-        <span style="font-size:8px;color:var(--muted);">Cover</span>
-      </div>
-      <button class="bld-btn" style="background:rgba(99,179,237,.1);border-color:rgba(99,179,237,.35);color:#63b3ed;" onclick="addOptimalPortfolio()">Build Portfolio</button>
-      <button class="bld-btn" style="background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportPortfolioDK()">Export DK</button>
+      <button class="bld-btn" style="background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportPoolDK()">Export DK</button>
     </div>
   </div>
   <!-- Filter bar -->
@@ -4370,19 +4349,14 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <option value="roi">ROI</option>
       <option value="cashPct">Cash%</option>
     </select>
+    <span style="color:var(--border);margin:0 2px;">|</span>
+    <label style="color:var(--muted);font-weight:700;">Min Uniq</label>
+    <input type="number" id="pool-min-uniq" value="0" min="0" max="8" style="width:32px;" class="opto-input" oninput="setPoolFilter('minUnique',this.value)" title="Min unique players between any two lineups in filtered pool">
   </div>
   <!-- Two-column body -->
   <div class="lineups-body">
     <div class="lineups-saved-col">
-      <div id="pool-view-pool">
-        <div class="lineups-grid" id="pool-cards" style="overflow-y:auto;max-height:calc(100vh - 300px);"></div>
-        <div id="pool-show-more" style="display:none;padding:8px;text-align:center;">
-          <button class="bld-btn" onclick="showMorePoolCards()">Show More</button>
-        </div>
-      </div>
-      <div id="pool-view-portfolio" style="display:none;">
-        <div class="lineups-grid" id="portfolio-cards" style="overflow-y:auto;max-height:calc(100vh - 300px);"></div>
-      </div>
+      <div class="lineups-grid" id="pool-cards" style="overflow-y:auto;max-height:calc(100vh - 300px);"></div>
     </div>
     <div class="lineups-exposure-col">
       <div class="exp-col-hd" style="padding:0;">
@@ -7975,7 +7949,7 @@ function generatePool() {
       _simCtx = null; // free memory
       _poolCandidates.sort((a,b) => b.metrics.proj - a.metrics.proj);
       hidePoolLoading();
-      switchResultsTab('pool'); // ensure pool view is visible
+      // pool section already visible
       const msg = exhausted
         ? `Pool complete (early stop): ${_poolCandidates.length} unique lineups from ${simIdx} sims — solution space exhausted`
         : `Pool complete: ${_poolCandidates.length} unique lineups from ${poolSize} sims`;
@@ -7992,20 +7966,10 @@ let _poolExpTargets = {};
 let _poolExpPosFilter = 'ALL';
 let _poolExpStackFilter = 0;
 let _poolExpTab = 'players';
-let _portfolioLineups = []; // lineups selected by Build Portfolio, with contest metrics
 
-function switchResultsTab(tab) {
-  document.getElementById('pool-tab-pool')?.classList.toggle('active', tab === 'pool');
-  document.getElementById('pool-tab-portfolio')?.classList.toggle('active', tab === 'portfolio');
-  document.getElementById('pool-view-pool').style.display = tab === 'pool' ? '' : 'none';
-  document.getElementById('pool-view-portfolio').style.display = tab === 'portfolio' ? '' : 'none';
-  if (tab === 'portfolio') renderPortfolioCards();
-  renderPoolExposure(); // refresh exposure for the active tab
-}
-
-function renderPortfolioCards() {
-  const container = document.getElementById('portfolio-cards');
-  if (!container) return;
+// Portfolio builder removed — pool IS the contest entry set. Filter + sort the pool directly.
+// Dead portfolio functions below kept temporarily to avoid brace imbalance. They are not called.
+function _deadCode_renderPortfolioCards() {
   if (!_portfolioLineups.length) {
     container.innerHTML = '<div class="pool-empty">Build a portfolio from the pool to see lineups here.</div>';
     return;
@@ -8118,6 +8082,8 @@ function setPoolExpTarget(key, field, val) {
   if (!isNaN(n) && n >= 0 && n <= 100) _poolExpTargets[key][field] = n;
   else delete _poolExpTargets[key][field];
   if (!_poolExpTargets[key].min && !_poolExpTargets[key].max) delete _poolExpTargets[key];
+  // Re-render pool with new exposure constraints (max targets actively filter)
+  if (field === 'max') { renderPoolCards(); renderPoolExposure(); }
 }
 
 function filterPoolCandidates() {
@@ -8137,28 +8103,79 @@ function filterPoolCandidates() {
   return filtered;
 }
 
+function filterByExposure(lineups) {
+  // Active exposure filtering: enforce max targets + min unique in sort order.
+  // Best lineups (by current sort) get priority. Lineups violating max caps get skipped.
+  const hasTargets = Object.keys(_poolExpTargets).length > 0;
+  const minUniq = +(_poolFilter.minUnique || 0);
+  if (!hasTargets && !minUniq) return lineups;
+
+  const result = [];
+  const playerCount = {};
+  const stackCount = {};
+  const hitterSlotKeys = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
+  const maxN = lineups.length;
+
+  for (const c of lineups) {
+    let skip = false;
+
+    // Check player max targets
+    if (hasTargets) {
+      for (const pid of c.metrics.pids) {
+        const tgt = _poolExpTargets[pid];
+        if (tgt?.max != null) {
+          const maxCount = Math.max(1, Math.ceil(maxN * tgt.max / 100));
+          if ((playerCount[pid] || 0) >= maxCount) { skip = true; break; }
+        }
+      }
+    }
+    if (skip) continue;
+
+    // Check stack max targets
+    if (hasTargets) {
+      const tc = {};
+      hitterSlotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
+      for (const [team, cnt] of Object.entries(tc)) {
+        if (skip) break;
+        for (let s = 2; s <= cnt; s++) {
+          const tgt = _poolExpTargets[`${team}_${s}`];
+          if (tgt?.max != null) {
+            const maxCount = Math.max(1, Math.ceil(maxN * tgt.max / 100));
+            if ((stackCount[`${team}_${s}`] || 0) >= maxCount) { skip = true; break; }
+          }
+        }
+      }
+    }
+    if (skip) continue;
+
+    // Min unique: must differ from every existing result by at least minUniq players
+    if (minUniq > 0 && result.length > 0) {
+      const tooSimilar = result.some(prev => {
+        let shared = 0;
+        for (const pid of c.metrics.pids) { if (prev.metrics.pids.has(pid)) shared++; }
+        return (10 - shared) < minUniq;
+      });
+      if (tooSimilar) continue;
+    }
+
+    // Accept this lineup
+    result.push(c);
+    for (const pid of c.metrics.pids) playerCount[pid] = (playerCount[pid] || 0) + 1;
+    const tc = {};
+    hitterSlotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
+    for (const [team, cnt] of Object.entries(tc)) {
+      for (let s = 2; s <= cnt; s++) stackCount[`${team}_${s}`] = (stackCount[`${team}_${s}`] || 0) + 1;
+    }
+  }
+  return result;
+}
+
 function renderPoolCards() {
   const container = document.getElementById('pool-cards');
   if (!container) return;
   let filtered = filterPoolCandidates();
 
-  // Apply filters
-  const f = _poolFilter;
-  if (f.minProj) filtered = filtered.filter(c => c.metrics.proj >= f.minProj);
-  if (f.maxProj) filtered = filtered.filter(c => c.metrics.proj <= f.maxProj);
-  if (f.minCeil) filtered = filtered.filter(c => c.metrics.ceil >= f.minCeil);
-  if (f.minFloor) filtered = filtered.filter(c => c.metrics.floor >= f.minFloor);
-  if (f.maxGames) filtered = filtered.filter(c => c.metrics.games <= f.maxGames);
-  if (f.stack) filtered = filtered.filter(c => c.metrics.stack.startsWith(f.stack));
-  if (f.mustInclude) {
-    const pid = +f.mustInclude;
-    filtered = filtered.filter(c => c.metrics.pids.has(pid));
-  }
-
-  const countEl = document.getElementById('pool-count');
-  if (countEl) countEl.textContent = `${filtered.length} lineups`;
-
-  // Sort by selected column — "best" always first on initial pick
+  // Sort by selected column — "best" always first
   const sc = _poolSortCol;
   const dir = _poolSortDir;
   const getVal = (c) => {
@@ -8166,10 +8183,15 @@ function renderPoolCards() {
     if (sc in (c.metrics || {})) return c.metrics[sc] || 0;
     return c.metrics?.proj || 0;
   };
-  // totalOwn and bustPct: lower is better, so negate for "best first"
   const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
   const sign = lowerIsBetter ? 1 : -1;
   filtered.sort((a,b) => (getVal(a) - getVal(b)) * sign * dir || b.metrics.proj - a.metrics.proj);
+
+  // Active exposure filtering: enforce max targets + min unique after sort
+  filtered = filterByExposure(filtered);
+
+  const countEl = document.getElementById('pool-count');
+  if (countEl) countEl.textContent = `${filtered.length} lineups`;
 
   const show = filtered.slice(0, _poolCardsShown);
   const moreBtn = document.getElementById('pool-show-more');
@@ -8299,9 +8321,7 @@ function addPoolToBuilds() {
 }
 
 function renderPoolExposure() {
-  // Show exposure for whichever tab is active
-  const isPortfolio = document.getElementById('pool-tab-portfolio')?.classList.contains('active');
-  const pool = (isPortfolio && _portfolioLineups.length) ? _portfolioLineups : _poolCandidates;
+  const pool = _poolCandidates;
   if (!pool.length) return;
   const total = pool.length;
   const hitterSlots = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
@@ -8402,7 +8422,6 @@ function setPoolFilter(key, val) {
   else _poolFilter[key] = isNaN(+val) ? val : +val;
   _poolCardsShown = Infinity;
   renderPoolCards();
-  renderPortfolioCards();
 }
 
 // ── OPPONENT FIELD GENERATOR ─────────────────────────────────────────────────
@@ -9091,13 +9110,68 @@ function exportPortfolioDK() {
   showToast(`Exported ${entries.length} entries for ${contest?.contestName?.slice(0,40) || contestId}`);
 }
 
+function exportPoolDK() {
+  // Export filtered pool to DK CSV format
+  if (!_dkTemplate) { showToast('Upload DK CSV first'); return; }
+  const contestId = _activeContestId;
+  if (!contestId) { showToast('Select a contest from the dropdown'); return; }
+
+  const entries = _dkTemplate.entries.filter(e => String(e.contestId) === String(contestId));
+  if (!entries.length) { showToast('No entries for this contest'); return; }
+
+  // Get the filtered pool (same as what's displayed)
+  let pool = filterPoolCandidates();
+  const sc = _poolSortCol, dir = _poolSortDir;
+  const getVal = (c) => { if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
+  const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
+  const sign = lowerIsBetter ? 1 : -1;
+  pool.sort((a,b) => (getVal(a) - getVal(b)) * sign * dir || b.metrics.proj - a.metrics.proj);
+  pool = filterByExposure(pool);
+
+  const header = _dkTemplate.originalHeader || 'Entry ID,Contest Name,Contest ID,Entry Fee,SP,SP,C,1B,2B,3B,SS,OF,OF,OF';
+  const csvRows = [header];
+  const headerColCount = header.split(',').length;
+
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const c = pool[i % pool.length];
+    const lu = c.lineup;
+    const slots = LINEUP_SLOTS.map(sl => {
+      const p = lu[sl.key];
+      if (!p) return '';
+      const dkId = dkDraftgroupMap[normName(p.name)] || dkDraftgroupMap[(p.name||'').toLowerCase()] || p.dk_id || p.player_id || '';
+      return `${p.name} (${dkId})`;
+    });
+    const rowBase = `${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},${slots.join(',')}`;
+    const rowCols = rowBase.split(',').length;
+    const padding = headerColCount > rowCols ? ','.repeat(headerColCount - rowCols) : '';
+    csvRows.push(rowBase + padding);
+  }
+
+  // Unassigned entries from other contests
+  for (const entry of _dkTemplate.entries) {
+    if (String(entry.contestId) === String(contestId)) continue;
+    csvRows.push(`${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee}${','.repeat(headerColCount - 4)}`);
+  }
+
+  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `DKEntries_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  const contest = _dkTemplate.contests.find(c => String(c.contestId) === String(contestId));
+  showToast(`Exported ${entries.length} entries (${pool.length} unique lineups) for ${contest?.contestName?.slice(0,40) || contestId}`);
+}
+
 function setPoolSort(col) {
   if (_poolSortCol === col) _poolSortDir *= -1;
   else { _poolSortCol = col; _poolSortDir = -1; }
   _poolCardsShown = Infinity;
   renderPoolCards();
   renderPoolExposure();
-  renderPortfolioCards();
 }
 
 function generateLineups() {
