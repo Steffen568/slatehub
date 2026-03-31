@@ -4327,6 +4327,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <button class="bld-btn" style="background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.35);color:#a78bfa;" onclick="simulateContest()">Sim Contest</button>
       <label style="font-size:10px;color:var(--muted);">Select</label>
       <input type="number" id="pool-select-n" value="20" min="1" max="150" style="width:40px;font-size:11px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;text-align:center;">
+      <label style="font-size:10px;color:var(--muted);">Min Uniq</label>
+      <input type="number" id="portfolio-min-uniq" value="2" min="0" max="8" style="width:32px;font-size:11px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;text-align:center;" title="Min unique players between any two portfolio lineups">
       <select id="portfolio-strategy" style="font-size:10px;background:var(--s3);color:var(--text2);border:1px solid var(--border);border-radius:3px;padding:2px 4px;" onchange="setPortfolioStrategy(this.value)">
         <option value="balanced">Balanced GPP</option>
         <option value="firstPlace">First Place</option>
@@ -8817,6 +8819,7 @@ function selectOptimalPortfolio(k) {
   const covered = new Uint8Array(numSims);
   const selected = [];
   const selectedGlobal = new Set();
+  const selectedPids = [];  // array of Sets — one per selected lineup's player IDs
   const appearCount = {};
   const stackAppear = {};
   const stackTeamFreq = {}; // team → count (for maxCorr diversity)
@@ -8893,6 +8896,7 @@ function selectOptimalPortfolio(k) {
         // Add to portfolio
         selected.push(globalIdx[bestIdx]);
         selectedGlobal.add(globalIdx[bestIdx]);
+        selectedPids.push(new Set(pool[bestIdx].metrics.pids));
         for (const pid of pool[bestIdx].metrics.pids) { appearCount[pid] = (appearCount[pid] || 0) + 1; }
         const tc = {};
         hitterSlotKeys.forEach(sk => { const p = pool[bestIdx].lineup[sk]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
@@ -8924,9 +8928,20 @@ function selectOptimalPortfolio(k) {
     const covNorm = numSims * 0.01 || 1;
 
     let bestIdx = -1, bestScore = -Infinity;
+    const minUniq = +(document.getElementById('portfolio-min-uniq')?.value || 2);
     for (let i = 0; i < n; i++) {
       if (selectedGlobal.has(globalIdx[i])) continue;
       if (wouldViolateMax(pool[i])) continue;
+      // Min unique: candidate must differ from every selected lineup by at least N players
+      if (minUniq > 0 && selectedPids.length > 0) {
+        const cPids = pool[i].metrics.pids;
+        const tooSimilar = selectedPids.some(sp => {
+          let shared = 0;
+          for (const pid of cPids) { if (sp.has(pid)) shared++; }
+          return (10 - shared) < minUniq; // 10 players total, need at least minUniq different
+        });
+        if (tooSimilar) continue;
+      }
 
       const c = pool[i];
       const m = c.metrics;
@@ -8969,6 +8984,7 @@ function selectOptimalPortfolio(k) {
     if (bestIdx === -1) break;
     selected.push(globalIdx[bestIdx]);
     selectedGlobal.add(globalIdx[bestIdx]);
+    selectedPids.push(new Set(pool[bestIdx].metrics.pids));
 
     // Track exposures
     for (const pid of pool[bestIdx].metrics.pids) { appearCount[pid] = (appearCount[pid] || 0) + 1; }
