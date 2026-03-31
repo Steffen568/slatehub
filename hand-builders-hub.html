@@ -8860,15 +8860,17 @@ function simulateContest() {
       for (let rank = 0; rank < top1Cutoff && rank < n; rank++) thisTop1.add(indices[rank]);
       simTop1.push(thisTop1);
 
-      // Score contest pool (if loaded from DB)
-      let contestScores = null;
+      // Score contest pool (if loaded from DB) and sort for binary search
+      let sortedContestScores = null;
       if (hasContestPool) {
-        contestScores = new Float64Array(_contestPool.length);
+        const contestScores = new Float64Array(_contestPool.length);
         for (let ci = 0; ci < _contestPool.length; ci++) {
           let cs = 0;
           for (const pid of _contestPool[ci]) cs += simProj.get(pid) ?? 0;
           contestScores[ci] = cs;
         }
+        // Sort ascending for binary search (count of scores > myScore)
+        sortedContestScores = contestScores.sort();
       }
 
       // Record positions
@@ -8877,12 +8879,15 @@ function simulateContest() {
         const myScore = scores[li];
 
         let fieldPos;
-        if (hasContestPool && contestScores) {
-          // Count how many contest pool lineups beat this lineup
-          let betterOpps = 0;
-          for (let ci = 0; ci < contestScores.length; ci++) {
-            if (contestScores[ci] > myScore) betterOpps++;
+        if (sortedContestScores) {
+          // Binary search: find how many contest lineups scored higher
+          let lo = 0, hi = sortedContestScores.length;
+          while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (sortedContestScores[mid] <= myScore) lo = mid + 1;
+            else hi = mid;
           }
+          const betterOpps = sortedContestScores.length - lo;
           fieldPos = betterOpps * fieldMult + rank + 1;
         } else {
           // Self-competition fallback with jitter
