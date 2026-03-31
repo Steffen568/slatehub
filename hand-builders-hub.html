@@ -8319,6 +8319,54 @@ function filterByExposure(lineups) {
       }
     }
   }
+
+  // Enforce min targets: if any player or stack is below minimum, pull in extra lineups
+  if (hasTargets) {
+    const skipped = lineups.filter(c => !result.includes(c));
+    for (const [key, tgt] of Object.entries(_poolExpTargets)) {
+      if (tgt.min == null) continue;
+      const minCount = Math.max(1, Math.ceil(targetN * tgt.min / 100));
+      const isStack = key.includes('_');
+
+      if (isStack) {
+        const current = stackCount[key] || 0;
+        if (current >= minCount) continue;
+        // Find skipped lineups that contain this stack
+        const [sTeam, sSize] = [key.split('_')[0], +key.split('_')[1]];
+        for (const c of skipped) {
+          if ((stackCount[key] || 0) >= minCount) break;
+          const tc2 = {};
+          hitterSlotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc2[p.team] = (tc2[p.team]||0)+1; });
+          const teamCnt = Math.min(tc2[sTeam] || 0, 5);
+          if (teamCnt >= sSize) {
+            result.push(c);
+            for (const pid of c.metrics.pids) playerCount[pid] = (playerCount[pid] || 0) + 1;
+            Object.entries(tc2).forEach(([t, cnt]) => {
+              if (cnt >= 2) stackCount[`${t}_${Math.min(cnt,5)}`] = (stackCount[`${t}_${Math.min(cnt,5)}`] || 0) + 1;
+            });
+          }
+        }
+      } else {
+        // Player min
+        const pid = +key;
+        const current = playerCount[pid] || 0;
+        if (current >= minCount) continue;
+        for (const c of skipped) {
+          if ((playerCount[pid] || 0) >= minCount) break;
+          if (c.metrics.pids.has(pid)) {
+            result.push(c);
+            for (const p of c.metrics.pids) playerCount[p] = (playerCount[p] || 0) + 1;
+            const tc2 = {};
+            hitterSlotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc2[p.team] = (tc2[p.team]||0)+1; });
+            Object.entries(tc2).forEach(([t, cnt]) => {
+              if (cnt >= 2) stackCount[`${t}_${Math.min(cnt,5)}`] = (stackCount[`${t}_${Math.min(cnt,5)}`] || 0) + 1;
+            });
+          }
+        }
+      }
+    }
+  }
+
   return result;
 }
 
