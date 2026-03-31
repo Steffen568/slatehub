@@ -143,6 +143,8 @@ def build_player_pool(data):
             norm = (p.get('full_name') or '').lower().replace('.', '').replace("'", '').strip()
             sal_row = data['sal_name_map'].get(norm)
         if not sal_row or not sal_row.get('salary'): continue
+        # Always use the salary player_id — it matches what the frontend loads from dk_salaries
+        pid = sal_row.get('player_id', pid)
 
         proj = safe(p.get('proj_dk_pts'), 0)
         if proj <= 0: continue
