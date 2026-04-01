@@ -188,6 +188,14 @@ if POSTGAME:
     run_script('load_game_logs.py --days 3', "Game Logs — today's results",  logger)
     run_script('load_contest_data.py', 'DK Contest Data — final counts', logger)
     run_script('load_actual_ownership.py',  'Actual Ownership — post-lock',  logger)
+    run_script('load_actuals.py',           'Actual DK Points — boxscores',  logger)
+    # Post-contest research (projection accuracy, ownership accuracy, recommendations)
+    try:
+        from agents.agent_research import run as run_research
+        run_research(logger)
+    except Exception as e:
+        print(f"\n  ERROR in Agent 4 (research): {e}")
+        logger.record('Agent 4 — Research', False, 0.0, str(e))
 
 # ── SPLITS (standalone, 7:30 AM) ─────────────────────────────────────────────
 if SPLITS:
