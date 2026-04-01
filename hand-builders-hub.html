@@ -4331,18 +4331,23 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
   <!-- Filter bar -->
   <div style="display:flex;flex-wrap:wrap;gap:6px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:10px;align-items:center;">
     <label style="color:var(--muted);font-weight:700;">Filters:</label>
-    <input type="number" placeholder="Min Proj" style="width:58px;" class="opto-input" oninput="setPoolFilter('minProj',this.value)">
-    <input type="number" placeholder="Min Ceil" style="width:58px;" class="opto-input" oninput="setPoolFilter('minCeil',this.value)">
-    <input type="number" placeholder="Max Games" style="width:58px;" class="opto-input" oninput="setPoolFilter('maxGames',this.value)">
-    <input type="text" placeholder="Stack" style="width:50px;" class="opto-input" oninput="setPoolFilter('stack',this.value)">
-    <input type="number" placeholder="Min Win%" style="width:58px;" class="opto-input" oninput="setPoolFilter('minWin',this.value)">
-    <input type="number" placeholder="Min Cash%" style="width:62px;" class="opto-input" oninput="setPoolFilter('minCash',this.value)">
-    <input type="number" placeholder="Min ROI" style="width:55px;" class="opto-input" oninput="setPoolFilter('minROI',this.value)">
-    <input type="number" placeholder="Max Own" style="width:58px;" class="opto-input" oninput="setPoolFilter('maxOwn',this.value)" title="Max total lineup ownership %">
-    <input type="number" placeholder="Min Lev" style="width:52px;" class="opto-input" oninput="setPoolFilter('minLeverage',this.value)" title="Min leverage (ceil/own)">
-    <input type="number" placeholder="Min Boom" style="width:58px;" class="opto-input" oninput="setPoolFilter('minBoom',this.value)" title="Min boom% (top 5% of sims)">
-    <input type="number" placeholder="Max Bust" style="width:58px;" class="opto-input" oninput="setPoolFilter('maxBust',this.value)" title="Max bust% (bottom 30% of sims)">
-    <input type="number" placeholder="Min Sharpe" style="width:62px;" class="opto-input" oninput="setPoolFilter('minSharpe',this.value)">
+    <input type="number" placeholder="Min Proj" style="width:58px;" class="opto-input" data-pool-filter="minProj">
+    <input type="number" placeholder="Min Ceil" style="width:58px;" class="opto-input" data-pool-filter="minCeil">
+    <input type="number" placeholder="Max Games" style="width:58px;" class="opto-input" data-pool-filter="maxGames">
+    <input type="text" placeholder="Stack" style="width:50px;" class="opto-input" data-pool-filter="stack">
+    <input type="number" placeholder="Min Win%" style="width:58px;" class="opto-input" data-pool-filter="minWin">
+    <input type="number" placeholder="Min Cash%" style="width:62px;" class="opto-input" data-pool-filter="minCash">
+    <input type="number" placeholder="Min ROI" style="width:55px;" class="opto-input" data-pool-filter="minROI">
+    <input type="number" placeholder="Max Own" style="width:58px;" class="opto-input" data-pool-filter="maxOwn" title="Max total lineup ownership %">
+    <input type="number" placeholder="Min Lev" style="width:52px;" class="opto-input" data-pool-filter="minLeverage" title="Min leverage (ceil/own)">
+    <input type="number" placeholder="Min Boom" style="width:58px;" class="opto-input" data-pool-filter="minBoom" title="Min boom% (top 5% of sims)">
+    <input type="number" placeholder="Max Bust" style="width:58px;" class="opto-input" data-pool-filter="maxBust" title="Max bust% (bottom 30% of sims)">
+    <input type="number" placeholder="Min Sharpe" style="width:62px;" class="opto-input" data-pool-filter="minSharpe">
+    <label style="color:var(--muted);font-weight:700;">Min Uniq</label>
+    <input type="number" id="pool-min-uniq" value="0" min="0" max="8" style="width:32px;" class="opto-input" data-pool-filter="minUnique" title="Min unique players between any two lineups in filtered pool">
+    <label style="color:var(--muted);font-weight:700;">Show</label>
+    <input type="number" id="pool-show-n" placeholder="All" min="1" style="width:48px;" class="opto-input" data-pool-filter="_showN" title="Number of lineups to display">
+    <button class="opto-input" onclick="applyPoolFilters()" style="font-weight:700;cursor:pointer;padding:2px 10px;background:var(--hi);color:#fff;border:none;border-radius:4px;">Apply</button>
     <span style="color:var(--border);margin:0 2px;">|</span>
     <label style="color:var(--muted);font-weight:700;">Sort:</label>
     <select class="opto-input" style="width:80px;" onchange="setPoolSort(this.value)">
@@ -4356,12 +4361,6 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <option value="roi">ROI</option>
       <option value="cashPct">Cash%</option>
     </select>
-    <span style="color:var(--border);margin:0 2px;">|</span>
-    <label style="color:var(--muted);font-weight:700;">Min Uniq</label>
-    <input type="number" id="pool-min-uniq" value="0" min="0" max="8" style="width:32px;" class="opto-input" oninput="clearTimeout(window._minUniqTimer);window._minUniqTimer=setTimeout(()=>setPoolFilter('minUnique',this.value),300)" title="Min unique players between any two lineups in filtered pool">
-    <span style="color:var(--border);margin:0 2px;">|</span>
-    <label style="color:var(--muted);font-weight:700;">Show</label>
-    <input type="number" id="pool-show-n" placeholder="All" min="1" style="width:48px;" class="opto-input" oninput="setPoolShowN(this.value)" title="Number of lineups to display">
   </div>
   <!-- Two-column body -->
   <div class="lineups-body">
@@ -8655,6 +8654,29 @@ function setPoolFilter(key, val) {
   else _poolFilter[key] = isNaN(+val) ? val : +val;
   renderPoolCards();
 }
+
+function applyPoolFilters() {
+  document.querySelectorAll('[data-pool-filter]').forEach(el => {
+    const key = el.dataset.poolFilter;
+    const val = el.value;
+    if (key === '_showN') {
+      _poolCardsShown = val ? Math.max(1, +val) : Infinity;
+    } else {
+      if (val === '' || val == null) delete _poolFilter[key];
+      else _poolFilter[key] = isNaN(+val) ? val : +val;
+    }
+  });
+  renderPoolCards();
+  renderPoolExposure();
+}
+
+// Allow Enter key to apply filters from any filter input
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && e.target.matches('[data-pool-filter]')) {
+    e.preventDefault();
+    applyPoolFilters();
+  }
+});
 
 // ── OPPONENT FIELD GENERATOR ─────────────────────────────────────────────────
 
