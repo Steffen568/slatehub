@@ -8097,6 +8097,144 @@ function generatePool() {
   setTimeout(runBatch, 30);
 }
 
+// ── SHOWDOWN POOL GENERATOR ──────────────────────────────────────────────────
+
+function scorePoolLineup_SD(lineupObj) {
+  let proj = 0, ceil = 0, floor = 0, sigma = 0, salary = 0, totalOwn = 0;
+  const pids = new Set();
+  const teamCounts = {};
+  const gamePks = new Set();
+
+  SD_LINEUP_SLOTS.forEach(s => {
+    const p = lineupObj[s.key];
+    if (!p) return;
+    const mult = s.isCpt ? 1.5 : 1.0;
+    const pProj = projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
+    proj   += pProj * mult;
+    ceil   += (p.proj_ceiling ?? pProj) * mult;
+    floor  += (p.proj_floor ?? 0) * mult;
+    sigma  += (p.sim_sd ?? ((p.proj_ceiling ?? 0) - (p.proj_floor ?? 0)) / 3.3) * mult;
+    salary += (p.salary ?? 0) * mult;
+    totalOwn += p.proj_ownership ?? 0;
+    pids.add(p.player_id);
+    if (p.team) teamCounts[p.team] = (teamCounts[p.team]||0)+1;
+    if (p.game_pk) gamePks.add(p.game_pk);
+  });
+
+  const stackEntries = Object.entries(teamCounts).sort((a,b) => b[1]-a[1]);
+  const stack = stackEntries.map(([t,c]) => `${t} ${c}`).join(' / ') || '—';
+  const leverage = totalOwn > 0 ? +(ceil / totalOwn * 100).toFixed(1) : 0;
+
+  return {
+    proj: +proj.toFixed(1), ceil: +ceil.toFixed(1), floor: +floor.toFixed(1),
+    sigma: +sigma.toFixed(1), salary, games: gamePks.size,
+    stack, sub: '—', bringBacks: 0, pids,
+    totalOwn: +totalOwn.toFixed(1), leverage, corrScore: 0, stackLeverage: 0
+  };
+}
+
+function generatePool_SD() {
+  const poolSize = optoSettings.poolSize || 2000;
+
+  // Build eligible pool: all players from the SD game with salary
+  const sdPool = [...allHitters, ...allPitchers].filter(p =>
+    !teamExcludes.has(p.team) && (p.salary||0) > 0
+  ).map(p => {
+    const proj = projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
+    if (proj > 0) return p;
+    // Reliever baseline: scale by salary (higher-paid RPs are closers/setup)
+    const isPit = (p.positions||[]).some(pos => ['SP','RP','P'].includes(pos));
+    if (isPit && proj <= 0) {
+      const baseline = (p.salary || 0) / 5000 * 3.5;
+      return { ...p, proj_dk_pts: +baseline.toFixed(1) };
+    }
+    // Hitters with no projection: salary-based baseline
+    const baseline = 2.0 * ((p.salary||0) / 1000);
+    return { ...p, proj_dk_pts: +baseline.toFixed(1) };
+  });
+
+  const eligPool = sdPool.filter(p => (projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0) > 0);
+  if (eligPool.length < 6) { showToast('Not enough eligible players for SD pool'); return; }
+
+  const simParams = buildSimParams(eligPool);
+  const gameKeys = [...new Set(eligPool.map(p => p.game_pk).filter(Boolean))];
+  const teamKeys = [...new Set(eligPool.map(p => optoTeamKey(p)).filter(Boolean))];
+
+  _poolCandidates = [];
+  const seenKeys = new Set();
+  const cptCount = {};
+  let simIdx = 0;
+  let consecDupes = 0;
+
+  const poolSec = document.getElementById('pool-section');
+  if (poolSec) poolSec.style.display = '';
+  showPoolLoading('Generating SD Pool...');
+
+  function runBatch() {
+    const BATCH = 10;
+    const end = Math.min(simIdx + BATCH, poolSize * 3);
+    for (; simIdx < end; simIdx++) {
+      if (_poolCandidates.length >= poolSize) break;
+
+      // Sample noisy projections
+      const simProj = sampleSimProjections(simParams, gameKeys, teamKeys);
+
+      // Build LP model with sim projections
+      const tempPool = eligPool.map(p => ({
+        ...p,
+        proj_dk_pts: simProj.get(p.player_id) ?? p.proj_dk_pts ?? 0
+      }));
+
+      const model = optoBuildLP_Showdown(tempPool, {}, cptCount, _poolCandidates.length);
+      // Override proj in model with sim values
+      for (const [varKey, varObj] of Object.entries(model.variables)) {
+        const m = varKey.match(/^([cf])(\d+)$/);
+        if (!m) continue;
+        const pid = +m[2];
+        const sp = simProj.get(pid) ?? 0;
+        const mult = m[1] === 'c' ? 1.5 : 1.0;
+        varObj.proj = sp * mult;
+      }
+
+      const result = optoSolve_Showdown(model);
+      if (!result) { consecDupes++; continue; }
+
+      // Dedup
+      const ids = [result.cptPid, ...result.flexPids].sort();
+      const key = ids.join(',');
+      if (seenKeys.has(key)) { consecDupes++; continue; }
+      seenKeys.add(key);
+      consecDupes = 0;
+
+      // Track CPT exposure
+      cptCount[result.cptPid] = (cptCount[result.cptPid] || 0) + 1;
+
+      // Assemble lineup object
+      const lineup = optoAssembleLineup_Showdown(eligPool, result);
+      if (!lineup) continue;
+
+      const metrics = scorePoolLineup_SD(lineup);
+      _poolCandidates.push({ lineup, metrics, dedupKey: key });
+    }
+
+    const dupeThreshold = Math.max(200, Math.floor(poolSize * 0.15));
+    const exhausted = consecDupes >= dupeThreshold;
+
+    if (_poolCandidates.length < poolSize && simIdx < poolSize * 3 && !exhausted) {
+      updatePoolLoading(`${_poolCandidates.length} / ${poolSize}`, `${simIdx} sims`, _poolCandidates.length/poolSize*100);
+      setTimeout(runBatch, 0);
+    } else {
+      _poolCandidates.sort((a,b) => b.metrics.proj - a.metrics.proj);
+      hidePoolLoading();
+      const msg = `SD Pool: ${_poolCandidates.length} unique lineups from ${simIdx} sims`;
+      showToast(msg);
+      renderPoolCards();
+      renderPoolExposure();
+    }
+  }
+  setTimeout(runBatch, 30);
+}
+
 let _poolCardsShown = Infinity;
 let _poolExpTargets = {};
 let _poolExpPosFilter = 'ALL';
@@ -8266,13 +8404,15 @@ function filterByExposure(lineups) {
   const minUniq = +(_poolFilter.minUnique || 0);
   if (!hasTargets && !minUniq) return lineups;
 
-  const hitterSlotKeys = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
+  const slotKeys = _contestMode === 'showdown'
+    ? SD_LINEUP_SLOTS.map(s => s.key)
+    : LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
   const targetN = _poolCardsShown < Infinity ? _poolCardsShown : lineups.length;
 
   // Helper: get team stack counts for a lineup
   function getStacks(c) {
     const tc = {};
-    hitterSlotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
+    slotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
     return tc;
   }
 
@@ -8375,7 +8515,8 @@ function filterByExposure(lineups) {
       const tooSimilar = checkWindow.some(prev => {
         let shared = 0;
         for (const pid of c.metrics.pids) { if (prev.metrics.pids.has(pid)) shared++; }
-        return (10 - shared) < minUniq;
+        const luSize = _contestMode === 'showdown' ? 6 : 10;
+        return (luSize - shared) < minUniq;
       });
       if (tooSimilar) continue;
     }
@@ -8447,40 +8588,62 @@ function renderPoolCards() {
          <span style="font-size:8px;color:var(--muted);">Cash ${ct.cashPct}%</span> ${roiBadge}`
       : '';
 
-    // Build player rows
-    const pitcherSlots = LINEUP_SLOTS.filter(sl => sl.pos === 'SP');
-    const hitterSlots  = LINEUP_SLOTS.filter(sl => sl.pos !== 'SP');
+    // Build player rows — SD uses CPT/FLEX, Classic uses SP/hitter slots
+    let pitRows = '', hitRows = '';
+    if (_contestMode === 'showdown') {
+      const sdRows = SD_LINEUP_SLOTS.map(sl => {
+        const p = lu[sl.key];
+        if (!p) return '';
+        const tc = abbrColor(p.team || '');
+        const label = sl.isCpt ? 'CPT' : 'FLEX';
+        const mult = sl.isCpt ? 1.5 : 1.0;
+        const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
+        const pc = sl.isCpt ? {bg:'#a78bfa',tx:'#fff'} : posColor(p.position || 'OF');
+        return `<div class="lc-slot-hitter sim-row">
+          <span class="lc-slot-pos" style="background:${pc.bg};color:${pc.tx};">${label}</span>
+          <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
+          <span class="lc-slot-name">${last}</span>
+          <span class="lc-slot-bo">${p.batting_order??'—'}</span>
+          <span class="lc-slot-sal">${fmtSal((p.salary||0)*mult)}</span>
+          <span class="lc-slot-proj">${fmtProj((p.proj_dk_pts||0)*mult)}</span>
+        </div>`;
+      }).join('');
+      hitRows = sdRows;
+    } else {
+      const pitcherSlots = LINEUP_SLOTS.filter(sl => sl.pos === 'SP');
+      const hitterSlots  = LINEUP_SLOTS.filter(sl => sl.pos !== 'SP');
 
-    const pitRows = pitcherSlots.map(sl => {
-      const p = lu[sl.key];
-      if (!p) return '';
-      const tc = abbrColor(p.team || '');
-      const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
-      return `<div class="lc-slot-pitcher sim-row">
-        <span class="lc-slot-pos" style="background:${posColor('SP').bg};color:${posColor('SP').tx};">SP</span>
-        <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
-        <span class="lc-slot-name">${last}</span>
-        <span></span>
-        <span class="lc-slot-sal">${fmtSal(p.salary)}</span>
-        <span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span>
-      </div>`;
-    }).join('');
+      pitRows = pitcherSlots.map(sl => {
+        const p = lu[sl.key];
+        if (!p) return '';
+        const tc = abbrColor(p.team || '');
+        const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
+        return `<div class="lc-slot-pitcher sim-row">
+          <span class="lc-slot-pos" style="background:${posColor('SP').bg};color:${posColor('SP').tx};">SP</span>
+          <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
+          <span class="lc-slot-name">${last}</span>
+          <span></span>
+          <span class="lc-slot-sal">${fmtSal(p.salary)}</span>
+          <span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span>
+        </div>`;
+      }).join('');
 
-    const hitRows = hitterSlots.map(sl => {
-      const p = lu[sl.key];
-      if (!p) return '';
-      const tc = abbrColor(p.team || '');
-      const pc = posColor(sl.pos);
-      const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
-      return `<div class="lc-slot-hitter sim-row">
-        <span class="lc-slot-pos" style="background:${pc.bg};color:${pc.tx};">${sl.pos}</span>
-        <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
-        <span class="lc-slot-name">${last}</span>
-        <span class="lc-slot-bo">${p.batting_order??'—'}</span>
-        <span class="lc-slot-sal">${fmtSal(p.salary)}</span>
-        <span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span>
-      </div>`;
-    }).join('');
+      hitRows = hitterSlots.map(sl => {
+        const p = lu[sl.key];
+        if (!p) return '';
+        const tc = abbrColor(p.team || '');
+        const pc = posColor(sl.pos);
+        const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
+        return `<div class="lc-slot-hitter sim-row">
+          <span class="lc-slot-pos" style="background:${pc.bg};color:${pc.tx};">${sl.pos}</span>
+          <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
+          <span class="lc-slot-name">${last}</span>
+          <span class="lc-slot-bo">${p.batting_order??'—'}</span>
+          <span class="lc-slot-sal">${fmtSal(p.salary)}</span>
+          <span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span>
+        </div>`;
+      }).join('');
+    }
 
     // Static GPP badges (always visible)
     const ownClr = m.totalOwn <= 80 ? '#4ade80' : m.totalOwn <= 120 ? '#fbbf24' : '#f87171';
@@ -8512,6 +8675,11 @@ function renderPoolCards() {
 function loadPoolLineup(idx) {
   const c = _poolCandidates[idx];
   if (!c) return;
+  if (_contestMode === 'showdown') {
+    sdLineup = {...c.lineup};
+    buildSlots_SD();
+    return;
+  }
   lineup = {...c.lineup};
   LINEUP_SLOTS.forEach(s => renderSlot(s.key));
   updateTotals();
@@ -8865,7 +9033,12 @@ function simulateContest() {
   const n = pool.length;
 
   // Pre-extract player IDs per lineup for fast scoring
+  const isSD = _contestMode === 'showdown';
   const lineupPids = pool.map(c => {
+    if (isSD) {
+      // SD: CPT is first, FLEX are rest — preserve order for 1.5x multiplier
+      return SD_LINEUP_SLOTS.map(s => c.lineup[s.key]?.player_id).filter(Boolean);
+    }
     return Object.values(c.lineup).filter(p => p?.player_id).map(p => p.player_id);
   });
 
@@ -8927,11 +9100,15 @@ function simulateContest() {
     for (; simIdx < end; simIdx++) {
       const simProj = sampleSimProjections(simParams, gameKeys, teamKeys);
 
-      // Score every lineup
+      // Score every lineup (SD: first pid is CPT at 1.5x)
       const scores = new Float64Array(n);
       for (let i = 0; i < n; i++) {
         let s = 0;
-        for (const pid of lineupPids[i]) s += simProj.get(pid) ?? 0;
+        const pids = lineupPids[i];
+        for (let j = 0; j < pids.length; j++) {
+          const pts = simProj.get(pids[j]) ?? 0;
+          s += (isSD && j === 0) ? pts * 1.5 : pts;
+        }
         scores[i] = s;
         stats[i].totalPts += s;
         stats[i].totalPtsSq += s * s;
@@ -8954,7 +9131,11 @@ function simulateContest() {
         const contestScores = new Float64Array(_contestPool.length);
         for (let ci = 0; ci < _contestPool.length; ci++) {
           let cs = 0;
-          for (const pid of _contestPool[ci]) cs += simProj.get(pid) ?? 0;
+          const cpids = _contestPool[ci];
+          for (let cj = 0; cj < cpids.length; cj++) {
+            const pts = simProj.get(cpids[cj]) ?? 0;
+            cs += (isSD && cj === 0) ? pts * 1.5 : pts;
+          }
           contestScores[ci] = cs;
         }
         // Sort ascending for binary search (count of scores > myScore)
@@ -9239,7 +9420,8 @@ function selectOptimalPortfolio(k) {
         const tooSimilar = selectedPids.some(sp => {
           let shared = 0;
           for (const pid of cPids) { if (sp.has(pid)) shared++; }
-          return (10 - shared) < minUniq; // 10 players total, need at least minUniq different
+          const luSize = _contestMode === 'showdown' ? 6 : 10;
+        return (luSize - shared) < minUniq; // 10 players total, need at least minUniq different
         });
         if (tooSimilar) continue;
       }
@@ -9491,6 +9673,7 @@ function savePoolLineupToBuild(idx) {
 }
 
 function generateLineups() {
+  if (_contestMode === 'showdown' && optoSettings.poolMode) { generatePool_SD(); return; }
   if (_contestMode === 'showdown') { generateLineups_Showdown(); return; }
   if (lateSwapMode) { lateSwapAllLineups(); return; }
   if (optoSettings.poolMode) { generatePool(); return; }
