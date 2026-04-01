@@ -125,6 +125,12 @@ for dg in dg_list:
 classic_dgs = {did: m for did, m in dg_meta.items() if m['contest_type'] == 'classic'}
 if classic_dgs:
     max_games = max(m['game_count'] for m in classic_dgs.values())
+    # Find main slate start time so we can identify turbos (small subsets near main's start)
+    main_et = None
+    for m in classic_dgs.values():
+        if m['game_count'] == max_games and m['game_count'] >= 6:
+            main_et = m.get('et_hour')
+            break
     for did, m in classic_dgs.items():
         gc = m['game_count']
         et = m.get('et_hour')
@@ -136,11 +142,32 @@ if classic_dgs:
             m['slate_label'] = 'late'
         elif et is not None and et < 13:
             m['slate_label'] = 'early'
-        elif gc <= 5:
+        elif gc <= 5 and main_et is not None and abs(et - main_et) <= 2.0:
+            # Small slate starting within 2 hours of main = turbo (subset of main)
             m['slate_label'] = 'turbo'
+        elif et is not None and et < 19.5:
+            m['slate_label'] = 'afternoon'
         else:
             m['slate_label'] = 'afternoon'
-        print(f"  DG {did}: {gc} games, start {et:.1f}h ET → {m['slate_label']}")
+
+    # Deduplicate labels: if two DGs share a label, append start time to distinguish
+    label_counts = {}
+    for m in classic_dgs.values():
+        label_counts[m['slate_label']] = label_counts.get(m['slate_label'], 0) + 1
+    duped_labels = {lbl for lbl, cnt in label_counts.items() if cnt > 1}
+    if duped_labels:
+        for did, m in classic_dgs.items():
+            if m['slate_label'] in duped_labels:
+                et = m.get('et_hour')
+                if et is not None:
+                    # Convert 14.2 → "2:12pm", 15.7 → "3:42pm"
+                    hr = int(et) % 12 or 12
+                    mn = int((et % 1) * 60)
+                    ampm = 'pm' if int(et) >= 12 else 'am'
+                    m['slate_label'] = f"{m['slate_label']}_{hr}:{mn:02d}{ampm}"
+
+    for did, m in classic_dgs.items():
+        print(f"  DG {did}: {m['game_count']} games, start {m.get('et_hour', 0):.1f}h ET → {m['slate_label']}")
 
 # ── STEP 2: Load MLBAM player ID map from Supabase
 print("\nLoading player ID map from Supabase...")
@@ -603,10 +630,10 @@ if all_salary_rows:
     print("Done.")
 
     # Upsert dk_slate_games (game-to-slate mapping)
+    # Purge ALL slate_games for this season so stale DGs from locked slates don't linger
     if all_slate_game_rows:
         print(f"\nUpserting {len(all_slate_game_rows)} slate-game mappings...")
-        for dgid in safe_dg_ids:
-            supabase.table('dk_slate_games').delete().eq('dg_id', dgid).eq('season', season).execute()
+        supabase.table('dk_slate_games').delete().eq('season', season).execute()
         for i in range(0, len(all_slate_game_rows), 500):
             batch = all_slate_game_rows[i:i+500]
             supabase.table('dk_slate_games').upsert(batch, on_conflict='dg_id,competition_id').execute()
