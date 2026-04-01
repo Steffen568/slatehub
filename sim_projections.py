@@ -517,17 +517,12 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
         is_nh.astype(float) * 5.0
     )
 
-    # Spread amplification: proj mean is correct (13.6 actual vs 13.6 proj)
-    # but SD is 2.5x too narrow (3.5 proj vs 8.8 actual, 66 matched starts).
-    # The ERA anchor naturally differentiates aces from back-end starters —
-    # amplify that signal by scaling DK points away from league average.
-    #
-    # Better pitchers (low ERA) get boosted, worse pitchers get penalized.
-    # era_ratio < 1.0 → ace (boost), > 1.0 → bad (penalize)
-    # Multiplier range: ~0.88 for bad arms to ~1.12 for aces
+    # SP calibration: skill-scaled haircut matching compute_projections.py.
+    # Aces (low ERA) get lighter haircut (~5%), back-end starters get heavier (~13%).
+    # At league-avg ERA (3.90): calibration ~ 0.90.
     era_ratio = clip(era_anchor / LEAGUE_AVG_XFIP, 0.65, 1.55)
-    spread_mult = clip(2.0 - era_ratio, 0.78, 1.25)
-    dk_pts = dk_pts * spread_mult
+    sp_calibration = clip(0.87 + 0.03 * era_ratio, 0.87, 0.95)
+    dk_pts = dk_pts * sp_calibration
 
     return dk_pts
 
@@ -922,6 +917,31 @@ def run():
             p75    = float(np.percentile(dk_dist, 75))
             p90    = float(np.percentile(dk_dist, 90))
 
+            # Compute expected component values for transparency
+            PA_PER_IP = 4.3
+            ip_adj = clip(1.0 + (1.0 - opp_qual) * 0.30, 0.90, 1.10)
+            exp_ip = talent['ip_per_gs'] * ip_adj
+            exp_pa = exp_ip * PA_PER_IP
+            exp_ks = exp_pa * talent['k_pct'] * clip(1.0 + (1.0 - opp_qual) * 0.35, 0.85, 1.18)
+            exp_bb = exp_pa * talent['bb_pct'] * clip(1.0 + (opp_qual - 1.0) * 0.20, 0.88, 1.15)
+            era_anchor = talent['xfip'] * 0.50 + talent['siera'] * 0.50
+            park_hr_f = safe(park_row.get('hr_factor'), 100) / 100.0 if park_row else 1.0
+            wx_hr = weather_hr_mult(wx_row)
+            exp_er = era_anchor * exp_ip / 9.0 * opp_qual * park_hr_f * wx_hr
+
+            # Win probability (same as sim_pitcher_game)
+            exp_win = 0.17
+            if odds_row:
+                hml = odds_row.get('home_ml')
+                aml = odds_row.get('away_ml')
+                if hml and aml:
+                    def _tp(ml):
+                        ml = int(ml)
+                        return abs(ml)/(abs(ml)+100) if ml < 0 else 100/(ml+100)
+                    hp, ap = _tp(hml), _tp(aml)
+                    tw = (hp / (hp+ap)) if is_home else (ap / (hp+ap))
+                    exp_win = clip(tw * 0.68 * clip(exp_ip / 5.1, 0.70, 1.30), 0.10, 0.45)
+
             curr = p_stats.get(SEASON) or p_stats.get(SEASON-1) or p_stats.get(SEASON-2)
             full_name = (curr or {}).get('full_name') or '?'
 
@@ -937,6 +957,13 @@ def run():
                 'sim_floor': round2(p10), 'sim_ceiling': round2(p90),
                 'sim_sd': round2(sd), 'sim_p25': round2(p25), 'sim_p75': round2(p75),
                 'sim_count': n_sims,
+                # Pitcher component fields
+                'proj_ip': round2(exp_ip),
+                'proj_ks': round2(exp_ks),
+                'proj_er': round2(exp_er),
+                'proj_h_allowed': round2(exp_pa * max(0.10, 1.0 - talent['k_pct'] - talent['bb_pct']) * talent['babip'] * opp_qual),
+                'proj_bb_allowed': round2(exp_bb),
+                'win_prob': round2(exp_win),
                 # Null out batter-specific fields
                 'proj_pa': None, 'proj_h': None, 'proj_1b': None, 'proj_2b': None,
                 'proj_3b': None, 'proj_hr': None, 'proj_bb': None,

@@ -1240,6 +1240,11 @@ def run():
     if dupes:
         print(f"  Deduped {dupes} duplicate (player_id, game_pk) rows before upsert")
 
+    # Purge stale rows from previous dates before upserting today's data
+    stale = sb.table('player_projections').delete().neq('game_date', target_date).execute()
+    if stale.data:
+        print(f"  Purged {len(stale.data)} stale rows from previous dates")
+
     # Upsert in batches
     BATCH = 500
     uploaded = 0

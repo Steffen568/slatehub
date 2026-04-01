@@ -499,3 +499,7 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### Session 33 — Min exposure filter didn't work
 **What happened:** Min enforcement tried to pull from "skipped" lineups, but when no max caps were set nothing was skipped. All lineups already in result.
 **Rule:** Min exposure needs priority sorting — put lineups matching min targets at front BEFORE the filter loop, not after.
+
+### Auto-fixed DK ID mismatches: Brandon Lowe, Carson Kelly, Christian Vazquez, Cole Young, David Hamilton, Dylan Carlson, Gabriel Arias, Jose Caballero, Jose Fernandez, Jose Ramirez, Julio Rodriguez, Luis Campusano, Miguel Vargas
+**What happened:** Pipeline auto-fixed 13 salary ID mismatch(es) in dk_salaries and added 3 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.

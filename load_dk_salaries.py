@@ -104,23 +104,43 @@ for dg in dg_list:
         continue
 
     if dgid in classic_dg_ids:
-        slate_label = 'main'
+        game_count = dg.get('GameCount', 0)
+        et_hour = None
         if start_est:
             try:
                 dt = datetime.fromisoformat(start_est.replace('Z',''))
                 et_hour = dt.hour + dt.minute / 60
-                if et_hour < 13:     slate_label = 'early'
-                elif et_hour < 17:   slate_label = 'afternoon'
-                elif et_hour < 19.5: slate_label = 'main'
-                else:                slate_label = 'late'
             except Exception:
                 pass
-        dg_meta[dgid] = {'slate_label': slate_label, 'contest_type': 'classic'}
+        dg_meta[dgid] = {'slate_label': 'pending', 'contest_type': 'classic',
+                         'game_count': game_count, 'et_hour': et_hour}
 
     elif dgid in showdown_dg_ids:
         # Team names aren't in DG metadata (Games array is always empty from the lobby API)
         # Slate label will be resolved from draftables in Step 3
         dg_meta[dgid] = {'slate_label': f'sd_{dgid}', 'contest_type': 'showdown', 'game_date': game_date}
+
+# Assign classic slate labels using actual GameCount from the DK API.
+# The DG with the most games is "main". Smaller slates get labeled by time.
+classic_dgs = {did: m for did, m in dg_meta.items() if m['contest_type'] == 'classic'}
+if classic_dgs:
+    max_games = max(m['game_count'] for m in classic_dgs.values())
+    for did, m in classic_dgs.items():
+        gc = m['game_count']
+        et = m.get('et_hour')
+        if gc == max_games and gc >= 6:
+            m['slate_label'] = 'main'
+        elif et is not None and et >= 19.5 and gc <= 2:
+            m['slate_label'] = 'late_night'
+        elif et is not None and et >= 19.5:
+            m['slate_label'] = 'late'
+        elif et is not None and et < 13:
+            m['slate_label'] = 'early'
+        elif gc <= 5:
+            m['slate_label'] = 'turbo'
+        else:
+            m['slate_label'] = 'afternoon'
+        print(f"  DG {did}: {gc} games, start {et:.1f}h ET → {m['slate_label']}")
 
 # ── STEP 2: Load MLBAM player ID map from Supabase
 print("\nLoading player ID map from Supabase...")
@@ -238,6 +258,9 @@ PLAYER_ID_REMAP = {
     664040  : 446184,   # Brandon Lowe (auto-fixed)
     596142  : 566435,   # Gary Sanchez (auto-fixed)
     608348  : 803086,   # Carson Kelly (auto-fixed)
+    543877  : 643582,   # Christian Vazquez (auto-fixed)
+    666185  : 684686,   # Dylan Carlson (auto-fixed)
+    699912  : 800513,   # Jose Fernandez (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids
@@ -379,19 +402,6 @@ for dgid in all_dg_ids:
                     'start_time':     comp.get('startTime', ''),
                     'season':         SEASON,
                 }
-
-        # Refine Classic slate label using game count — time-only classification
-        # can't distinguish a 4-game turbo from a 10-game main at the same start time
-        if not is_showdown and len(seen_comps) > 0:
-            n_games = len(seen_comps)
-            # Find the DG with the MOST games at the same time slot — that's the true "main"
-            # Anything with significantly fewer games is a turbo/sub-slate
-            if slate_label == 'main' and n_games <= 5:
-                slate_label = 'turbo'
-                dg_meta[dgid]['slate_label'] = slate_label
-            elif slate_label == 'late' and n_games <= 2:
-                slate_label = 'late_night'
-                dg_meta[dgid]['slate_label'] = slate_label
 
         # Fetch CSV for this DG to get position info
         # For Showdown: CSV position column is 'CPT' or the real position ('SP','OF', etc.)

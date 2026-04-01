@@ -4358,7 +4358,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     </select>
     <span style="color:var(--border);margin:0 2px;">|</span>
     <label style="color:var(--muted);font-weight:700;">Min Uniq</label>
-    <input type="number" id="pool-min-uniq" value="0" min="0" max="8" style="width:32px;" class="opto-input" oninput="setPoolFilter('minUnique',this.value)" title="Min unique players between any two lineups in filtered pool">
+    <input type="number" id="pool-min-uniq" value="0" min="0" max="8" style="width:32px;" class="opto-input" oninput="clearTimeout(window._minUniqTimer);window._minUniqTimer=setTimeout(()=>setPoolFilter('minUnique',this.value),300)" title="Min unique players between any two lineups in filtered pool">
     <span style="color:var(--border);margin:0 2px;">|</span>
     <label style="color:var(--muted);font-weight:700;">Show</label>
     <input type="number" id="pool-show-n" placeholder="All" min="1" style="width:48px;" class="opto-input" oninput="setPoolShowN(this.value)" title="Number of lineups to display">
@@ -8333,9 +8333,12 @@ function filterByExposure(lineups) {
   const result = [];
   const playerCount = {};
   const stackCount = {};
+  const scanLimit = targetN * 20; // bail out if we scan 20x more than needed
+  let scanned = 0;
 
   for (const c of ordered) {
     if (result.length >= targetN) break; // stop once we have enough
+    if (++scanned > scanLimit) break;    // bail out to prevent freezing
     let skip = false;
 
     // Check player max targets
@@ -8650,7 +8653,6 @@ function renderPoolExposure() {
 function setPoolFilter(key, val) {
   if (val === '' || val == null) delete _poolFilter[key];
   else _poolFilter[key] = isNaN(+val) ? val : +val;
-  _poolCardsShown = Infinity;
   renderPoolCards();
 }
 
