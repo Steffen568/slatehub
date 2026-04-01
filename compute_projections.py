@@ -110,10 +110,19 @@ def compute_true_talent(stats_by_season: dict, current_season: int) -> dict:
         (current_season - 2, 3),
     ]
 
+    # Staleness: if most recent data is old, regress harder toward league average
+    most_recent_yr = max((yr for yr, _ in seasons_weights if stats_by_season.get(yr)), default=None)
+    staleness_extra = 0
+    if most_recent_yr and most_recent_yr <= current_season - 2:
+        staleness_extra = 80  # ~80 PA of league-avg regression for 2+ year old data
+    elif most_recent_yr and most_recent_yr <= current_season - 1 and not use_current:
+        staleness_extra = 40
+
     def marcel_stat(col, league_avg, regression_pa=200):
         """PA-weighted Marcel average with regression to league mean."""
-        num = regression_pa * league_avg
-        den = float(regression_pa)
+        effective_regression = regression_pa + staleness_extra
+        num = effective_regression * league_avg
+        den = float(effective_regression)
         for yr, wt in seasons_weights:
             if wt == 0:
                 continue
@@ -126,7 +135,7 @@ def compute_true_talent(stats_by_season: dict, current_season: int) -> dict:
                 continue
             num += val * pa * wt
             den += pa * wt
-        return (num / den) if den > regression_pa else league_avg
+        return (num / den) if den > effective_regression else league_avg
 
     base_woba = marcel_stat('woba', LEAGUE_AVG_WOBA)
 
@@ -436,9 +445,20 @@ def compute_pitcher_true_talent(stats_by_season: dict, current_season: int) -> d
         (current_season - 2, 3),
     ]
 
+    # Staleness check: if most recent data is 2+ years old (e.g. TJ recovery),
+    # increase regression toward league average — old elite stats shouldn't
+    # drive projections as hard without recent confirmation.
+    most_recent_yr = max((yr for yr, _ in seasons_weights if stats_by_season.get(yr)), default=None)
+    staleness_extra_regression = 0
+    if most_recent_yr and most_recent_yr <= current_season - 2:
+        staleness_extra_regression = 60  # adds ~60 IP of league-avg regression
+    elif most_recent_yr and most_recent_yr <= current_season - 1 and not use_current:
+        staleness_extra_regression = 30  # mild extra regression for 1-year-old data with no current season
+
     def ip_weighted(col, league_avg, regression_ip=80):
-        num = regression_ip * league_avg
-        den = float(regression_ip)
+        effective_regression = regression_ip + staleness_extra_regression
+        num = effective_regression * league_avg
+        den = float(effective_regression)
         for yr, wt in seasons_weights:
             if wt == 0:
                 continue
@@ -451,7 +471,7 @@ def compute_pitcher_true_talent(stats_by_season: dict, current_season: int) -> d
                 continue
             num += val * ip * wt
             den += ip * wt
-        return num / den if den > regression_ip else league_avg
+        return num / den if den > effective_regression else league_avg
 
     # ── ERA anchor: SIERA + xFIP blend ────────────────────────────────────────
     xfip_val  = clip(ip_weighted('xfip',  LEAGUE_AVG_XFIP), 2.50, 6.00)
@@ -568,15 +588,15 @@ def project_pitcher_dk_pts(talent: dict, opp_quality: float,
     )
 
     # Skill-scaled calibration: aces (low ERA) get lighter haircut (~5%),
-    # back-end starters (high ERA) get heavier haircut (~15%).
-    # Research: pitcher MAE=8.28 (target 7.0), bias only -0.56. Tighten range.
+    # back-end starters (high ERA) get heavier haircut (~13%).
+    # At league-avg ERA (3.90): calibration ~ 0.90.
     era_ratio = clip(talent['era_anchor'] / LEAGUE_AVG_XFIP, 0.65, 1.55)
-    SP_CALIBRATION = clip(0.85 + 0.04 * era_ratio, 0.85, 0.95)
+    SP_CALIBRATION = clip(0.87 + 0.03 * era_ratio, 0.87, 0.95)
     dk_pts = dk_pts * SP_CALIBRATION
 
     return {
         'proj_dk_pts'   : round2(dk_pts),
-        'proj_floor'    : round2(dk_pts * 0.50),
+        'proj_floor'    : round2(dk_pts * 0.45),
         'proj_ceiling'  : round2(dk_pts * 1.60),
         'proj_ip'       : round2(base_ip),
         'proj_ks'       : round2(proj_ks),
