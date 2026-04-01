@@ -143,6 +143,7 @@ def analyze_projections(dates):
         corr = num / (dx * dy) if dx > 0 and dy > 0 else 0
         direction = "boosts help" if corr > 0.05 else "boosts hurt" if corr < -0.05 else "neutral"
         print(f"    {mult_name:16s}: r={corr:+.3f}  ({direction})")
+        findings.setdefault('tier_correlations', {})[mult_name] = corr
 
     # Top misses
     sorted_by_error = sorted(matched, key=lambda m: m['actual'] - safe(m['proj_dk_pts']), reverse=True)
@@ -187,11 +188,16 @@ def analyze_ownership(dates):
         .select('player_id,game_date,dk_slate,ownership_pct,salary,position')
         .in_('game_date', dates))
 
-    # Join on (player_id, game_date, dk_slate)
-    actual_map = {(r['player_id'], r['game_date'], r.get('dk_slate', 'main')): r for r in actual_own}
+    # Join on (player_id, game_date) — actual_ownership often has dk_slate='unknown'
+    actual_map = {}
+    for r in actual_own:
+        actual_map[(r['player_id'], r['game_date'])] = r
     matched = []
+    seen = set()
     for p in proj_own:
-        key = (p['player_id'], p['game_date'], p.get('dk_slate', 'main'))
+        key = (p['player_id'], p['game_date'])
+        if key in seen: continue
+        seen.add(key)
         a = actual_map.get(key)
         if a and p.get('proj_ownership') is not None and a.get('ownership_pct') is not None:
             matched.append({
@@ -464,7 +470,37 @@ def analyze_sim_accuracy(dates):
     for c in conclusions:
         print(f"    >> {c}")
 
-    return {'pool_mae': pool_mae, 'pool_bias': pool_bias}
+    # Salary analysis
+    sal_map_local = {}
+    sal_rows = paginate(sb.table('dk_salaries').select('player_id,salary').eq('contest_type', 'classic'))
+    for s in sal_rows:
+        sal_map_local[s['player_id']] = s.get('salary', 0)
+
+    print(f"\n  Salary Allocation in Top vs Bottom Lineups:")
+    for label, subset in [('Top 10%', scored[:len(scored)//10]), ('Bottom 10%', scored[-(len(scored)//10):])]:
+        total_sals = []
+        sp_sals = []
+        for s in subset:
+            pids = [row['player_ids'] for row in pool_rows if abs(row.get('proj', 0) - s['proj']) < 0.01]
+            if pids:
+                lineup_pids = pids[0]
+                total_sal = sum(sal_map_local.get(pid, 0) for pid in lineup_pids)
+                total_sals.append(total_sal)
+        if total_sals:
+            print(f"    {label}: avg salary ${sum(total_sals)/len(total_sals):,.0f}")
+
+    # Ceiling/floor analysis
+    print(f"\n  Actual Score Distribution of Pool:")
+    actual_pts = sorted([s['actual'] for s in scored], reverse=True)
+    pcts = [1, 5, 10, 25, 50, 75, 90]
+    for p in pcts:
+        idx = min(int(len(actual_pts) * p / 100), len(actual_pts) - 1)
+        print(f"    P{p:2d}: {actual_pts[idx]:.1f} pts")
+
+    return {'pool_mae': pool_mae, 'pool_bias': pool_bias,
+            'best_config': max(config_perf, key=lambda k: sum(config_perf[k])/len(config_perf[k])) if config_perf else None,
+            'top_decile_avg': top_avg if top_proj else None,
+            'bot_decile_avg': bot_avg if bot_proj else None}
 
 
 # ── Section E: Actionable Recommendations ───────────────────────────────────
@@ -493,17 +529,44 @@ def generate_recommendations(proj_findings, own_findings, sim_findings, contest_
         recs.append(f"OWNERSHIP: {direction} baseline ownership estimates — bias is {own_bias:+.1f}%")
 
     # Sim pool recommendations
-    pool_bias = sim_findings.get('pool_bias', 0)
-    if abs(pool_bias) > 5:
-        recs.append(f"POOL: lineup projections off by {pool_bias:+.1f} pts — check correlation noise parameters")
+    best_config = sim_findings.get('best_config')
+    if best_config:
+        recs.append(f"POOL: Best performing stack config is {best_config} — increase its weight in STACK_CONFIGS")
+    top_dec = sim_findings.get('top_decile_avg')
+    bot_dec = sim_findings.get('bot_decile_avg')
+    if top_dec and bot_dec:
+        spread = top_dec - bot_dec
+        if spread > 5:
+            recs.append(f"POOL: Projections have {spread:.1f} pt spread — use projection rank as primary sort for portfolio selection")
+        else:
+            recs.append(f"POOL: Projection spread only {spread:.1f} pts — diversify selection, don't over-rely on projection ranking")
 
     # Contest recommendations
     if contest_findings.get('top1_threshold'):
-        recs.append(f"CONTEST: Top 1% threshold was {contest_findings['top1_threshold']:.1f} pts — ensure pool ceiling reaches this")
+        recs.append(f"CONTEST: Avg Top 1% threshold is {contest_findings['top1_threshold']:.1f} pts across {contest_findings.get('n_contests', 1)} contests")
+    if contest_findings.get('cash_line'):
+        recs.append(f"CONTEST: Avg cash line is {contest_findings['cash_line']:.1f} pts — pool floor should exceed this")
+    if contest_findings.get('winner_pts'):
+        recs.append(f"CONTEST: Avg winner scores {contest_findings['winner_pts']:.1f} pts — need high-ceiling correlated stacks")
 
-    # General recommendations
-    recs.append("FILTER: After more data, backtest optimal boom%/cash%/ROI thresholds by checking which sim metrics predict actual finish position")
-    recs.append("TRACKING: Run this analysis daily to build sample size — single-day conclusions are noisy")
+    # Ownership recommendations
+    own_bias = own_findings.get('own_bias', 0)
+    own_mae = own_findings.get('own_mae', 0)
+    if abs(own_bias) > 2:
+        direction = "increase" if own_bias > 0 else "decrease"
+        recs.append(f"OWNERSHIP: {direction} baseline estimates — bias is {own_bias:+.1f}%")
+    if own_mae > 5:
+        recs.append(f"OWNERSHIP: MAE is {own_mae:.1f}% — needs significant model improvement")
+    elif own_mae > 0:
+        recs.append(f"OWNERSHIP: MAE is {own_mae:.1f}% ({'good' if own_mae < 3 else 'needs work'})")
+
+    # Tier-specific recommendations from projection analysis
+    tier_data = proj_findings.get('tier_correlations', {})
+    for mult, corr in tier_data.items():
+        if corr < -0.10:
+            recs.append(f"PROJECTION: {mult} is hurting accuracy (r={corr:+.3f}) — reduce its weight or cap its range")
+
+    recs.append("TRACKING: Run this analysis daily to build sample size — patterns stabilize after 2+ weeks")
 
     for i, r in enumerate(recs, 1):
         print(f"  {i}. {r}")
@@ -586,13 +649,25 @@ def run():
     if csv_path:
         contest_findings = analyze_contest_csv(csv_path, target_dates[0])
     else:
-        # Auto-discover CSVs in Contest_CSVs directory
-        csvs = glob.glob(os.path.join(CONTEST_CSV_DIR, 'contest-standings-*.csv'))
+        # Auto-discover and analyze ALL CSVs in Contest_CSVs directory
+        csvs = sorted(glob.glob(os.path.join(CONTEST_CSV_DIR, 'contest-standings-*.csv')))
         if csvs:
             print(f"\n  Found {len(csvs)} contest CSVs in {CONTEST_CSV_DIR}")
-            # Use the most recent one
-            latest = max(csvs, key=os.path.getmtime)
-            contest_findings = analyze_contest_csv(latest, target_dates[0])
+            all_contest = []
+            for c in csvs:
+                cf = analyze_contest_csv(c, target_dates[0])
+                if cf: all_contest.append(cf)
+            if all_contest:
+                contest_findings = {
+                    'winner_pts': sum(c.get('winner_pts', 0) for c in all_contest) / len(all_contest),
+                    'top1_threshold': sum(c.get('top1_threshold', 0) for c in all_contest) / len(all_contest),
+                    'cash_line': sum(c.get('cash_line', 0) for c in all_contest) / len(all_contest),
+                    'n_contests': len(all_contest),
+                }
+                print(f"\n  AGGREGATE ({len(all_contest)} contests):")
+                print(f"    Avg Winner: {contest_findings['winner_pts']:.1f} pts")
+                print(f"    Avg Top 1%: {contest_findings['top1_threshold']:.1f} pts")
+                print(f"    Avg Cash:   {contest_findings['cash_line']:.1f} pts")
 
     recs = generate_recommendations(proj_findings, own_findings, sim_findings, contest_findings)
     write_findings(target_dates, proj_findings, own_findings, sim_findings, contest_findings, recs)

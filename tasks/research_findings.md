@@ -69,3 +69,20 @@
 - Run research daily after --postgame to build sample size
 - After 2 weeks of data, backtest specific filter thresholds
 - Consider reducing STACK_CONFIGS to remove 4-4, increase 5-naked and 4-3 weight
+
+## Research Findings — 2026-03-27, 2026-03-28, 2026-03-29, 2026-03-30
+
+**Projection**: MAE=5.40, Bias=-0.14, Hitter MAE=5.09, Pitcher MAE=8.28
+**Ownership**: MAE=5.53%, Bias=-1.56%
+**Pool**: MAE=46.61, Bias=+45.80
+**Contest**: Winner=176.59375, Top1%=147.4
+
+**Recommendations:**
+- POOL: Best performing stack config is 5-0 — increase its weight in STACK_CONFIGS
+- POOL: Projections have 6.3 pt spread — use projection rank as primary sort for portfolio selection
+- CONTEST: Avg Top 1% threshold is 147.4 pts across 8 contests
+- CONTEST: Avg cash line is 111.2 pts — pool floor should exceed this
+- CONTEST: Avg winner scores 176.6 pts — need high-ceiling correlated stacks
+- OWNERSHIP: MAE is 5.5% — needs significant model improvement
+- PROJECTION: park_mult is hurting accuracy (r=-0.170) — reduce its weight or cap its range
+- TRACKING: Run this analysis daily to build sample size — patterns stabilize after 2+ weeks
