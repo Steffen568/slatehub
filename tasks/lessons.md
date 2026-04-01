@@ -475,3 +475,27 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### Sim pool: 4 bugs — blank cards, 6/7-man stacks, limited pitchers/teams
 **What happened:** (1) loadPoolFromDB had `|| sl.pos === 'OF'` that matched any hitter to OF slots, causing position mis-assignment. (2) Stack counting looped `for s=2..cnt`, recording every sub-size (a 5-man stack also counted as 2/3/4-man). (3) Sub-team candidates were hard-capped at `.slice(0,8)` in two places. (4) Diversity nudge was too weak (>25% threshold, -15% penalty).
 **Rule:** Stack exposure must only count the actual size. Sub-team candidates must not be capped. Position assignment must use constraint ordering (most restricted first).
+
+### Session 33 — Sim pool position export failures
+**What happened:** generate_pool.py returned player_ids in random greedy-fill order. loadPoolFromDB tried to reconstruct positions but got it wrong (Pass 2 had no constraints). DK rejected lineups with players in wrong slots.
+**Rule:** player_ids MUST be stored in DK slot order [SP,SP,C,1B,2B,3B,SS,OF,OF,OF]. Frontend assigns by index — zero guessing.
+
+### Session 33 — Team abbreviation mismatch broke 5-hitter cap
+**What happened:** player_projections.team had mixed formats ("ATL" and "Atlanta Braves"). The hitter cap counted them as separate teams, allowing 6+ from one team.
+**Rule:** Always use dk_salaries.team (consistent DK abbreviations). Never use player_projections.team as primary.
+
+### Session 33 — Salary player_id mismatch
+**What happened:** 18 players had different IDs in player_projections vs dk_salaries. Pool stored projection IDs but frontend fetched from dk_salaries — lookups failed, showing null team/salary.
+**Rule:** Always use dk_salaries.player_id in sim_pool. The frontend fetches from dk_salaries.
+
+### Session 33 — Staleness regression for returning injured players
+**What happened:** Woodruff had only 2023 stats (TJ surgery). His elite K% drove inflated projections with no recent data to temper them.
+**Rule:** When most recent stats are 2+ years old, add extra regression toward league average. Don't penalize by rotation position — penalize by data freshness.
+
+### Session 33 — O(n*m) contest sim bottleneck
+**What happened:** Contest sim compared every user lineup against every contest pool lineup per sim iteration. With 15K × 25K × 5000 sims = frozen browser.
+**Rule:** Sort contest scores once, binary search for each lineup. O(n*log(m)) not O(n*m).
+
+### Session 33 — Min exposure filter didn't work
+**What happened:** Min enforcement tried to pull from "skipped" lineups, but when no max caps were set nothing was skipped. All lineups already in result.
+**Rule:** Min exposure needs priority sorting — put lineups matching min targets at front BEFORE the filter loop, not after.
