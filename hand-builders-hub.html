@@ -8262,20 +8262,80 @@ function filterPoolCandidates() {
 }
 
 function filterByExposure(lineups) {
-  // Active exposure filtering: enforce max targets + min unique in sort order.
-  // Best lineups (by current sort) get priority. Lineups violating max caps get skipped.
+  // Active exposure filtering: enforce min/max targets + min unique in sort order.
   const hasTargets = Object.keys(_poolExpTargets).length > 0;
   const minUniq = +(_poolFilter.minUnique || 0);
   if (!hasTargets && !minUniq) return lineups;
 
+  const hitterSlotKeys = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
+  const targetN = _poolCardsShown < Infinity ? _poolCardsShown : lineups.length;
+
+  // Helper: get team stack counts for a lineup
+  function getStacks(c) {
+    const tc = {};
+    hitterSlotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
+    return tc;
+  }
+
+  // Collect min targets to know which lineups are "needed"
+  const minTargets = {};
+  if (hasTargets) {
+    for (const [key, tgt] of Object.entries(_poolExpTargets)) {
+      if (tgt.min != null && tgt.min > 0) {
+        minTargets[key] = Math.max(1, Math.ceil(targetN * tgt.min / 100));
+      }
+    }
+  }
+  const hasMinTargets = Object.keys(minTargets).length > 0;
+
+  // Phase 1: If min targets exist, prioritize lineups that satisfy them
+  // Sort: lineups matching unfilled min targets go first, then original order
+  let ordered = lineups;
+  if (hasMinTargets) {
+    const minNeeded = {...minTargets}; // copy — track remaining needs
+    const priority = [];
+    const rest = [];
+    for (const c of lineups) {
+      let satisfiesMin = false;
+      const tc = getStacks(c);
+      for (const [key, needed] of Object.entries(minNeeded)) {
+        if (needed <= 0) continue;
+        const isStack = key.includes('_');
+        if (isStack) {
+          const [sTeam, sSize] = [key.split('_')[0], +key.split('_')[1]];
+          if (Math.min(tc[sTeam] || 0, 5) >= sSize) { satisfiesMin = true; break; }
+        } else {
+          if (c.metrics.pids.has(+key)) { satisfiesMin = true; break; }
+        }
+      }
+      if (satisfiesMin) {
+        priority.push(c);
+        // Decrement needs
+        const tc2 = getStacks(c);
+        for (const [key, needed] of Object.entries(minNeeded)) {
+          if (needed <= 0) continue;
+          const isStack = key.includes('_');
+          if (isStack) {
+            const [sTeam, sSize] = [key.split('_')[0], +key.split('_')[1]];
+            if (Math.min(tc2[sTeam] || 0, 5) >= sSize) minNeeded[key]--;
+          } else {
+            if (c.metrics.pids.has(+key)) minNeeded[key]--;
+          }
+        }
+      } else {
+        rest.push(c);
+      }
+    }
+    ordered = [...priority, ...rest];
+  }
+
+  // Phase 2: Main filter loop with max caps + minUniq
   const result = [];
   const playerCount = {};
   const stackCount = {};
-  const hitterSlotKeys = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
-  // Use the target output size for cap calculations, not input pool size
-  const targetN = _poolCardsShown < Infinity ? _poolCardsShown : lineups.length;
 
-  for (const c of lineups) {
+  for (const c of ordered) {
+    if (result.length >= targetN) break; // stop once we have enough
     let skip = false;
 
     // Check player max targets
@@ -8290,10 +8350,9 @@ function filterByExposure(lineups) {
     }
     if (skip) continue;
 
-    // Check stack max targets (check actual stack size only, not sub-sizes)
+    // Check stack max targets
     if (hasTargets) {
-      const tc = {};
-      hitterSlotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
+      const tc = getStacks(c);
       for (const [team, cnt] of Object.entries(tc)) {
         if (skip) break;
         if (cnt >= 2) {
@@ -8308,9 +8367,10 @@ function filterByExposure(lineups) {
     }
     if (skip) continue;
 
-    // Min unique: must differ from every existing result by at least minUniq players
+    // Min unique: compare against last 100 results only (O(n) not O(n²))
     if (minUniq > 0 && result.length > 0) {
-      const tooSimilar = result.some(prev => {
+      const checkWindow = result.slice(-100);
+      const tooSimilar = checkWindow.some(prev => {
         let shared = 0;
         for (const pid of c.metrics.pids) { if (prev.metrics.pids.has(pid)) shared++; }
         return (10 - shared) < minUniq;
@@ -8318,62 +8378,14 @@ function filterByExposure(lineups) {
       if (tooSimilar) continue;
     }
 
-    // Accept this lineup
+    // Accept
     result.push(c);
     for (const pid of c.metrics.pids) playerCount[pid] = (playerCount[pid] || 0) + 1;
-    const tc = {};
-    hitterSlotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
+    const tc = getStacks(c);
     for (const [team, cnt] of Object.entries(tc)) {
       if (cnt >= 2) {
         const capped = Math.min(cnt, 5);
         stackCount[`${team}_${capped}`] = (stackCount[`${team}_${capped}`] || 0) + 1;
-      }
-    }
-  }
-
-  // Enforce min targets: if any player or stack is below minimum, pull in extra lineups
-  if (hasTargets) {
-    const skipped = lineups.filter(c => !result.includes(c));
-    for (const [key, tgt] of Object.entries(_poolExpTargets)) {
-      if (tgt.min == null) continue;
-      const minCount = Math.max(1, Math.ceil(targetN * tgt.min / 100));
-      const isStack = key.includes('_');
-
-      if (isStack) {
-        const current = stackCount[key] || 0;
-        if (current >= minCount) continue;
-        // Find skipped lineups that contain this stack
-        const [sTeam, sSize] = [key.split('_')[0], +key.split('_')[1]];
-        for (const c of skipped) {
-          if ((stackCount[key] || 0) >= minCount) break;
-          const tc2 = {};
-          hitterSlotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc2[p.team] = (tc2[p.team]||0)+1; });
-          const teamCnt = Math.min(tc2[sTeam] || 0, 5);
-          if (teamCnt >= sSize) {
-            result.push(c);
-            for (const pid of c.metrics.pids) playerCount[pid] = (playerCount[pid] || 0) + 1;
-            Object.entries(tc2).forEach(([t, cnt]) => {
-              if (cnt >= 2) stackCount[`${t}_${Math.min(cnt,5)}`] = (stackCount[`${t}_${Math.min(cnt,5)}`] || 0) + 1;
-            });
-          }
-        }
-      } else {
-        // Player min
-        const pid = +key;
-        const current = playerCount[pid] || 0;
-        if (current >= minCount) continue;
-        for (const c of skipped) {
-          if ((playerCount[pid] || 0) >= minCount) break;
-          if (c.metrics.pids.has(pid)) {
-            result.push(c);
-            for (const p of c.metrics.pids) playerCount[p] = (playerCount[p] || 0) + 1;
-            const tc2 = {};
-            hitterSlotKeys.forEach(k => { const p = c.lineup[k]; if (p?.team) tc2[p.team] = (tc2[p.team]||0)+1; });
-            Object.entries(tc2).forEach(([t, cnt]) => {
-              if (cnt >= 2) stackCount[`${t}_${Math.min(cnt,5)}`] = (stackCount[`${t}_${Math.min(cnt,5)}`] || 0) + 1;
-            });
-          }
-        }
       }
     }
   }
