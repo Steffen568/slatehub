@@ -7450,8 +7450,8 @@ async function loadBullpen(teamId, gameDate) {
     return;
   }
 
-  // Fetch pitcher stats and DK salaries in parallel
-  const [{ data: stats }, { data: bpSalaries }] = await Promise.all([
+  // Fetch pitcher stats, DK salaries, and throwing hand in parallel
+  const [{ data: stats }, { data: bpSalaries }, { data: rosterHands }] = await Promise.all([
     activePitcherYear === '3yr'
       ? sb.from('pitcher_stats')
           .select('player_id,full_name,era,fip,whip,k_pct,bb_pct,swstr_pct,csw_pct,hard_hit_pct,barrel_pct,babip,stuff_plus,ip,g,gs,hr9,sample_size,season')
@@ -7463,8 +7463,14 @@ async function loadBullpen(teamId, gameDate) {
           .eq('season', parseInt(activePitcherYear)),
     sb.from('dk_salaries')
       .select('player_id, salary, dk_slate')
+      .in('player_id', filteredIds),
+    sb.from('rosters')
+      .select('player_id, throws')
       .in('player_id', filteredIds)
   ]);
+
+  const throwsMap = {};
+  (rosterHands || []).forEach(r => { if (r.throws) throwsMap[r.player_id] = r.throws; });
 
   const statsMap = {};
   if (activePitcherYear === '3yr') {
@@ -7735,6 +7741,7 @@ async function loadBullpen(teamId, gameDate) {
           <div class="bp-name-wrap">
             <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">
               <span class="bp-role ${role}">${role}</span>
+              <span style="font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;background:rgba(255,255,255,.06);color:${(throwsMap[rel.player_id]||'?')==='L'?'#60a5fa':'var(--text2)'};">${throwsMap[rel.player_id]||'?'}HP</span>
               <span class="bp-name">${rel.player_name}</span>${sampleBadge}${bpSalaryMap[rel.player_id]?.salary ? `<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;background:rgba(96,165,250,.12);color:#60a5fa;border:1px solid rgba(96,165,250,.25);margin-left:6px;vertical-align:middle;display:inline-block;">$${bpSalaryMap[rel.player_id].salary.toLocaleString()}</span>` : ''}
             </div>
             <div class="bp-meta">${recentPitches >= 25 ? `<span style="color:${avail};font-weight:700;">${availTxt}</span> &nbsp;&middot;&nbsp; ` : ''}Last: ${lastStr} &nbsp;&middot;&nbsp; <span style="color:${recentPitches >= 50 ? 'var(--lo)' : recentPitches >= 25 ? 'var(--mid)' : 'var(--text2)'}">${recentPitches}p last 3d</span></div>
