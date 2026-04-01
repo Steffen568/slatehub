@@ -214,11 +214,12 @@ def build_player_pool(data):
 # ── Greedy Lineup Builder ────────────────────────────────────────────────────
 
 STACK_CONFIGS = [
-    {'name': '5-3',       'main': 5, 'subs': [3]},
+    {'name': '5-3',       'main': 5, 'subs': [3]},    # best correlated config
+    {'name': '5-3',       'main': 5, 'subs': [3]},    # double-weighted (top performer)
     {'name': '5-2',       'main': 5, 'subs': [2]},
     {'name': '5-naked',   'main': 5, 'subs': []},
     {'name': '4-3',       'main': 4, 'subs': [3]},
-    {'name': '4-4',       'main': 4, 'subs': [4]},
+    {'name': '4-3',       'main': 4, 'subs': [3]},    # double-weighted (2nd best)
     {'name': '4-2-2',     'main': 4, 'subs': [2, 2]},
 ]
 

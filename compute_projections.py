@@ -59,10 +59,11 @@ MIN_PA_BATTER  = 75   # ~3 weeks of games for a regular starter
 MIN_IP_PITCHER = 25   # ~4-5 starts for a SP
 
 # Run and RBI opportunity multipliers by batting order position
-LINEUP_R_MULT   = {1: 1.25, 2: 1.20, 3: 1.10, 4: 1.00, 5: 0.95,
-                   6: 0.90, 7: 0.85, 8: 0.80, 9: 0.75}
-LINEUP_RBI_MULT = {1: 0.75, 2: 0.85, 3: 1.15, 4: 1.25, 5: 1.20,
-                   6: 1.05, 7: 0.95, 8: 0.90, 9: 0.80}
+# (Research: BO 1-3 had highest MAE — flattened top-of-order boost)
+LINEUP_R_MULT   = {1: 1.18, 2: 1.15, 3: 1.08, 4: 1.00, 5: 0.95,
+                   6: 0.90, 7: 0.87, 8: 0.82, 9: 0.78}
+LINEUP_RBI_MULT = {1: 0.78, 2: 0.88, 3: 1.12, 4: 1.22, 5: 1.18,
+                   6: 1.05, 7: 0.95, 8: 0.90, 9: 0.82}
 
 # Wind directions that blow "out" at the majority of MLB parks
 # (most parks face northeast, so wind from S/SW pushes ball to outfield)
@@ -567,15 +568,15 @@ def project_pitcher_dk_pts(talent: dict, opp_quality: float,
     )
 
     # Skill-scaled calibration: aces (low ERA) get lighter haircut (~5%),
-    # back-end starters (high ERA) get heavier haircut (~13%).
-    # At league-avg ERA (3.90): calibration ≈ 0.90 (same as before on average).
+    # back-end starters (high ERA) get heavier haircut (~15%).
+    # Research: pitcher MAE=8.28 (target 7.0), bias only -0.56. Tighten range.
     era_ratio = clip(talent['era_anchor'] / LEAGUE_AVG_XFIP, 0.65, 1.55)
-    SP_CALIBRATION = clip(0.87 + 0.03 * era_ratio, 0.87, 0.95)
+    SP_CALIBRATION = clip(0.85 + 0.04 * era_ratio, 0.85, 0.95)
     dk_pts = dk_pts * SP_CALIBRATION
 
     return {
         'proj_dk_pts'   : round2(dk_pts),
-        'proj_floor'    : round2(dk_pts * 0.45),
+        'proj_floor'    : round2(dk_pts * 0.50),
         'proj_ceiling'  : round2(dk_pts * 1.60),
         'proj_ip'       : round2(base_ip),
         'proj_ks'       : round2(proj_ks),
@@ -667,10 +668,10 @@ def compute_weather_mult(weather_row: dict) -> float:
 def compute_context_mult(vegas_mult, park_mult, weather_mult) -> float:
     """
     Weighted average (not multiplicative) to avoid double-counting.
-    Weights: Vegas 58%, Park 26%, Weather 16%
-    (Umpire 5% redistributed since it's skipped for v1)
+    Weights: Vegas 62%, Park 18%, Weather 20%
+    (Park reduced from 26% — research showed r=-0.170, hurting accuracy)
     """
-    combined = (vegas_mult * 0.58) + (park_mult * 0.26) + (weather_mult * 0.16)
+    combined = (vegas_mult * 0.62) + (park_mult * 0.18) + (weather_mult * 0.20)
     return clip(combined, 0.70, 1.50)
 
 
