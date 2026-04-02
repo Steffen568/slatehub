@@ -816,6 +816,14 @@ def run():
         # Platoon adjustment
         split_row = data['batter_splits'].get(stats_pid, {}).get(opp_sp_hand)
         talent = platoon_adjust(talent, split_row)
+        # Track platoon multiplier for diagnostics (wRC+ ratio, regressed)
+        if split_row and safe(split_row.get('wrc_plus')):
+            _pa = safe(split_row.get('pa'), 0)
+            _rf = clip(_pa / 300.0, 0.0, 1.0)
+            _rwrc = safe(split_row['wrc_plus']) * _rf + 100.0 * (1 - _rf)
+            talent['_platoon_adj'] = clip(_rwrc / 100.0, 0.70, 1.40)
+        else:
+            talent['_platoon_adj'] = 1.0
 
         # Pitcher matchup
         pitcher = None
@@ -849,6 +857,27 @@ def run():
         full_name = (curr_stats.get('full_name') if curr_stats else None) or lu.get('player_name')
         team = curr_stats.get('team') if curr_stats else None
 
+        # Compute transparency multipliers (same factors used inside sim_batter_game)
+        _pitcher_mult = 1.0
+        if pitcher:
+            pk = (pitcher['k_pct'] / LEAGUE_AVG_K_PCT) if pitcher['k_pct'] > 0 else 1.0
+            pbr = (LEAGUE_AVG_BB_PCT / pitcher['bb_pct']) if pitcher['bb_pct'] > 0.02 else 1.0
+            phr = (pitcher['hr9'] / LEAGUE_AVG_HR9) if pitcher.get('hr9') else 1.0
+            _pitcher_mult = round2(0.35 * pk + 0.35 * phr + 0.30 * (1.0/pbr) if pbr > 0 else 1.0)
+        _platoon_mult = round2(talent.get('_platoon_adj', 1.0))
+        _park_basic = safe(park_row.get('basic_factor'), 100) / 100.0 if park_row else 1.0
+        _wx_hit = weather_hit_mult(wx_row)
+        _implied = None
+        if odds_row:
+            _implied = safe(odds_row.get('home_implied' if is_home else 'away_implied'))
+            if not _implied:
+                _gt = safe(odds_row.get('game_total'))
+                _implied = _gt / 2.0 if _gt else None
+        _vegas_mult = round2(clip((_implied / LEAGUE_AVG_IMPLIED) if _implied else 1.0, 0.70, 1.45))
+        _park_mult = round2(_park_basic)
+        _weather_mult = round2(_wx_hit)
+        _context_mult = round2(1.0 + (_vegas_mult - 1.0) * 0.58 + (_park_mult - 1.0) * 0.26 + (_weather_mult - 1.0) * 0.16)
+
         records.append({
             'player_id': pid, 'game_pk': gpk, 'game_date': target_date,
             'full_name': full_name, 'team': team, 'batting_order': order,
@@ -862,6 +891,10 @@ def run():
             'sim_floor': round2(p10), 'sim_ceiling': round2(p90),
             'sim_sd': round2(sd), 'sim_p25': round2(p25), 'sim_p75': round2(p75),
             'sim_count': n_sims,
+            # Transparency multipliers for diagnostics
+            'pitcher_mult': _pitcher_mult, 'platoon_mult': _platoon_mult,
+            'context_mult': _context_mult, 'vegas_mult': _vegas_mult,
+            'park_mult': _park_mult, 'weather_mult': _weather_mult,
             # Null out pitcher-specific fields
             'proj_ip': None, 'proj_ks': None, 'proj_er': None,
             'proj_h_allowed': None, 'proj_bb_allowed': None, 'win_prob': None,

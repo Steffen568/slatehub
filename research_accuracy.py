@@ -170,6 +170,380 @@ def analyze_projections(dates):
     for c in conclusions:
         print(f"    >> {c}")
 
+    findings['_matched'] = matched  # pass matched data to diagnostics
+    return findings
+
+
+# ── Helpers for diagnostics ─────────────────────────────────────────────────
+
+def pearson_r(xs, ys):
+    """Pearson correlation between two lists. Returns 0 if not computable."""
+    n = len(xs)
+    if n < 5: return 0
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    dx = math.sqrt(sum((x - mx)**2 for x in xs))
+    dy = math.sqrt(sum((y - my)**2 for y in ys))
+    return num / (dx * dy) if dx > 0 and dy > 0 else 0
+
+
+# ── Section F: Predictive Diagnostics ───────────────────────────────────────
+
+def analyze_diagnostics(dates, matched):
+    """
+    Reverse-engineer projection errors using ALL available stats.
+    Scans every numeric column in batter_stats, pitcher_stats, and game context
+    for correlation with over/under-performance. Surfaces missing predictors
+    and runs backtesting weight sweeps.
+    """
+    print(f"\n{'='*60}")
+    print(f"  SECTION F: Predictive Diagnostics")
+    print(f"{'='*60}")
+
+    if len(matched) < 20:
+        print("  Not enough matched data for diagnostics (need 20+)")
+        return {}
+
+    findings = {}
+
+    # Split hitters and pitchers
+    hitters = [m for m in matched if not m.get('is_pitcher')]
+    pitchers = [m for m in matched if m.get('is_pitcher')]
+    hitter_ids = list({m['player_id'] for m in hitters})
+    pitcher_ids = list({m['player_id'] for m in pitchers})
+
+    # Compute errors
+    for m in matched:
+        m['error'] = m['actual'] - safe(m['proj_dk_pts'])
+
+    # ── Feature Scan: Load ALL stats ────────────────────────────────────────
+
+    # Batter stats
+    batter_stats_map = {}
+    if hitter_ids:
+        print(f"\n  Loading batter stats for {len(hitter_ids)} hitters...")
+        for yr in [2025, 2024]:
+            rows = paginate(sb.table('batter_stats')
+                .select('*')
+                .in_('player_id', hitter_ids[:150])
+                .eq('season', yr))
+            if len(hitter_ids) > 150:
+                rows += paginate(sb.table('batter_stats')
+                    .select('*')
+                    .in_('player_id', hitter_ids[150:300])
+                    .eq('season', yr))
+            for r in rows:
+                if r['player_id'] not in batter_stats_map:
+                    batter_stats_map[r['player_id']] = r
+            if len(batter_stats_map) > len(hitter_ids) * 0.5:
+                break
+
+    # Pitcher stats
+    pitcher_stats_map = {}
+    if pitcher_ids:
+        print(f"  Loading pitcher stats for {len(pitcher_ids)} pitchers...")
+        for yr in [2025, 2024]:
+            rows = paginate(sb.table('pitcher_stats')
+                .select('*')
+                .in_('player_id', pitcher_ids[:150])
+                .eq('season', yr))
+            for r in rows:
+                if r['player_id'] not in pitcher_stats_map:
+                    pitcher_stats_map[r['player_id']] = r
+            if len(pitcher_stats_map) > len(pitcher_ids) * 0.5:
+                break
+
+    # Game context: load games for venue/park info
+    game_pks = list({m['game_pk'] for m in matched if m.get('game_pk')})
+    games_map = {}
+    if game_pks:
+        rows = paginate(sb.table('games')
+            .select('game_pk,venue_id,home_team,away_team,home_team_id,away_team_id')
+            .in_('game_pk', game_pks[:150]))
+        for r in rows:
+            games_map[r['game_pk']] = r
+
+    # ── ANALYSIS: Full Feature Scan (Hitters) ───────────────────────────────
+
+    SKIP_COLS = {'player_id', 'season', 'team', 'full_name', 'name_display', 'key_mlbam',
+                 'key_fangraphs', 'key_bbref', 'stats_level', 'team_id', 'age'}
+
+    if hitters and batter_stats_map:
+        print(f"\n  FEATURE SCAN — Hitters ({len(hitters)} matched):")
+        # Get all numeric columns from a sample row
+        sample = next(iter(batter_stats_map.values()))
+        numeric_cols = [k for k, v in sample.items()
+                       if k not in SKIP_COLS and v is not None
+                       and isinstance(v, (int, float))]
+
+        USED_BATTER = {'woba', 'xwoba', 'k_pct', 'bb_pct', 'iso', 'avg', 'wrc_plus'}
+        scan_results = []
+        for col in numeric_cols:
+            pairs = []
+            for m in hitters:
+                st = batter_stats_map.get(m['player_id'])
+                if not st: continue
+                val = st.get(col)
+                if val is not None:
+                    try:
+                        pairs.append((float(val), m['error']))
+                    except (TypeError, ValueError):
+                        pass
+            if len(pairs) < 20: continue
+            r = pearson_r([p[0] for p in pairs], [p[1] for p in pairs])
+            used = 'Yes' if col in USED_BATTER else 'NO'
+            scan_results.append((col, r, used, len(pairs)))
+
+        scan_results.sort(key=lambda x: abs(x[1]), reverse=True)
+        findings['hitter_feature_scan'] = scan_results[:25]
+        missing = [s for s in scan_results if s[2] == 'NO' and abs(s[1]) > 0.08][:10]
+        findings['hitter_missing_predictors'] = missing
+
+        for col, r, used, n in scan_results[:15]:
+            flag = ' <-- MISSING PREDICTOR' if used == 'NO' and abs(r) > 0.08 else ''
+            print(f"    {col:22s}: r={r:+.3f}  (n={n:3d})  Used={used}{flag}")
+
+    # ── ANALYSIS: Full Feature Scan (Pitchers) ──────────────────────────────
+
+    if pitchers and pitcher_stats_map:
+        print(f"\n  FEATURE SCAN — Pitchers ({len(pitchers)} matched):")
+        sample = next(iter(pitcher_stats_map.values()))
+        numeric_cols = [k for k, v in sample.items()
+                       if k not in SKIP_COLS and v is not None
+                       and isinstance(v, (int, float))]
+
+        USED_PITCHER = {'xfip', 'siera', 'k_pct', 'bb_pct', 'stuff_plus', 'hr9', 'babip'}
+        scan_results = []
+        for col in numeric_cols:
+            pairs = []
+            for m in pitchers:
+                st = pitcher_stats_map.get(m['player_id'])
+                if not st: continue
+                val = st.get(col)
+                if val is not None:
+                    try:
+                        pairs.append((float(val), m['error']))
+                    except (TypeError, ValueError):
+                        pass
+            if len(pairs) < 10: continue
+            r = pearson_r([p[0] for p in pairs], [p[1] for p in pairs])
+            used = 'Yes' if col in USED_PITCHER else 'NO'
+            scan_results.append((col, r, used, len(pairs)))
+
+        scan_results.sort(key=lambda x: abs(x[1]), reverse=True)
+        findings['pitcher_feature_scan'] = scan_results[:25]
+        missing = [s for s in scan_results if s[2] == 'NO' and abs(s[1]) > 0.10][:10]
+        findings['pitcher_missing_predictors'] = missing
+
+        for col, r, used, n in scan_results[:15]:
+            flag = ' <-- MISSING PREDICTOR' if used == 'NO' and abs(r) > 0.10 else ''
+            print(f"    {col:22s}: r={r:+.3f}  (n={n:3d})  Used={used}{flag}")
+
+    # ── ANALYSIS: Opposing Lineup Quality for Pitchers ──────────────────────
+
+    if pitchers and batter_stats_map:
+        print(f"\n  OPPOSING LINEUP SCAN — Pitchers ({len(pitchers)} matched):")
+        # For each pitcher, compute aggregate stats of the opposing lineup
+        opp_agg_cols = ['k_pct', 'bb_pct', 'iso', 'woba', 'xwoba', 'barrel_pct',
+                        'hard_hit_pct', 'wrc_plus', 'avg_ev', 'o_swing_pct', 'gb_pct']
+        opp_scan = []
+        for col in opp_agg_cols:
+            pairs = []
+            for m in pitchers:
+                game = games_map.get(m['game_pk'])
+                if not game: continue
+                # Determine opposing team
+                opp_team = game['away_team'] if m.get('team') == game.get('home_team') else game['home_team']
+                # Get all hitters from the opposing team in this game
+                opp_hitters = [h for h in hitters if h.get('team') == opp_team
+                               and h.get('game_pk') == m.get('game_pk')]
+                if not opp_hitters: continue
+                vals = []
+                for h in opp_hitters:
+                    st = batter_stats_map.get(h['player_id'])
+                    if st and st.get(col) is not None:
+                        try:
+                            vals.append(float(st[col]))
+                        except (TypeError, ValueError):
+                            pass
+                if len(vals) < 3: continue
+                avg_val = sum(vals) / len(vals)
+                pairs.append((avg_val, m['error']))
+
+            if len(pairs) < 8: continue
+            r = pearson_r([p[0] for p in pairs], [p[1] for p in pairs])
+            opp_scan.append((f'opp_{col}', r, len(pairs)))
+
+        opp_scan.sort(key=lambda x: abs(x[1]), reverse=True)
+        findings['opp_lineup_scan'] = opp_scan
+
+        for col, r, n in opp_scan:
+            flag = ' <-- ADD TO MODEL' if abs(r) > 0.12 else ''
+            print(f"    {col:22s}: r={r:+.3f}  (n={n:3d}){flag}")
+
+    # ── ANALYSIS: Park Factor Breakdown ─────────────────────────────────────
+
+    if matched and games_map:
+        print(f"\n  PARK FACTOR BREAKDOWN:")
+        park_rows = paginate(sb.table('park_factors').select('*'))
+        park_map = {r.get('venue_id') or r.get('park'): r for r in park_rows}
+
+        venue_errors = defaultdict(list)
+        for m in matched:
+            game = games_map.get(m['game_pk'])
+            if game and game.get('venue_id'):
+                venue_errors[game['venue_id']].append(m['error'])
+
+        park_results = []
+        for vid, errors in venue_errors.items():
+            if len(errors) < 5: continue
+            avg_err = sum(errors) / len(errors)
+            mae = sum(abs(e) for e in errors) / len(errors)
+            pf = park_map.get(vid, {})
+            basic = safe(pf.get('basic_factor'), 100)
+            park_results.append((vid, basic, avg_err, mae, len(errors)))
+
+        park_results.sort(key=lambda x: abs(x[2]), reverse=True)
+        findings['park_breakdown'] = park_results
+
+        for vid, basic, avg_err, mae, n in park_results[:10]:
+            direction = 'over-proj' if avg_err < -1 else 'under-proj' if avg_err > 1 else 'accurate'
+            print(f"    Venue {vid}: PF={basic:3.0f}  avg_err={avg_err:+.1f}  MAE={mae:.1f}  n={n}  ({direction})")
+
+    # ── ANALYSIS: Batter Archetype Breakdown ────────────────────────────────
+
+    if hitters and batter_stats_map:
+        print(f"\n  BATTER ARCHETYPE ANALYSIS:")
+        archetypes = {
+            'Power (ISO>.200)': lambda st: safe(st.get('iso')) > 0.200,
+            'Contact (K%<15%)': lambda st: safe(st.get('k_pct')) < 0.15,
+            'Strikeout (K%>28%)': lambda st: safe(st.get('k_pct')) > 0.28,
+            'High barrel (>10%)': lambda st: safe(st.get('barrel_pct')) > 10,
+            'Speed (SB pace>15)': lambda st: safe(st.get('sb')) > 10,
+            'Ground ball (GB%>50%)': lambda st: safe(st.get('gb_pct')) > 50,
+            'Fly ball (FB%>40%)': lambda st: safe(st.get('fb_pct')) > 40,
+        }
+        arch_results = {}
+        for arch_name, filt in archetypes.items():
+            subset = [m for m in hitters if filt(batter_stats_map.get(m['player_id'], {}))]
+            if len(subset) < 10: continue
+            errs = [m['error'] for m in subset]
+            avg_err = sum(errs) / len(errs)
+            mae = sum(abs(e) for e in errs) / len(errs)
+            arch_results[arch_name] = {'avg_err': avg_err, 'mae': mae, 'n': len(subset)}
+            flag = ' <-- SYSTEMATIC BIAS' if abs(avg_err) > 1.0 else ''
+            print(f"    {arch_name:25s}: n={len(subset):3d}  avg_err={avg_err:+.2f}  MAE={mae:.2f}{flag}")
+
+        findings['archetype_analysis'] = arch_results
+
+    # ── ANALYSIS: Platoon Split by Hand ─────────────────────────────────────
+
+    if hitters:
+        print(f"\n  PLATOON EFFECTIVENESS BY PITCHER HAND:")
+        # Use pitcher_mult proxy: high pitcher_mult = weak pitcher = better for hitters
+        for hand_label, hand_filt in [('All', lambda m: True)]:
+            subset = [m for m in hitters if hand_filt(m) and m.get('platoon_mult') is not None]
+            if len(subset) < 20: continue
+            # Split by platoon_mult magnitude
+            high_plat = [m for m in subset if safe(m.get('platoon_mult')) > 1.1]
+            low_plat = [m for m in subset if safe(m.get('platoon_mult')) < 0.9]
+            if high_plat:
+                avg_err_hi = sum(m['error'] for m in high_plat) / len(high_plat)
+                print(f"    High platoon (>1.10): n={len(high_plat):3d}  avg_err={avg_err_hi:+.2f}  "
+                      f"({'accurate' if abs(avg_err_hi) < 0.5 else 'biased'})")
+            if low_plat:
+                avg_err_lo = sum(m['error'] for m in low_plat) / len(low_plat)
+                print(f"    Low platoon  (<0.90): n={len(low_plat):3d}  avg_err={avg_err_lo:+.2f}  "
+                      f"({'accurate' if abs(avg_err_lo) < 0.5 else 'biased'})")
+
+    # ── ANALYSIS: Backtesting Weight Sweep ──────────────────────────────────
+
+    if hitters and len(hitters) > 30:
+        print(f"\n  BACKTESTING WEIGHT SWEEP — Hitters ({len(hitters)} matched):")
+
+        # Current: context weights = vegas 58%, park 26%, weather 16%
+        # Rebuild context_mult from stored sub-mults and test different weights
+        test_hitters = [m for m in hitters
+                       if m.get('vegas_mult') is not None
+                       and m.get('park_mult') is not None
+                       and m.get('weather_mult') is not None]
+
+        if len(test_hitters) > 20:
+            # Current formula: context_mult = 1.0 + (vegas-1)*0.58 + (park-1)*0.26 + (weather-1)*0.16
+            # Test grid of context weights
+            best_mae = 999
+            best_weights = None
+            current_mae = sum(abs(m['error']) for m in test_hitters) / len(test_hitters)
+
+            for vw in range(40, 81, 5):
+                for pw in range(5, 31, 5):
+                    ww = 100 - vw - pw
+                    if ww < 5 or ww > 30: continue
+                    total_ae = 0
+                    for m in test_hitters:
+                        vm = safe(m['vegas_mult'], 1.0)
+                        pm = safe(m['park_mult'], 1.0)
+                        wm = safe(m['weather_mult'], 1.0)
+                        # Recompute context_mult with test weights
+                        new_ctx = 1.0 + (vm - 1.0) * vw/100 + (pm - 1.0) * pw/100 + (wm - 1.0) * ww/100
+                        old_ctx = safe(m.get('context_mult'), 1.0)
+                        if old_ctx == 0: old_ctx = 1.0
+                        # Scale the projection by the ratio of new/old context
+                        ratio = new_ctx / old_ctx if old_ctx != 0 else 1.0
+                        new_proj = safe(m['proj_dk_pts']) * ratio
+                        total_ae += abs(m['actual'] - new_proj)
+                    test_mae = total_ae / len(test_hitters)
+                    if test_mae < best_mae:
+                        best_mae = test_mae
+                        best_weights = (vw, pw, ww)
+
+            if best_weights:
+                improvement = current_mae - best_mae
+                pct_improve = improvement / current_mae * 100 if current_mae > 0 else 0
+                print(f"    Current context weights: Vegas=58%, Park=26%, Weather=16%  →  MAE={current_mae:.2f}")
+                print(f"    Best context weights:    Vegas={best_weights[0]}%, Park={best_weights[1]}%, Weather={best_weights[2]}%  →  MAE={best_mae:.2f}")
+                print(f"    Improvement: {improvement:.2f} pts ({pct_improve:.1f}%)")
+                findings['best_context_weights'] = best_weights
+                findings['context_mae_improvement'] = improvement
+
+    # ── SUMMARY ─────────────────────────────────────────────────────────────
+
+    print(f"\n  DIAGNOSTIC RECOMMENDATIONS:")
+    rec_count = 0
+
+    # Surface missing predictors
+    for label, key in [('Hitter', 'hitter_missing_predictors'), ('Pitcher', 'pitcher_missing_predictors')]:
+        missing = findings.get(key, [])
+        for col, r, _, n in missing[:3]:
+            rec_count += 1
+            direction = 'positively' if r > 0 else 'negatively'
+            print(f"    {rec_count}. ADD {col} to {label.lower()} projections (r={r:+.3f}, {direction} correlated with under-projection, n={n})")
+
+    # Opp lineup recommendations
+    for col, r, n in findings.get('opp_lineup_scan', [])[:2]:
+        if abs(r) > 0.12:
+            rec_count += 1
+            print(f"    {rec_count}. ADD {col} to pitcher matchup model (r={r:+.3f}, n={n})")
+
+    # Context weight recommendation
+    if findings.get('best_context_weights'):
+        bw = findings['best_context_weights']
+        imp = findings.get('context_mae_improvement', 0)
+        if imp > 0.05:
+            rec_count += 1
+            print(f"    {rec_count}. CHANGE context weights to Vegas={bw[0]}%, Park={bw[1]}%, Weather={bw[2]}% (saves {imp:.2f} MAE)")
+
+    # Archetype recommendations
+    for arch, data in findings.get('archetype_analysis', {}).items():
+        if abs(data['avg_err']) > 1.0:
+            rec_count += 1
+            direction = 'under-projected' if data['avg_err'] > 0 else 'over-projected'
+            print(f"    {rec_count}. FIX {arch} batters {direction} by {abs(data['avg_err']):.1f} pts (n={data['n']})")
+
+    if rec_count == 0:
+        print("    No actionable recommendations (sample may be too small)")
+
     return findings
 
 
@@ -576,7 +950,7 @@ def generate_recommendations(proj_findings, own_findings, sim_findings, contest_
 
 # ── Write Findings to File ──────────────────────────────────────────────────
 
-def write_findings(dates, proj_findings, own_findings, sim_findings, contest_findings, recs):
+def write_findings(dates, proj_findings, own_findings, sim_findings, contest_findings, recs, diag_findings=None):
     header = f"\n## Research Findings — {', '.join(dates)}\n"
     lines = [header]
 
@@ -594,6 +968,40 @@ def write_findings(dates, proj_findings, own_findings, sim_findings, contest_fin
     if contest_findings:
         lines.append(f"**Contest**: Winner={contest_findings.get('winner_pts', '?')}, "
                      f"Top1%={contest_findings.get('top1_threshold', '?')}")
+
+    # Diagnostic findings
+    if diag_findings:
+        lines.append("\n### Predictive Diagnostics")
+        # Missing predictors
+        for label, key in [('Hitter', 'hitter_missing_predictors'), ('Pitcher', 'pitcher_missing_predictors')]:
+            missing = diag_findings.get(key, [])
+            if missing:
+                lines.append(f"\n**{label} Missing Predictors** (correlated with error but not in model):")
+                for col, r, _, n in missing[:5]:
+                    lines.append(f"- `{col}` r={r:+.3f} (n={n})")
+
+        # Opp lineup scan
+        opp = diag_findings.get('opp_lineup_scan', [])
+        strong_opp = [(c, r, n) for c, r, n in opp if abs(r) > 0.10]
+        if strong_opp:
+            lines.append(f"\n**Opposing Lineup Factors** (for pitcher projections):")
+            for col, r, n in strong_opp[:5]:
+                lines.append(f"- `{col}` r={r:+.3f} (n={n})")
+
+        # Context weight optimization
+        if diag_findings.get('best_context_weights'):
+            bw = diag_findings['best_context_weights']
+            imp = diag_findings.get('context_mae_improvement', 0)
+            lines.append(f"\n**Optimal Context Weights**: Vegas={bw[0]}% Park={bw[1]}% Weather={bw[2]}% (saves {imp:.2f} MAE)")
+
+        # Archetype biases
+        arch = diag_findings.get('archetype_analysis', {})
+        biased = {k: v for k, v in arch.items() if abs(v['avg_err']) > 0.8}
+        if biased:
+            lines.append(f"\n**Archetype Biases:**")
+            for name, data in biased.items():
+                direction = 'under-projected' if data['avg_err'] > 0 else 'over-projected'
+                lines.append(f"- {name}: {direction} by {abs(data['avg_err']):.1f} pts (n={data['n']})")
 
     lines.append("\n**Recommendations:**")
     for r in recs:
@@ -669,8 +1077,14 @@ def run():
                 print(f"    Avg Top 1%: {contest_findings['top1_threshold']:.1f} pts")
                 print(f"    Avg Cash:   {contest_findings['cash_line']:.1f} pts")
 
+    # Predictive diagnostics: full feature scan + backtesting
+    diag_findings = {}
+    matched_data = proj_findings.get('_matched', [])
+    if matched_data:
+        diag_findings = analyze_diagnostics(target_dates, matched_data)
+
     recs = generate_recommendations(proj_findings, own_findings, sim_findings, contest_findings)
-    write_findings(target_dates, proj_findings, own_findings, sim_findings, contest_findings, recs)
+    write_findings(target_dates, proj_findings, own_findings, sim_findings, contest_findings, recs, diag_findings)
 
     print(f"\n{'='*60}")
     print(f"  Research complete.")
