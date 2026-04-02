@@ -10934,16 +10934,31 @@ function fillDKTemplate(event) {
     const lines = e.target.result.split(/\r?\n/);
     const map = {}, mapCPT = {}, mapFLEX = {};
     let found = 0;
+    // Detect column positions from header row (scan first 20 lines for Name/ID/Roster Position)
+    let _cName = -1, _cId = -1, _cRP = -1;
+    for (let ri = 0; ri < Math.min(lines.length, 20); ri++) {
+      const cells = lines[ri].split(',');
+      let fn = -1, fi = -1, fr = -1;
+      for (let c = 0; c < cells.length; c++) {
+        const h = (cells[c] || '').replace(/^"|"$/g, '').trim();
+        if (h === 'Name') fn = c;
+        else if (h === 'ID' && fn >= 0) fi = c;
+        else if (h === 'Roster Position') fr = c;
+      }
+      if (fn >= 0 && fi >= 0) { _cName = fn; _cId = fi; _cRP = fr; break; }
+    }
+    // Fallback to classic layout
+    if (_cName < 0) _cName = 17;
+    if (_cId < 0) _cId = 18;
+    if (_cRP < 0) _cRP = 15;
     for (const line of lines) {
-      // CSV columns (0-indexed): 0=EntryID ... 14=blank 15=Position 16="Name + ID" 17=Name 18=ID
       const cols     = line.split(',');
-      const posCol   = (cols[15] || '').replace(/^"|"$/g, '').trim().toUpperCase();
-      const nameCol  = (cols[17] || '').replace(/^"|"$/g, '').trim();
-      const idCol    = (cols[18] || '').replace(/^"|"$/g, '').trim();
+      const posCol   = (cols[_cRP] || '').replace(/^"|"$/g, '').trim().toUpperCase();
+      const nameCol  = (cols[_cName] || '').replace(/^"|"$/g, '').trim();
+      const idCol    = (cols[_cId] || '').replace(/^"|"$/g, '').trim();
       if (nameCol && idCol && /^\d{6,}$/.test(idCol)) {
         map[nameCol.toLowerCase()] = idCol;
         map[normName(nameCol)]     = idCol;
-        // SD-specific: split into CPT vs FLEX maps by position column
         if (posCol === 'CPT') {
           mapCPT[nameCol.toLowerCase()] = idCol;
           mapCPT[normName(nameCol)]     = idCol;
@@ -11599,59 +11614,74 @@ function importDKTemplate(file) {
     const contestMap = {};  // contestId → { contestId, contestName, entryFee, entryCount }
     let isSD = false;
 
-    // Detect pool column positions from header (varies between Classic and Showdown CSVs)
-    // Classic: 10 roster slots → pool starts at col 15; Showdown: 6 slots → pool starts at col 11
-    const header = rows[0] || [];
-    let colRosterPos = -1, colName = -1, colId = -1, lastSlotCol = 3;
-    for (let c = 0; c < header.length; c++) {
-      const h = (header[c] || '').trim();
-      if (h === 'Roster Position') colRosterPos = c;
-      else if (h === 'Name' && colRosterPos >= 0) colName = c;
-      else if (h === 'ID' && colName >= 0) { colId = c; break; }
-    }
-    // Find last roster slot column (columns between Entry Fee and the empty gap before pool)
-    for (let c = 4; c < header.length; c++) {
-      const h = (header[c] || '').trim();
-      if (!h) break;  // empty column = gap between slots and pool
-      lastSlotCol = c;
-    }
-    // Fallback to hardcoded Classic layout if header detection fails
-    if (colRosterPos < 0) colRosterPos = 15;
-    if (colName < 0) colName = 17;
-    if (colId < 0) colId = 18;
-    console.log(`[DK CSV] Pool columns: RosterPos=${colRosterPos}, Name=${colName}, ID=${colId}, lastSlot=${lastSlotCol}`);
+    // DK CSVs come in two layouts:
+    // A) Classic "DKEntries" — entry columns (0-13) + pool columns (15-23) on same rows
+    //    Header: Entry ID,Contest Name,...,OF,,Roster Position,Name + ID,Name,ID,...
+    // B) Showdown "Edit Entries" — instruction lines, then entry section, then pool section
+    //    Pool header: Position,Name + ID,Name,ID,Roster Position,Salary,...
+    // Detect layout by scanning for the pool header row (contains "Name" AND "ID" AND "Roster Position")
 
-    for (let i = 1; i < rows.length; i++) {
+    let colRosterPos = -1, colName = -1, colId = -1, poolHeaderRow = -1, lastSlotCol = 3;
+    for (let ri = 0; ri < Math.min(rows.length, 20); ri++) {
+      const r = rows[ri];
+      let foundName = -1, foundId = -1, foundRP = -1;
+      for (let c = 0; c < r.length; c++) {
+        const h = (r[c] || '').trim();
+        if (h === 'Name') foundName = c;
+        else if (h === 'ID' && foundName >= 0) foundId = c;
+        else if (h === 'Roster Position') foundRP = c;
+      }
+      if (foundName >= 0 && foundId >= 0 && foundRP >= 0) {
+        colName = foundName; colId = foundId; colRosterPos = foundRP;
+        poolHeaderRow = ri;
+        break;
+      }
+    }
+    // Find last roster slot column from the actual header (row 0 for classic, or entry header for SD)
+    if (poolHeaderRow === 0) {
+      for (let c = 4; c < rows[0].length; c++) {
+        const h = (rows[0][c] || '').trim();
+        if (!h) break;
+        lastSlotCol = c;
+      }
+    }
+    console.log(`[DK CSV] Pool header at row ${poolHeaderRow}: RosterPos=${colRosterPos}, Name=${colName}, ID=${colId}, lastSlot=${lastSlotCol}`);
+
+    for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
+      // Parse entry rows: first cell is a numeric Entry ID
       if (r[0] && /^\d+$/.test(r[0].trim())) {
         const entryId = r[0].trim();
         const contestName = (r[1] || '').trim();
         const contestId = (r[2] || '').trim();
         const entryFee = (r[3] || '').trim();
-        entries.push({ entryId, contestName, contestId, entryFee });
-        if (contestId) {
+        // Only add as entry if contestId looks like a number (not pool data)
+        if (contestId && /^\d+$/.test(contestId)) {
+          entries.push({ entryId, contestName, contestId, entryFee });
           if (!contestMap[contestId]) {
             contestMap[contestId] = { contestId, contestName, entryFee, entryCount: 0 };
           }
           contestMap[contestId].entryCount++;
         }
       }
-      // Parse pool section: RosterPos, Name, ID (positions detected from header)
-      const poolName = (r[colName] || '').trim();
-      const poolDkId = (r[colId] || '').trim();
-      const rosterPos = (r[colRosterPos] || '').trim();
-      if (poolName && poolDkId && /^\d+$/.test(poolDkId)) {
-        const nName = normName(poolName);
-        const lName = poolName.toLowerCase();
-        if (rosterPos === 'CPT') {
-          cptIds[nName] = poolDkId; cptIds[lName] = poolDkId;
-          isSD = true;
-        } else if (rosterPos === 'UTIL') {
-          utilIds[nName] = poolDkId; utilIds[lName] = poolDkId;
-          isSD = true;
+      // Parse pool rows using detected column positions
+      if (colName >= 0 && colId >= 0) {
+        const poolName = (r[colName] || '').trim();
+        const poolDkId = (r[colId] || '').trim();
+        const rosterPos = colRosterPos >= 0 ? (r[colRosterPos] || '').trim() : '';
+        if (poolName && poolDkId && /^\d{6,}$/.test(poolDkId)) {
+          const nName = normName(poolName);
+          const lName = poolName.toLowerCase();
+          if (rosterPos === 'CPT') {
+            cptIds[nName] = poolDkId; cptIds[lName] = poolDkId;
+            isSD = true;
+          } else if (rosterPos === 'UTIL') {
+            utilIds[nName] = poolDkId; utilIds[lName] = poolDkId;
+            isSD = true;
+          }
+          classicIds[nName] = poolDkId;
+          classicIds[lName] = poolDkId;
         }
-        classicIds[nName] = poolDkId;
-        classicIds[lName] = poolDkId;
       }
       // Also parse DK IDs from slot columns (4 through lastSlotCol): format "Name (DK_ID)"
       for (let col = 4; col <= lastSlotCol; col++) {
