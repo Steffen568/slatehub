@@ -11671,6 +11671,9 @@ function importDKTemplate(file) {
     _contestAssignments = {};
     // Also populate dkDraftgroupMap so fillDKTemplate-dependent code still works
     dkDraftgroupMap = classicIds;
+    console.log(`[DK CSV] isSD=${isSD}, cptIds=${Object.keys(cptIds).length}, utilIds=${Object.keys(utilIds).length}, classicIds=${Object.keys(classicIds).length}`);
+    console.log('[DK CSV] Sample cptIds:', Object.entries(cptIds).slice(0,6));
+    console.log('[DK CSV] Sample classicIds:', Object.entries(classicIds).slice(0,6));
     showToast(`DK CSV imported: ${contests.length} contests, ${entries.length} entries`);
     renderContestDash();
     populateContestPicker(); // show contests immediately (payout data loads async)
@@ -11798,7 +11801,9 @@ function lookupDkId(playerName, role) {
   if (role === 'cpt')       map = _dkTemplate.cptIds;
   else if (role === 'util') map = _dkTemplate.utilIds;
   else                      map = _dkTemplate.classicIds || {};
-  return map[playerName.toLowerCase()] || map[normName(playerName)] || null;
+  const result = map[playerName.toLowerCase()] || map[normName(playerName)] || null;
+  if (!result) console.log(`[lookupDkId] MISS: "${playerName}" role=${role}, norm="${normName(playerName)}", mapSize=${Object.keys(map).length}`);
+  return result;
 }
 
 function lineupToEntryRow(entry, lu) {
