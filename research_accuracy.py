@@ -346,6 +346,115 @@ def analyze_diagnostics(dates, matched):
             flag = ' <-- MISSING PREDICTOR' if used == 'NO' and abs(r) > 0.08 else ''
             print(f"    {col:22s}: r={r:+.3f}  (n={n:3d})  Used={used}{flag}")
 
+    # ── ANALYSIS: Incremental Value Test ──────────────────────────────────
+    # For each stat, test if blending it into proj actually reduces MAE on held-out data
+
+    def incremental_value_test(players, stats_map, label, numeric_cols, skip_cols_set):
+        """Cross-validated test: does adding each stat reduce MAE?"""
+        # Build data: (proj, actual, {col: val}) per player
+        data_rows = []
+        for m in players:
+            st = stats_map.get(m['player_id'])
+            if not st: continue
+            row = {'proj': safe(m['proj_dk_pts']), 'actual': m['actual']}
+            for col in numeric_cols:
+                val = st.get(col)
+                if val is not None:
+                    try:
+                        row[col] = float(val)
+                    except (TypeError, ValueError):
+                        pass
+            data_rows.append(row)
+
+        if len(data_rows) < 40:
+            print(f"\n  INCREMENTAL VALUE TEST — {label}: Too few rows ({len(data_rows)})")
+            return []
+
+        # Split train/test (odd/even)
+        train = [r for i, r in enumerate(data_rows) if i % 2 == 0]
+        test  = [r for i, r in enumerate(data_rows) if i % 2 == 1]
+
+        baseline_mae = sum(abs(r['actual'] - r['proj']) for r in test) / len(test)
+
+        results = []
+        for col in numeric_cols:
+            if col in skip_cols_set:
+                continue
+            # Get values for train and test
+            train_vals = [(r['proj'], r['actual'], r[col]) for r in train if col in r]
+            test_vals  = [(r['proj'], r['actual'], r[col]) for r in test if col in r]
+            if len(train_vals) < 20 or len(test_vals) < 20:
+                continue
+
+            # Normalize stat using train mean/sd
+            train_stat = [v[2] for v in train_vals]
+            mean_s = sum(train_stat) / len(train_stat)
+            sd_s = math.sqrt(sum((x - mean_s)**2 for x in train_stat) / len(train_stat))
+            if sd_s < 1e-9:
+                continue
+
+            # Grid search weight on train set
+            best_w = 0
+            best_train_mae = sum(abs(v[1] - v[0]) for v in train_vals) / len(train_vals)
+            for w_int in range(-30, 31):
+                w = w_int * 0.1
+                mae = sum(abs(v[1] - (v[0] + w * (v[2] - mean_s) / sd_s)) for v in train_vals) / len(train_vals)
+                if mae < best_train_mae:
+                    best_train_mae = mae
+                    best_w = w
+
+            if best_w == 0:
+                continue
+
+            # Evaluate on test set with that weight
+            test_mae = sum(abs(v[1] - (v[0] + best_w * (v[2] - mean_s) / sd_s)) for v in test_vals) / len(test_vals)
+            improvement = baseline_mae - test_mae
+
+            results.append((col, best_w, baseline_mae, test_mae, improvement, len(test_vals)))
+
+        results.sort(key=lambda x: x[4], reverse=True)
+        return results
+
+    # Run for hitters
+    if hitters and batter_stats_map:
+        sample = next(iter(batter_stats_map.values()))
+        h_numeric = [k for k, v in sample.items()
+                     if k not in SKIP_COLS and v is not None and isinstance(v, (int, float))]
+        h_results = incremental_value_test(hitters, batter_stats_map, 'Hitters', h_numeric, SKIP_COLS)
+        if h_results:
+            print(f"\n  INCREMENTAL VALUE TEST — Hitters (cross-validated, baseline MAE={h_results[0][2]:.2f}):")
+            findings['hitter_incremental'] = []
+            for col, w, base, test_mae, imp, n in h_results:
+                pct = imp / base * 100 if base > 0 else 0
+                if imp > 0.01:
+                    tag = f'IMPROVES by {imp:.3f} ({pct:.1f}%)'
+                elif imp < -0.01:
+                    tag = f'HURTS by {abs(imp):.3f}'
+                else:
+                    tag = 'no effect'
+                print(f"    {col:22s}: w={w:+.1f}  test_MAE={test_mae:.2f}  {tag}  (n={n})")
+                findings['hitter_incremental'].append((col, w, imp, n))
+
+    # Run for pitchers
+    if pitchers and pitcher_stats_map:
+        sample = next(iter(pitcher_stats_map.values()))
+        p_numeric = [k for k, v in sample.items()
+                     if k not in SKIP_COLS and v is not None and isinstance(v, (int, float))]
+        p_results = incremental_value_test(pitchers, pitcher_stats_map, 'Pitchers', p_numeric, SKIP_COLS)
+        if p_results:
+            print(f"\n  INCREMENTAL VALUE TEST — Pitchers (cross-validated, baseline MAE={p_results[0][2]:.2f}):")
+            findings['pitcher_incremental'] = []
+            for col, w, base, test_mae, imp, n in p_results:
+                pct = imp / base * 100 if base > 0 else 0
+                if imp > 0.01:
+                    tag = f'IMPROVES by {imp:.3f} ({pct:.1f}%)'
+                elif imp < -0.01:
+                    tag = f'HURTS by {abs(imp):.3f}'
+                else:
+                    tag = 'no effect'
+                print(f"    {col:22s}: w={w:+.1f}  test_MAE={test_mae:.2f}  {tag}  (n={n})")
+                findings['pitcher_incremental'].append((col, w, imp, n))
+
     # ── ANALYSIS: Opposing Lineup Quality for Pitchers ──────────────────────
 
     if pitchers and batter_stats_map:
