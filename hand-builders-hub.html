@@ -11599,6 +11599,28 @@ function importDKTemplate(file) {
     const contestMap = {};  // contestId → { contestId, contestName, entryFee, entryCount }
     let isSD = false;
 
+    // Detect pool column positions from header (varies between Classic and Showdown CSVs)
+    // Classic: 10 roster slots → pool starts at col 15; Showdown: 6 slots → pool starts at col 11
+    const header = rows[0] || [];
+    let colRosterPos = -1, colName = -1, colId = -1, lastSlotCol = 3;
+    for (let c = 0; c < header.length; c++) {
+      const h = (header[c] || '').trim();
+      if (h === 'Roster Position') colRosterPos = c;
+      else if (h === 'Name' && colRosterPos >= 0) colName = c;
+      else if (h === 'ID' && colName >= 0) { colId = c; break; }
+    }
+    // Find last roster slot column (columns between Entry Fee and the empty gap before pool)
+    for (let c = 4; c < header.length; c++) {
+      const h = (header[c] || '').trim();
+      if (!h) break;  // empty column = gap between slots and pool
+      lastSlotCol = c;
+    }
+    // Fallback to hardcoded Classic layout if header detection fails
+    if (colRosterPos < 0) colRosterPos = 15;
+    if (colName < 0) colName = 17;
+    if (colId < 0) colId = 18;
+    console.log(`[DK CSV] Pool columns: RosterPos=${colRosterPos}, Name=${colName}, ID=${colId}, lastSlot=${lastSlotCol}`);
+
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
       if (r[0] && /^\d+$/.test(r[0].trim())) {
@@ -11614,10 +11636,10 @@ function importDKTemplate(file) {
           contestMap[contestId].entryCount++;
         }
       }
-      // Parse pool section (columns 15+): RosterPos, Name+ID, Name, ID
-      const poolName = (r[17] || '').trim();
-      const poolDkId = (r[18] || '').trim();
-      const rosterPos = (r[15] || '').trim();
+      // Parse pool section: RosterPos, Name, ID (positions detected from header)
+      const poolName = (r[colName] || '').trim();
+      const poolDkId = (r[colId] || '').trim();
+      const rosterPos = (r[colRosterPos] || '').trim();
       if (poolName && poolDkId && /^\d+$/.test(poolDkId)) {
         const nName = normName(poolName);
         const lName = poolName.toLowerCase();
@@ -11631,8 +11653,8 @@ function importDKTemplate(file) {
         classicIds[nName] = poolDkId;
         classicIds[lName] = poolDkId;
       }
-      // Also parse DK IDs from slot columns (4-13): format "Name (DK_ID)"
-      for (let col = 4; col <= 13; col++) {
+      // Also parse DK IDs from slot columns (4 through lastSlotCol): format "Name (DK_ID)"
+      for (let col = 4; col <= lastSlotCol; col++) {
         const cell = (r[col] || '').trim();
         const m = cell.match(/^(.+?)\s*\((\d+)\)$/);
         if (m) {
