@@ -1002,8 +1002,13 @@ def run():
                 'proj_3b': None, 'proj_hr': None, 'proj_bb': None,
                 'proj_r': None, 'proj_rbi': None, 'proj_sb': None,
                 'base_woba': None, 'matchup_woba': None, 'final_woba': None,
-                'pitcher_mult': None, 'platoon_mult': None, 'context_mult': None,
-                'vegas_mult': None, 'park_mult': None, 'weather_mult': None,
+                # Pitcher transparency multipliers for diagnostics
+                'pitcher_mult': round2(opp_qual),  # opposing lineup quality (lower = weaker lineup = better for pitcher)
+                'platoon_mult': None,
+                'context_mult': None,
+                'vegas_mult': round2(exp_win / 0.17) if exp_win else None,  # win prob relative to baseline
+                'park_mult': round2(park_hr_f),
+                'weather_mult': round2(wx_hr),
             })
             pitcher_count += 1
 
