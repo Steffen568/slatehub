@@ -221,33 +221,37 @@ def analyze_diagnostics(dates, matched):
 
     # Batter stats
     batter_stats_map = {}
+    def batch_load(table, select, ids, extra_filters=None):
+        """Load rows in 150-ID batches to avoid URL length limits."""
+        all_rows = []
+        for i in range(0, len(ids), 150):
+            chunk = ids[i:i+150]
+            q = sb.table(table).select(select).in_('player_id', chunk)
+            if extra_filters:
+                for method, args in extra_filters:
+                    q = getattr(q, method)(*args)
+            all_rows += paginate(q)
+        return all_rows
+
     if hitter_ids:
         print(f"\n  Loading batter stats for {len(hitter_ids)} hitters...")
         for yr in [2025, 2024]:
-            rows = paginate(sb.table('batter_stats')
-                .select('*')
-                .in_('player_id', hitter_ids[:150])
-                .eq('season', yr))
-            if len(hitter_ids) > 150:
-                rows += paginate(sb.table('batter_stats')
-                    .select('*')
-                    .in_('player_id', hitter_ids[150:300])
-                    .eq('season', yr))
+            rows = batch_load('batter_stats', '*', hitter_ids,
+                              [('eq', ('season', yr))])
             for r in rows:
                 if r['player_id'] not in batter_stats_map:
                     batter_stats_map[r['player_id']] = r
             if len(batter_stats_map) > len(hitter_ids) * 0.5:
                 break
+        print(f"    Matched {len(batter_stats_map)} / {len(hitter_ids)} hitters to stats")
 
     # Pitcher stats
     pitcher_stats_map = {}
     if pitcher_ids:
         print(f"  Loading pitcher stats for {len(pitcher_ids)} pitchers...")
         for yr in [2025, 2024]:
-            rows = paginate(sb.table('pitcher_stats')
-                .select('*')
-                .in_('player_id', pitcher_ids[:150])
-                .eq('season', yr))
+            rows = batch_load('pitcher_stats', '*', pitcher_ids,
+                              [('eq', ('season', yr))])
             for r in rows:
                 if r['player_id'] not in pitcher_stats_map:
                     pitcher_stats_map[r['player_id']] = r
@@ -258,11 +262,13 @@ def analyze_diagnostics(dates, matched):
     game_pks = list({m['game_pk'] for m in matched if m.get('game_pk')})
     games_map = {}
     if game_pks:
-        rows = paginate(sb.table('games')
-            .select('game_pk,venue_id,home_team,away_team,home_team_id,away_team_id')
-            .in_('game_pk', game_pks[:150]))
-        for r in rows:
-            games_map[r['game_pk']] = r
+        for i in range(0, len(game_pks), 150):
+            chunk = game_pks[i:i+150]
+            rows = paginate(sb.table('games')
+                .select('game_pk,venue_id,home_team,away_team,home_team_id,away_team_id')
+                .in_('game_pk', chunk))
+            for r in rows:
+                games_map[r['game_pk']] = r
 
     # ── ANALYSIS: Full Feature Scan (Hitters) ───────────────────────────────
 
@@ -296,12 +302,12 @@ def analyze_diagnostics(dates, matched):
             scan_results.append((col, r, used, len(pairs)))
 
         scan_results.sort(key=lambda x: abs(x[1]), reverse=True)
-        findings['hitter_feature_scan'] = scan_results[:25]
-        missing = [s for s in scan_results if s[2] == 'NO' and abs(s[1]) > 0.08][:10]
+        findings['hitter_feature_scan'] = scan_results
+        missing = [s for s in scan_results if s[2] == 'NO' and abs(s[1]) > 0.05][:15]
         findings['hitter_missing_predictors'] = missing
 
-        for col, r, used, n in scan_results[:15]:
-            flag = ' <-- MISSING PREDICTOR' if used == 'NO' and abs(r) > 0.08 else ''
+        for col, r, used, n in scan_results:
+            flag = ' <-- MISSING PREDICTOR' if used == 'NO' and abs(r) > 0.05 else ''
             print(f"    {col:22s}: r={r:+.3f}  (n={n:3d})  Used={used}{flag}")
 
     # ── ANALYSIS: Full Feature Scan (Pitchers) ──────────────────────────────
@@ -332,12 +338,12 @@ def analyze_diagnostics(dates, matched):
             scan_results.append((col, r, used, len(pairs)))
 
         scan_results.sort(key=lambda x: abs(x[1]), reverse=True)
-        findings['pitcher_feature_scan'] = scan_results[:25]
-        missing = [s for s in scan_results if s[2] == 'NO' and abs(s[1]) > 0.10][:10]
+        findings['pitcher_feature_scan'] = scan_results
+        missing = [s for s in scan_results if s[2] == 'NO' and abs(s[1]) > 0.08][:15]
         findings['pitcher_missing_predictors'] = missing
 
-        for col, r, used, n in scan_results[:15]:
-            flag = ' <-- MISSING PREDICTOR' if used == 'NO' and abs(r) > 0.10 else ''
+        for col, r, used, n in scan_results:
+            flag = ' <-- MISSING PREDICTOR' if used == 'NO' and abs(r) > 0.08 else ''
             print(f"    {col:22s}: r={r:+.3f}  (n={n:3d})  Used={used}{flag}")
 
     # ── ANALYSIS: Opposing Lineup Quality for Pitchers ──────────────────────
