@@ -436,12 +436,23 @@ for dgid in all_dg_ids:
 
         # Games array is always empty from DG metadata — infer team names from draftables instead
         if is_showdown:
-            teams = sorted({p.get('teamAbbreviation','') for p in draftables if p.get('teamAbbreviation')})
             game_date_str = dg_meta[dgid].get('game_date', '')
-            if len(teams) >= 2:
-                slate_label = f'sd_{teams[0]}@{teams[1]}_{game_date_str}' if game_date_str else f'sd_{teams[0]}@{teams[1]}'
+            # Use actual away@home order from competition name (e.g. "MIN @ KC")
+            # so the slate label matches the real game direction for frontend lookup.
+            away_abbr, home_abbr = None, None
+            for comp_row in seen_comps.values():
+                away_abbr = comp_row['away_team']
+                home_abbr = comp_row['home_team']
+                break
+            if away_abbr and home_abbr:
+                slate_label = f'sd_{away_abbr}@{home_abbr}_{game_date_str}' if game_date_str else f'sd_{away_abbr}@{home_abbr}'
             else:
-                slate_label = f'sd_{dgid}_{game_date_str}' if game_date_str else f'sd_{dgid}'
+                # Fallback: use alphabetical if competition name wasn't parsed
+                teams = sorted({p.get('teamAbbreviation','') for p in draftables if p.get('teamAbbreviation')})
+                if len(teams) >= 2:
+                    slate_label = f'sd_{teams[0]}@{teams[1]}_{game_date_str}' if game_date_str else f'sd_{teams[0]}@{teams[1]}'
+                else:
+                    slate_label = f'sd_{dgid}_{game_date_str}' if game_date_str else f'sd_{dgid}'
             dg_meta[dgid]['slate_label'] = slate_label
 
             # Showdown: each player appears TWICE (CPT at 1.5× salary, FLEX at base salary).

@@ -5219,9 +5219,11 @@ async function loadPlayerPool(date, slate) {
     const sdTeamMatch = slate.match(/^sd_([A-Z]+)@([A-Z]+)_/);
     if (sdTeamMatch) {
       const [, sdAway, sdHome] = sdTeamMatch;
-      const sdGame = _games.find(g =>
-        (teamAbbr(g.away_team) === sdAway || g.away_team === sdAway) &&
-        (teamAbbr(g.home_team) === sdHome || g.home_team === sdHome));
+      const sdGame = _games.find(g => {
+        const ga = teamAbbr(g.away_team) || g.away_team;
+        const gh = teamAbbr(g.home_team) || g.home_team;
+        return (ga === sdAway && gh === sdHome) || (ga === sdHome && gh === sdAway);
+      });
       if (sdGame) sdGamePk = sdGame.game_pk;
     }
   }
@@ -5584,6 +5586,17 @@ async function loadPlayerPool(date, slate) {
       }
     } catch(e) { console.warn('[SlateGames] Filter failed:', e); }
   }
+  // SD mode: auto-exclude players with no/sub-1pt projection (unless user overrode)
+  if (_contestMode === 'showdown') {
+    [...allHitters, ...allPitchers].forEach(p => {
+      const proj = projOverrides[p.player_id] ?? p.proj_dk_pts;
+      if ((proj == null || proj < 1) && projOverrides[p.player_id] == null) {
+        excludedCpt.add(p.player_id);
+        excludedFlex.add(p.player_id);
+      }
+    });
+  }
+
   buildGameStrip();
 
   // Auto-switch to Pitchers tab if no hitters (lineups not posted yet)
@@ -6057,8 +6070,13 @@ function editPlayerProj(pid, td) {
 }
 function savePlayerProj(pid, input) {
   const val = parseFloat(input.value);
-  if (!isNaN(val) && val >= 0) projOverrides[pid] = val;
-  else delete projOverrides[pid];
+  if (!isNaN(val) && val >= 0) {
+    projOverrides[pid] = val;
+    // SD mode: un-exclude player when user manually sets a projection
+    if (_contestMode === 'showdown') { excludedCpt.delete(pid); excludedFlex.delete(pid); }
+  } else {
+    delete projOverrides[pid];
+  }
   delete projBoosts[pid]; // clear boost when manually editing projection
   saveSettings(); renderPool();
 }
@@ -11231,6 +11249,8 @@ function renderSDPool() {
   const sdExp  = getSDExposureMaps();
   const roleExpMap = isCpt ? sdExp.cpt : sdExp.flex;
   let all = [...allHitters, ...allPitchers].filter(p => (p.salary||0) > 0);
+  // Team filtering via game cards (same as classic mode)
+  if (activeTeamIds.size > 0) all = all.filter(p => p.team_id != null && activeTeamIds.has(p.team_id));
   if (search) all = all.filter(p =>
     (p.name||'').toLowerCase().includes(search) || (p.team||'').toLowerCase().includes(search));
 
