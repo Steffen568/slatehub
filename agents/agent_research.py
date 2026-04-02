@@ -38,6 +38,8 @@ def _run_script(script: str, label: str, logger: RunLogger) -> bool:
 
 def run(logger: RunLogger) -> RunLogger:
     """Run post-contest research pipeline. Returns logger with results."""
+    from datetime import date, timedelta
+
     print(f"\n{'='*55}")
     print(f"  Agent 4 — Post-Contest Research")
     print(f"{'='*55}")
@@ -45,7 +47,11 @@ def run(logger: RunLogger) -> RunLogger:
     # Ensure actuals are loaded
     _run_script('load_actuals.py', 'Load Actual DK Points', logger)
 
-    # Run research analysis
-    _run_script('research_accuracy.py', 'Research — Accuracy Analysis', logger)
+    # Run research analysis with 7-day range for stronger backtesting sample
+    today = date.today()
+    range_start = str(today - timedelta(days=7))
+    range_end = str(today)
+    _run_script(f'research_accuracy.py --range {range_start} {range_end}',
+                'Research — Accuracy Analysis (7-day)', logger)
 
     return logger
