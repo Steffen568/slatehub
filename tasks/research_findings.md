@@ -202,3 +202,185 @@
 - CONTEST: Avg winner scores 175.3 pts — need high-ceiling correlated stacks
 - OWNERSHIP: MAE is 5.8% — needs significant model improvement
 - TRACKING: Run this analysis daily to build sample size — patterns stabilize after 2+ weeks
+
+## Research Findings — 2026-03-25, 2026-03-26, 2026-03-27, 2026-03-28, 2026-03-29, 2026-03-30, 2026-03-31, 2026-04-01
+
+**Projection**: MAE=5.49, Bias=-0.37, Hitter MAE=5.14, Pitcher MAE=8.64
+**Ownership**: MAE=5.53%, Bias=-1.56%
+**Pool**: MAE=60.96, Bias=+60.84
+**Contest**: Winner=175.29000000000002, Top1%=146.48999999999998
+
+### Predictive Diagnostics
+
+**Hitter Missing Predictors** (correlated with error but not in model):
+- `rbi` r=-0.117 (n=819)
+- `hr` r=-0.116 (n=819)
+- `r` r=-0.105 (n=819)
+- `pa` r=-0.100 (n=819)
+
+**Pitcher Missing Predictors** (correlated with error but not in model):
+- `bb9` r=+0.199 (n=106)
+- `g` r=-0.193 (n=106)
+- `gb_pct` r=+0.193 (n=106)
+
+**Optimal Context Weights**: Vegas=80% Park=5% Weather=15% (saves 0.03 MAE)
+
+**Archetype Biases:**
+- Power (ISO>.200): over-projected by 0.9 pts (n=172)
+
+**Recommendations:**
+- POOL: Best performing stack config is 4-3 — increase its weight in STACK_CONFIGS
+- POOL: Projection spread only 2.3 pts — diversify selection, don't over-rely on projection ranking
+- CONTEST: Avg Top 1% threshold is 146.5 pts across 10 contests
+- CONTEST: Avg cash line is 111.1 pts — pool floor should exceed this
+- CONTEST: Avg winner scores 175.3 pts — need high-ceiling correlated stacks
+- OWNERSHIP: MAE is 5.5% — needs significant model improvement
+- TRACKING: Run this analysis daily to build sample size — patterns stabilize after 2+ weeks
+
+## Research Findings — 2026-03-26, 2026-03-27, 2026-03-28, 2026-03-29, 2026-03-30, 2026-03-31, 2026-04-01
+
+**Projection**: MAE=5.49, Bias=-0.37, Hitter MAE=5.14, Pitcher MAE=8.64
+**Ownership**: MAE=5.83%, Bias=-1.76%
+**Pool**: MAE=59.59, Bias=+59.46
+**Contest**: Winner=175.29000000000002, Top1%=146.48999999999998
+
+### Predictive Diagnostics
+
+**Hitter Missing Predictors** (correlated with error but not in model):
+- `rbi` r=-0.107 (n=947)
+- `hr` r=-0.106 (n=947)
+- `r` r=-0.093 (n=947)
+- `pa` r=-0.092 (n=947)
+- `ld_pct` r=+0.064 (n=947)
+
+**Pitcher Missing Predictors** (correlated with error but not in model):
+- `bb9` r=+0.199 (n=106)
+- `g` r=-0.193 (n=106)
+- `gb_pct` r=+0.193 (n=106)
+- `whip` r=+0.095 (n=106)
+- `era` r=+0.093 (n=106)
+
+**Optimal Context Weights**: Vegas=80% Park=5% Weather=15% (saves 0.03 MAE)
+
+**Archetype Biases:**
+- Contact (K%<15%): under-projected by 0.9 pts (n=169)
+
+**Recommendations:**
+- POOL: Best performing stack config is 4-3 — increase its weight in STACK_CONFIGS
+- POOL: Projection spread only 3.1 pts — diversify selection, don't over-rely on projection ranking
+- CONTEST: Avg Top 1% threshold is 146.5 pts across 10 contests
+- CONTEST: Avg cash line is 111.1 pts — pool floor should exceed this
+- CONTEST: Avg winner scores 175.3 pts — need high-ceiling correlated stacks
+- OWNERSHIP: MAE is 5.8% — needs significant model improvement
+- TRACKING: Run this analysis daily to build sample size — patterns stabilize after 2+ weeks
+
+## Research Findings — 2026-03-26, 2026-03-27, 2026-03-28, 2026-03-29, 2026-03-30, 2026-03-31, 2026-04-01
+
+**Projection**: MAE=5.49, Bias=-0.37, Hitter MAE=5.14, Pitcher MAE=8.64
+**Ownership**: MAE=5.83%, Bias=-1.76%
+**Pool**: MAE=59.59, Bias=+59.46
+**Contest**: Winner=175.29000000000002, Top1%=146.48999999999998
+
+### Predictive Diagnostics
+
+**Hitter Missing Predictors** (correlated with error but not in model):
+- `rbi` r=-0.107 (n=947)
+- `hr` r=-0.106 (n=947)
+- `r` r=-0.093 (n=947)
+- `pa` r=-0.092 (n=947)
+- `ld_pct` r=+0.064 (n=947)
+
+**Pitcher Missing Predictors** (correlated with error but not in model):
+- `bb9` r=+0.199 (n=106)
+- `g` r=-0.193 (n=106)
+- `gb_pct` r=+0.193 (n=106)
+- `whip` r=+0.095 (n=106)
+- `era` r=+0.093 (n=106)
+
+**Optimal Context Weights**: Vegas=80% Park=5% Weather=15% (saves 0.03 MAE)
+
+**Archetype Biases:**
+- Contact (K%<15%): under-projected by 0.9 pts (n=169)
+
+**Recommendations:**
+- POOL: Best performing stack config is 4-3 — increase its weight in STACK_CONFIGS
+- POOL: Projection spread only 3.1 pts — diversify selection, don't over-rely on projection ranking
+- CONTEST: Avg Top 1% threshold is 146.5 pts across 10 contests
+- CONTEST: Avg cash line is 111.1 pts — pool floor should exceed this
+- CONTEST: Avg winner scores 175.3 pts — need high-ceiling correlated stacks
+- OWNERSHIP: MAE is 5.8% — needs significant model improvement
+- TRACKING: Run this analysis daily to build sample size — patterns stabilize after 2+ weeks
+
+## Research Findings — 2026-03-25, 2026-03-26, 2026-03-27, 2026-03-28, 2026-03-29, 2026-03-30, 2026-03-31, 2026-04-01
+
+**Projection**: MAE=5.49, Bias=-0.37, Hitter MAE=5.14, Pitcher MAE=8.64
+**Ownership**: MAE=5.53%, Bias=-1.56%
+**Pool**: MAE=60.96, Bias=+60.84
+**Contest**: Winner=175.29000000000002, Top1%=146.48999999999998
+
+### Predictive Diagnostics
+
+**Hitter Missing Predictors** (correlated with error but not in model):
+- `rbi` r=-0.107 (n=947)
+- `hr` r=-0.106 (n=947)
+- `r` r=-0.093 (n=947)
+- `pa` r=-0.092 (n=947)
+- `ld_pct` r=+0.064 (n=947)
+
+**Pitcher Missing Predictors** (correlated with error but not in model):
+- `bb9` r=+0.199 (n=106)
+- `g` r=-0.193 (n=106)
+- `gb_pct` r=+0.193 (n=106)
+- `whip` r=+0.095 (n=106)
+- `era` r=+0.093 (n=106)
+
+**Optimal Context Weights**: Vegas=80% Park=5% Weather=15% (saves 0.03 MAE)
+
+**Archetype Biases:**
+- Contact (K%<15%): under-projected by 0.9 pts (n=169)
+
+**Recommendations:**
+- POOL: Best performing stack config is 4-3 — increase its weight in STACK_CONFIGS
+- POOL: Projection spread only 2.3 pts — diversify selection, don't over-rely on projection ranking
+- CONTEST: Avg Top 1% threshold is 146.5 pts across 10 contests
+- CONTEST: Avg cash line is 111.1 pts — pool floor should exceed this
+- CONTEST: Avg winner scores 175.3 pts — need high-ceiling correlated stacks
+- OWNERSHIP: MAE is 5.5% — needs significant model improvement
+- TRACKING: Run this analysis daily to build sample size — patterns stabilize after 2+ weeks
+
+## Research Findings — 2026-03-26, 2026-03-27, 2026-03-28, 2026-03-29, 2026-03-30, 2026-03-31, 2026-04-01
+
+**Projection**: MAE=5.49, Bias=-0.35, Hitter MAE=5.14, Pitcher MAE=8.64
+**Ownership**: MAE=5.83%, Bias=-1.76%
+**Pool**: MAE=59.59, Bias=+59.46
+**Contest**: Winner=175.29000000000002, Top1%=146.48999999999998
+
+### Predictive Diagnostics
+
+**Hitter Missing Predictors** (correlated with error but not in model):
+- `hr` r=-0.108 (n=947)
+- `rbi` r=-0.107 (n=947)
+- `r` r=-0.093 (n=947)
+- `pa` r=-0.092 (n=947)
+- `ld_pct` r=+0.067 (n=947)
+
+**Pitcher Missing Predictors** (correlated with error but not in model):
+- `bb9` r=+0.199 (n=106)
+- `g` r=-0.193 (n=106)
+- `gb_pct` r=+0.193 (n=106)
+- `whip` r=+0.095 (n=106)
+- `era` r=+0.093 (n=106)
+
+**Optimal Context Weights**: Vegas=80% Park=5% Weather=15% (saves 0.03 MAE)
+
+**Archetype Biases:**
+- Contact (K%<15%): under-projected by 0.9 pts (n=169)
+
+**Recommendations:**
+- POOL: Best performing stack config is 4-3 — increase its weight in STACK_CONFIGS
+- POOL: Projection spread only 3.1 pts — diversify selection, don't over-rely on projection ranking
+- CONTEST: Avg Top 1% threshold is 146.5 pts across 10 contests
+- CONTEST: Avg cash line is 111.1 pts — pool floor should exceed this
+- CONTEST: Avg winner scores 175.3 pts — need high-ceiling correlated stacks
+- OWNERSHIP: MAE is 5.8% — needs significant model improvement
+- TRACKING: Run this analysis daily to build sample size — patterns stabilize after 2+ weeks
