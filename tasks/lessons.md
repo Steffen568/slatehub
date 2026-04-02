@@ -503,3 +503,33 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### Auto-fixed DK ID mismatches: Brandon Lowe, Carson Kelly, Christian Vazquez, Cole Young, David Hamilton, Dylan Carlson, Gabriel Arias, Jose Caballero, Jose Fernandez, Jose Ramirez, Julio Rodriguez, Luis Campusano, Miguel Vargas
 **What happened:** Pipeline auto-fixed 13 salary ID mismatch(es) in dk_salaries and added 3 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Low salary match rate in sanity check
+**What happened:** Only 31% of projected batters have a dk_salaries row for 2026-04-01
+**Rule:** Check that load_dk_salaries.py ran successfully and the validation gate passed.
+
+## Session 34 — Slate Grouping, SP Inflation, Diagnostics
+
+### DK slate grouping by start time is unreliable
+**What happened:** Main slate starting at 12:15 PM was labeled "early" because the code used time buckets (<13h = early). DK's actual main slate is the one with the most games regardless of time.
+**Rule:** Use DK API `GameCount` field to identify main slate (highest game count >= 6). Only label "turbo" if small slate starts within 2 hours of main.
+
+### sim_projections spread_mult was inflating ace pitchers by 25%
+**What happened:** Sale projected at 33.9 (actual ~22). The spread_mult formula `2.0 - era_ratio` boosted aces by up to 1.25x with no calibration haircut.
+**Rule:** sim_projections must apply SP calibration haircut (0.87-0.95) matching compute_projections, not an ace boost.
+
+### Stale locked DGs bleed games into active slates
+**What happened:** DK removes locked slates from API, but our dk_slate_games table kept those rows. Frontend showed extra games on active slates.
+**Rule:** Purge ALL slate_games for the season before upserting current data. Don't just clean DGs in the current API response.
+
+### Correlation with error does not mean a stat improves projections
+**What happened:** barrel_pct showed r=+0.18 correlation with error, but cross-validated incremental test showed it HURTS MAE when added. Same for avg_ev, hr, rbi.
+**Rule:** Always use train/test split incremental value test to validate new predictors. Correlation alone is misleading — stats already captured by the model show zero marginal value.
+
+### 4 dates is too thin for parameter weight tuning
+**What happened:** Park dampening (26%→5%) and platoon dampen (70% passthrough) both improved the backtest weight sweep but made live MAE marginally worse (+0.03).
+**Rule:** Need 2+ weeks (14+ dates, 3000+ matched players) before confidently tuning weights. Keep conservative changes only until sample grows.
+
+### sim_projections is the production engine, not compute_projections
+**What happened:** Fixed multipliers in compute_projections but they kept getting overwritten because sim_projections runs after and replaces all data.
+**Rule:** sim_projections.py is what the pipeline (agent_projections.py) actually calls. All projection changes must go in sim_projections.py.
