@@ -86,6 +86,10 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 **What happened:** Attempted to edit a file without reading it, causing the Edit tool to fail.
 **Rule:** Always `Read` the relevant section of a file before making any `Edit` call. For large files, read just the offset/lines needed.
 
+### Lineup builder slate selector must use dk_slate_games, not dk_salaries (Session 36)
+**What happened:** The lineup builder derived its slate list from `dk_salaries`, while `index.html` used `dk_slate_games`. When a slate (e.g. "late") existed in `dk_slate_games` but not yet in `dk_salaries`, games got misclassified — recurring bug across multiple sessions.
+**Rule:** Both pages must use `dk_slate_games` as the single source of truth for slate classification. The lineup builder now uses `_slateGameMap` + `getSlatesForGame()` (same logic as index.html) with a button bar instead of a dropdown. Never derive slate membership from `dk_salaries`.
+
 ### `_allSlates` structure changed in Session 22 — now objects, not strings
 **What happened:** Originally `_allSlates` was an array of slate label strings. After adding `contest_type`, it became an array of `{slate, contestType}` objects. Any code that treats elements as strings will break.
 **Rule:** Always destructure: `_allSlates.forEach(({ slate: s, contestType }) => ...)`.
@@ -549,3 +553,13 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### DK Showdown CSV has different layout than Classic (Session 35)
 **What happened:** Showdown "Edit Entries" CSV has instruction lines at top, pool columns at indices 0-8 (Position, Name+ID, Name, ID, Roster Position...). Classic has pool at indices 15-23. Hardcoded indices broke SD CSV import — all ID maps were empty, export produced blank lineups.
 **Rule:** Always detect CSV column positions dynamically by scanning for the header row containing "Name", "ID", "Roster Position". Never hardcode column indices.
+
+### load_reliever_stats.py failed during --stats run
+**What happened:**   File "C:\Users\Steffen's PC\AppData\Local\Programs\Python\Python312\Lib\site-packages\pybaseball\datasources\html_table_processor.py", line 74, in get_tabular_data_from_url
+    raise requests.exceptions.HTTPError(
+requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leaders-legacy.aspx'. Received status code 403
+**Rule:** Check that py -3.12 and all dependencies are installed. Check API availability.
+
+### Auto-fixed DK ID mismatches: Angel Martinez, Brandon Lowe, Carson Kelly, David Hamilton, Gabriel Arias, Ivan Herrera, Jacob Wilson, Jose Caballero, Jose Fernandez, Jose Ramirez, Josh Smith, Julio Rodriguez, Miguel Vargas, Will Smith
+**What happened:** Pipeline auto-fixed 14 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.

@@ -3759,6 +3759,10 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 .hbh-selectors{display:flex;gap:6px;align-items:center;}
 .hbh-select{background:var(--s2);border:1px solid var(--border2);color:var(--text2);font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:600;letter-spacing:.8px;padding:4px 8px;border-radius:4px;cursor:pointer;outline:none;max-width:200px;}
 .hbh-select:hover{border-color:var(--hi);color:var(--text);}
+.hbh-slate-buttons{display:flex;gap:3px;align-items:center;}
+.hbh-slate-btn{font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:3px 10px;background:var(--s2);color:var(--muted);border:1px solid var(--border2);border-radius:4px;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.hbh-slate-btn:hover{color:var(--text);border-color:var(--hi);}
+.hbh-slate-btn.active{background:var(--hi);color:#000;border-color:var(--hi);}
 .hbh-back{margin-left:auto;font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);text-decoration:none;padding:4px 10px;border:1px solid var(--border2);border-radius:4px;transition:all 0.15s;flex-shrink:0;}
 .hbh-back:hover{color:var(--text);background:var(--s3);}
 .hbh-mode-toggle{display:flex;border-radius:4px;overflow:hidden;border:1px solid var(--border2);flex-shrink:0;}
@@ -4152,7 +4156,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
   <div class="hbh-sep"></div>
   <div class="hbh-selectors">
     <select class="hbh-select" id="date-select"><option>Loading…</option></select>
-    <select class="hbh-select" id="slate-select"><option>Select slate</option></select>
+    <div class="hbh-slate-buttons" id="slate-buttons"></div>
     <button class="hbh-mode-btn" onclick="refreshPlayerData()" title="Refresh projections, lineups, and player data without reloading the page" style="font-size:11px;padding:3px 8px;">Refresh Data</button>
   </div>
   <div class="hbh-mode-toggle" style="margin-left:10px;">
@@ -4585,6 +4589,8 @@ let _games          = [];
 let _parkFactors    = {};
 let _weather        = {};
 let _allSlates      = [];
+let _slateGameMap   = {};   // "DATE|AWAY|HOME" → Set of slate labels (from dk_slate_games)
+let _activeSlate    = 'all';
 let _teamIdAbbrMap  = {};   // team_id → dk_salaries abbreviation (e.g. 139 → "SF")
 let dragPlayerId    = null;
 let dragRole        = null;   // 'cpt' | 'flex' | null — set during SD pool drag
@@ -4836,7 +4842,7 @@ async function batchIn(table, select, column, ids, extra) {
 // ── REFRESH DATA (no page reload) ────────────────────────────────────────────
 async function refreshPlayerData() {
   const date  = document.getElementById('date-select')?.value || 'all';
-  const slate = document.getElementById('slate-select')?.value;
+  const slate = _activeSlate;
   if (!slate) { showToast('Select a slate first'); return; }
   showToast('Refreshing data...');
   await loadPlayerPool(date, slate);
@@ -4854,33 +4860,68 @@ function parseDateFromSlate(slate) {
 }
 
 // ── DATE / SLATE LOADING ────────────────────────────────────────────────────
-async function loadDates() {
-  const { data: gameData } = await sb.from('games')
-    .select('game_date').gte('game_date','2025-01-01').order('game_date',{ascending:true});
 
-  // Paginate to get ALL rows (Supabase caps at 1000 per request)
-  let slateData = [], from = 0;
-  while (true) {
-    const { data: page } = await sb.from('dk_salaries')
-      .select('dk_slate,contest_type').range(from, from + 999);
-    if (!page || !page.length) break;
-    slateData = slateData.concat(page);
-    if (page.length < 1000) break;
-    from += 1000;
+// Normalize team abbreviations between dk_slate_games and games table
+function dkTeamNorm(t) { const m = {CHW:'CWS', OAK:'ATH', WAS:'WSH'}; return m[t] || t; }
+
+// Given a game object, return the Set of classic slate labels it belongs to (from dk_slate_games)
+function getSlatesForGame(g) {
+  const awayAb = teamAbbr(g.away_team) || '';
+  const homeAb = teamAbbr(g.home_team) || '';
+  const key = `${g.game_date}|${awayAb}|${homeAb}`;
+  const allSlates = _slateGameMap[key];
+  if (allSlates && allSlates.size > 0) {
+    const classicSlates = new Set([...allSlates].filter(s => !s.startsWith('sd_')));
+    if (classicSlates.size > 0) return classicSlates;
+    return new Set();
   }
+  // Fallback: time-based bucketing if dk_slate_games has no data for this game
+  if (!g.game_time_utc) return new Set(['main']);
+  const utcHour = new Date(g.game_time_utc).getUTCHours();
+  const etHour = ((utcHour - 4) + 24) % 24;
+  if (etHour < 13)  return new Set(['early']);
+  if (etHour < 17)  return new Set(['afternoon']);
+  if (etHour < 19.5) return new Set(['main']);
+  return new Set(['late']);
+}
 
-  // _allSlates: array of { slate, contestType } — deduplicated
+async function loadDates() {
+  // Load game dates and dk_slate_games in parallel
+  const [gameRes, sgRes, salRes] = await Promise.all([
+    sb.from('games').select('game_date, away_team, home_team, game_time_utc')
+      .gte('game_date','2025-01-01').order('game_date',{ascending:true}),
+    sb.from('dk_slate_games').select('dk_slate, away_team, home_team, start_time')
+      .eq('season', new Date().getFullYear()),
+    // Still need dk_salaries for _allSlates (SD slates + loadPlayerPool queries by dk_slate)
+    sb.from('dk_salaries').select('dk_slate,contest_type').limit(5000),
+  ]);
+
+  // Build _slateGameMap: "DATE|AWAY|HOME" → Set of slate labels (same as index.html)
+  _slateGameMap = {};
+  (sgRes.data || []).forEach(r => {
+    if (!r.start_time) return;
+    const utc = new Date(r.start_time);
+    const etMs = utc.getTime() - 4 * 3600000;
+    const etDate = new Date(etMs).toISOString().split('T')[0];
+    const key = `${etDate}|${dkTeamNorm(r.away_team)}|${dkTeamNorm(r.home_team)}`;
+    if (!_slateGameMap[key]) _slateGameMap[key] = new Set();
+    _slateGameMap[key].add(r.dk_slate);
+  });
+
+  // _allSlates still populated from dk_salaries (needed for SD slate names + pool queries)
   const seenSlates = new Map();
-  (slateData||[]).forEach(r => {
+  (salRes.data||[]).forEach(r => {
     if (r.dk_slate && !seenSlates.has(r.dk_slate))
       seenSlates.set(r.dk_slate, r.contest_type || 'classic');
   });
   _allSlates = [...seenSlates.entries()].map(([slate, contestType]) => ({ slate, contestType }))
     .sort((a,b) => a.slate.localeCompare(b.slate));
 
-  const gameDates  = new Set((gameData||[]).map(r=>r.game_date));
+  const gameDates  = new Set((gameRes.data||[]).map(r=>r.game_date));
   const slateDates = new Set();
   _allSlates.forEach(({ slate: s }) => { const d = parseDateFromSlate(s); if (d) slateDates.add(d); });
+  // Also add dates from dk_slate_games
+  Object.keys(_slateGameMap).forEach(k => { const d = k.split('|')[0]; if (d) slateDates.add(d); });
   const allDates   = [...new Set([...gameDates,...slateDates])].sort();
 
   if (!allDates.length) {
@@ -4888,11 +4929,9 @@ async function loadDates() {
     await loadSlates('all'); return;
   }
 
-  // Use local date (not UTC) so the slate doesn't roll over until actual midnight
   const now   = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
 
-  // Restrict picker to 3 days past → 5 days future
   const pastBound   = new Date(now); pastBound.setDate(pastBound.getDate() - 3);
   const futureBound = new Date(now); futureBound.setDate(futureBound.getDate() + 5);
   const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -4908,47 +4947,60 @@ async function loadDates() {
 }
 
 async function loadSlates(date) {
-  const orig = document.getElementById('slate-select');
-  const sel  = orig.cloneNode(false);
-  orig.parentNode.replaceChild(sel, orig);
-  sel.innerHTML = '<option>Loading…</option>';
+  const container = document.getElementById('slate-buttons');
+  const slateLabels = { all:'All', early:'Early', afternoon:'Afternoon', main:'Main', turbo:'Turbo', late:'Late', late_night:'Late Night' };
+  const slateOrder  = ['all', 'early', 'afternoon', 'main', 'turbo', 'late', 'late_night'];
 
-  // Filter by current contest mode so Classic mode never shows SD slates and vice versa
-  const wantType = _contestMode === 'showdown' ? 'showdown' : 'classic';
-  let pool = _allSlates.filter(({ contestType }) => contestType === wantType);
-
-  let matching;
-  if (date === 'all') {
-    matching = pool;
-  } else if (wantType === 'showdown') {
-    // Showdown slates have dates in their names
-    matching = pool.filter(({ slate: s }) => parseDateFromSlate(s) === date);
-  } else {
-    // Classic slates: check dk_slate_games to see which slates have games on this date
-    const { data: sgRows } = await sb.from('dk_slate_games')
-      .select('dk_slate, start_time')
-      .eq('season', new Date().getFullYear());
-    const classicSlatesForDate = new Set();
-    (sgRows || []).forEach(r => {
-      if (!r.start_time || r.dk_slate.startsWith('sd_')) return;
-      const utc = new Date(r.start_time);
-      const etDate = new Date(utc.getTime() - 4 * 3600000).toISOString().split('T')[0];
-      if (etDate === date) classicSlatesForDate.add(r.dk_slate);
-    });
-    matching = pool.filter(({ slate: s }) => classicSlatesForDate.has(s));
-  }
-  if (!matching.length) matching = pool;
-
-  if (!matching.length) {
-    sel.innerHTML = `<option>No ${wantType} slates</option>`;
+  if (_contestMode === 'showdown') {
+    // Showdown mode: use SD slates from dk_salaries (sd_ prefixed, date in name)
+    const sdSlates = _allSlates
+      .filter(({ contestType }) => contestType === 'showdown')
+      .filter(({ slate: s }) => date === 'all' || parseDateFromSlate(s) === date);
+    if (!sdSlates.length) {
+      container.innerHTML = '<span style="font-size:11px;color:var(--muted);">No SD slates</span>';
+      return;
+    }
+    container.innerHTML = sdSlates.map(({ slate: s }, i) =>
+      `<button class="hbh-slate-btn${i===0?' active':''}" data-slate="${s}" onclick="selectSlateBtn(this,'${s}')">${s}</button>`
+    ).join('');
+    _activeSlate = sdSlates[0].slate;
+    if (!lateSwapMode) await loadPlayerPool(date, _activeSlate);
     return;
   }
 
-  sel.innerHTML = matching.map(({ slate: s }) => `<option value="${s}">${s}</option>`).join('');
-  sel.addEventListener('change', () => { if (!lateSwapMode) loadPlayerPool(date, sel.value); });
-  // Skip loadPlayerPool in late-swap mode — buildPoolFromCSV handles the pool
+  // Classic mode: determine which slates exist for this date using dk_slate_games
+  // Load today's games to determine which slates are present
+  const { data: dayGames } = await sb.from('games')
+    .select('game_date, away_team, home_team, game_time_utc')
+    .eq('game_date', date);
+  const slatesPresent = new Set();
+  (dayGames || []).forEach(g => getSlatesForGame(g).forEach(s => slatesPresent.add(s)));
+
+  // Build buttons in standard order
+  container.innerHTML = '';
+  // Default to 'main' if available, otherwise first available slate
+  const defaultSlate = slatesPresent.has('main') ? 'main'
+    : slateOrder.find(s => s !== 'all' && slatesPresent.has(s)) || 'all';
+  slateOrder.forEach(s => {
+    if (s !== 'all' && !slatesPresent.has(s)) return;
+    const btn = document.createElement('button');
+    btn.className = 'hbh-slate-btn' + (s === defaultSlate ? ' active' : '');
+    btn.dataset.slate = s;
+    btn.textContent = slateLabels[s] || s;
+    btn.onclick = () => selectSlateBtn(btn, s);
+    container.appendChild(btn);
+  });
+  _activeSlate = defaultSlate;
+  if (!lateSwapMode) await loadPlayerPool(date, _activeSlate);
+}
+
+function selectSlateBtn(btn, slate) {
+  document.querySelectorAll('#slate-buttons .hbh-slate-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _activeSlate = slate;
   if (!lateSwapMode) {
-    await loadPlayerPool(date, matching[0].slate);
+    const date = document.getElementById('date-select')?.value || 'all';
+    loadPlayerPool(date, slate);
   }
 }
 
@@ -5000,14 +5052,16 @@ async function loadPlayerPool(date, slate) {
   const salByPid = {};
   let salaries   = [];
 
+  // When slate is "all", don't filter dk_salaries by slate label
+  const slateFilter = (slate && slate !== 'all') ? q => q.eq('dk_slate', slate) : q => q;
   const [pitcherSalRes, hitterSalRaw, dkPosRaw, rosterPosRaw] = await Promise.all([
     // All SP/RP on this slate
-    sb.from('dk_salaries').select('player_id,name,salary,position,team,dk_slate,dg_id')
-      .eq('dk_slate', slate).limit(3000),
+    slateFilter(sb.from('dk_salaries').select('player_id,name,salary,position,team,dk_slate,dg_id'))
+      .limit(3000),
     // Hitters via lineup player_ids — current slate only (prevents stale team tags from old entries)
     starterPids.length
       ? batchIn('dk_salaries','player_id,name,salary,position,team,dk_slate','player_id',starterPids,
-          q => q.eq('dk_slate', slate))
+          slate && slate !== 'all' ? q => q.eq('dk_slate', slate) : undefined)
       : Promise.resolve([]),
     // DK position + salary from ANY slate — positional fallback + salary fallback for players
     // not yet in today's slate (spring training roster churn, afternoon vs main DG mismatch, etc.)
@@ -5559,32 +5613,9 @@ async function loadPlayerPool(date, slate) {
     p.opp_team_abbr = _teamIdAbbrMap[oppTeamId] || teamAbbr(isHome ? game.away_team : game.home_team);
   });
 
-  // Filter game strip to only games in this DK slate (uses dk_slate_games table)
-  // Match by slate label + start_time date to avoid cross-day DG collisions
+  // Filter game strip to only games in this DK slate (uses pre-loaded _slateGameMap)
   if (slate && slate !== 'all' && !lateSwapMode) {
-    try {
-      const { data: slateGames } = await sb.from('dk_slate_games')
-        .select('away_team, home_team, start_time')
-        .eq('dk_slate', slate);
-      if (slateGames && slateGames.length) {
-        // Filter dk_slate_games rows to only those whose ET game date matches effectiveDate
-        const matchingRows = slateGames.filter(sg => {
-          if (!sg.start_time) return false;
-          const utc = new Date(sg.start_time);
-          const etMs = utc.getTime() - 4 * 3600000;
-          const etDate = new Date(etMs).toISOString().split('T')[0];
-          return etDate === effectiveDate;
-        });
-        if (matchingRows.length) {
-          const slateMatchups = new Set(matchingRows.map(sg => `${sg.away_team}|${sg.home_team}`));
-          _games = _games.filter(g => {
-            const awayAb = teamAbbr(g.away_team) || _teamIdAbbrMap[g.away_team_id] || '';
-            const homeAb = teamAbbr(g.home_team) || _teamIdAbbrMap[g.home_team_id] || '';
-            return slateMatchups.has(`${awayAb}|${homeAb}`);
-          });
-        }
-      }
-    } catch(e) { console.warn('[SlateGames] Filter failed:', e); }
+    _games = _games.filter(g => getSlatesForGame(g).has(slate));
   }
   // SD mode: auto-exclude players with no/sub-1pt projection (unless user overrode)
   if (_contestMode === 'showdown') {
@@ -7924,8 +7955,7 @@ let _contestPoolFieldMult = 1;
 
 async function loadPoolFromDB() {
   // Determine which slate is active
-  const slateEl = document.getElementById('slate-select');
-  const slate = slateEl?.value || 'main';
+  const slate = _activeSlate || 'main';
   const dateEl = document.getElementById('date-select');
   const today = dateEl?.value || new Date().toISOString().split('T')[0];
   console.warn(`[loadPoolFromDB] Loading slate="${slate}" for date=${today}`);
