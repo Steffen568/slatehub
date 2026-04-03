@@ -6820,7 +6820,8 @@ function renderExposure() {
         const pct    = +(r.count / total * 100).toFixed(0);
         const pc     = posColor(r.pos);
         const barClr = pct > 66 ? '#4ade80' : pct > 33 ? '#fbbf24' : 'var(--hi)';
-        const cap    = expTargets[r.id];
+        const expKey = (isSD && r.role) ? `${r.role}_${r.id}` : r.id;
+        const cap    = expTargets[expKey] ?? (isSD ? expTargets[r.id] : undefined);
         const capped = cap != null && pct > cap;
         const tc     = r.team ? abbrColor(r.team) : null;
         const teamTag = tc ? `<span class="team-tag" style="background:${tc.bg};color:${tc.tx};font-size:9px;">${r.team}</span>` : '';
@@ -6836,20 +6837,20 @@ function renderExposure() {
           <td style="text-align:center;">
             <input type="number" class="exp-cap-input" min="1" max="100" placeholder="—"
               value="${cap != null ? cap : ''}"
-              oninput="setExpTarget(${r.id},this.value)"
+              oninput="setExpTarget('${expKey}',this.value)"
               style="width:48px;"
-              title="Max exposure % for this player">
+              title="Max ${isSD && r.role ? (r.role==='cpt'?'CPT':'FLEX')+' ' : ''}exposure % for this player">
           </td>
         </tr>`;
       }).join('')}</tbody>
     </table>`;
 }
 
-function setExpTarget(pid, val) {
+function setExpTarget(key, val) {
   const n = parseInt(val);
-  if (!isNaN(n) && n >= 1 && n <= 100) expTargets[pid] = n;
-  else delete expTargets[pid];
-  renderPool();
+  if (!isNaN(n) && n >= 1 && n <= 100) expTargets[key] = n;
+  else delete expTargets[key];
+  saveSettings(); renderPool();
 }
 
 // ── EXPOSURE TABS ─────────────────────────────────────────────────────────────
