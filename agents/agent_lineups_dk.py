@@ -24,15 +24,17 @@ LINEUP_DK_SCRIPTS_PRE_GATE = [
     ('load_dk_salaries.py',   'DK Salaries'),
 ]
 LINEUP_DK_SCRIPTS_POST_GATE = [
-    ('load_odds.py',    'Odds'),
-    ('load_weather.py', 'Weather'),
+    ('load_odds.py',           'Odds'),
+    ('load_pitcher_props.py',  'Pitcher Props'),
+    ('load_weather.py',        'Weather'),
 ]
 
-# Quick mode: only schedule + weather + projected lineups
+# Quick mode: only schedule + weather + projected lineups + pitcher props
 QUICK_SCRIPTS = [
-    ('load_schedule.py',      'Schedule & Lineups'),
-    ('load_lineups_rg.py',    'RotoGrinders Projected Lineups'),
-    ('load_weather.py',       'Weather'),
+    ('load_schedule.py',        'Schedule & Lineups'),
+    ('load_lineups_rg.py',      'RotoGrinders Projected Lineups'),
+    ('load_weather.py',         'Weather'),
+    ('load_pitcher_props.py',   'Pitcher Props'),
 ]
 
 

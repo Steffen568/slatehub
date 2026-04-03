@@ -158,7 +158,18 @@ def marcel_pitcher(stats_by_season: dict, current_season: int) -> dict:
         (current_season - 2, 3),
     ]
 
-    def weighted_stat(col, league_avg, reg_ip=80):
+    # Scale regression based on prior-year sample size.
+    # Pitchers with 150+ IP last year need less regression toward league avg.
+    # Default 80 IP regression; with 180 IP prior year, drops to ~40 IP.
+    prior = stats_by_season.get(current_season - 1)
+    prior_ip = safe(prior.get('ip'), 0) if prior else 0
+    base_reg = 80
+    if prior_ip >= 100:
+        base_reg = max(30, base_reg - (prior_ip - 100) * 0.5)
+
+    def weighted_stat(col, league_avg, reg_ip=None):
+        if reg_ip is None:
+            reg_ip = base_reg
         num = reg_ip * league_avg
         den = float(reg_ip)
         for yr, wt in weights:
@@ -175,7 +186,8 @@ def marcel_pitcher(stats_by_season: dict, current_season: int) -> dict:
             den += ip * wt
         return num / den if den > reg_ip else league_avg
 
-    k_pct  = clip(weighted_stat('k_pct',  LEAGUE_AVG_K_PCT, reg_ip=120), 0.10, 0.40)
+    k_reg = max(40, int(base_reg * 1.5))  # K% needs more regression, but scaled down too
+    k_pct  = clip(weighted_stat('k_pct',  LEAGUE_AVG_K_PCT, reg_ip=k_reg), 0.10, 0.40)
     bb_pct = clip(weighted_stat('bb_pct', LEAGUE_AVG_BB_PCT),             0.04, 0.18)
     hr9    = clip(weighted_stat('hr9',    LEAGUE_AVG_HR9),                0.30, 3.00)
     babip  = clip(weighted_stat('babip',  LEAGUE_AVG_BABIP),              0.22, 0.36)
@@ -392,29 +404,49 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
 def sim_pitcher_game(talent: dict, opp_quality: float,
                      park: dict, weather: dict, odds: dict,
                      is_home: bool, n_sims: int,
-                     rng: np.random.Generator) -> np.ndarray:
+                     rng: np.random.Generator,
+                     vegas_ip: float = None,
+                     vegas_ks: float = None) -> np.ndarray:
     """
     Simulate n_sims starts for one pitcher. Returns array of DK points per sim.
 
     Simulates innings pitched, strikeouts, walks, hits, earned runs, and win
     decisions using pitcher talent, opposing lineup quality, park, weather.
+    Vegas IP and K lines are used as anchors when available.
     """
     PA_PER_IP = 4.3
+    VEGAS_WEIGHT = 0.55  # how much we trust Vegas vs our talent model
 
-    base_ip = talent['ip_per_gs']
-    # Opposing lineup quality adjusts IP (strong lineups → shorter outings)
-    ip_adj = clip(1.0 + (1.0 - opp_quality) * 0.30, 0.90, 1.10)
-    proj_ip = base_ip * ip_adj
-
-    # K/BB/Hit rates
+    # Park + weather factors (our edge — granular env data Vegas doesn't fully price)
     park_k   = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
     park_bb  = safe(park.get('bb_factor'), 100) / 100.0 if park else 1.0
     park_hr  = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hr = weather_hr_mult(weather)
 
-    # Adjust rates by opposing lineup quality
-    k_rate  = clip(talent['k_pct'] * (1.0 + (1.0 - opp_quality) * 0.35) * park_k, 0.10, 0.45)
+    # ── IP projection: blend Vegas + talent ─────────────────────────────────
+    # Talent-based IP (matchup-adjusted)
+    talent_ip = talent['ip_per_gs'] * clip(1.0 + (1.0 - opp_quality) * 0.30, 0.90, 1.10)
+    if vegas_ip:
+        proj_ip = vegas_ip * VEGAS_WEIGHT + talent_ip * (1.0 - VEGAS_WEIGHT)
+    else:
+        proj_ip = talent_ip
+
+    # ── K rate: blend Vegas + talent ────────────────────────────────────────
+    # Talent-based K rate (matchup + park adjusted)
+    talent_k_rate = talent['k_pct'] * (1.0 + (1.0 - opp_quality) * 0.35) * park_k
+    if vegas_ks and proj_ip > 0:
+        # Derive Vegas-implied K rate from expected Ks / expected batters faced
+        vegas_bf = proj_ip * PA_PER_IP
+        vegas_k_rate = vegas_ks / vegas_bf if vegas_bf > 0 else talent_k_rate
+        # Blend, then apply park K factor as env edge on top
+        blended_k = vegas_k_rate * VEGAS_WEIGHT + talent_k_rate * (1.0 - VEGAS_WEIGHT)
+        # Park K factor: apply as deviation from neutral (1.0)
+        # Vegas already partially prices park, so apply only the delta
+        park_k_edge = 1.0 + (park_k - 1.0) * 0.5  # half the park effect (Vegas knows some of it)
+        k_rate = clip(blended_k * park_k_edge, 0.10, 0.45)
+    else:
+        k_rate = clip(talent_k_rate, 0.10, 0.45)
     bb_rate = clip(talent['bb_pct'] * (1.0 + (opp_quality - 1.0) * 0.20) * park_bb, 0.03, 0.16)
     contact_rate = max(0.15, 1.0 - k_rate - bb_rate)
 
@@ -523,13 +555,6 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
         is_cgso.astype(float) * 3.0 +
         is_nh.astype(float) * 5.0
     )
-
-    # SP calibration: skill-scaled haircut matching compute_projections.py.
-    # Aces (low ERA) get lighter haircut (~5%), back-end starters get heavier (~13%).
-    # At league-avg ERA (3.90): calibration ~ 0.90.
-    era_ratio = clip(era_anchor / LEAGUE_AVG_XFIP, 0.65, 1.55)
-    sp_calibration = clip(0.87 + 0.03 * era_ratio, 0.87, 0.95)
-    dk_pts = dk_pts * sp_calibration
 
     # Ground ball rate adjustment: high GB% pitchers under-perform DK projections
     # because they get fewer Ks (less DK upside) and rely on BABIP-dependent contact outs.
@@ -648,11 +673,26 @@ def fetch_data(target_date: str) -> dict:
         ).in_('game_pk', game_pks).execute().data or []
         weather = {r['game_pk']: r for r in rows}
 
+    # Pitcher props (Vegas IP and K lines)
+    pitcher_props = {}
+    if game_pks:
+        try:
+            rows = sb.table('pitcher_props').select(
+                'game_pk,player_id,implied_ip,implied_ks'
+            ).in_('game_pk', game_pks).execute().data or []
+            for r in rows:
+                pitcher_props[r['player_id']] = r
+            if pitcher_props:
+                print(f"  Pitcher props: {len(pitcher_props)} lines loaded")
+        except Exception:
+            pass  # table may not exist yet
+
     return {
         'games': games, 'lineups': lineups,
         'batter_stats': batter_stats, 'pitcher_stats': pitcher_stats,
         'batter_splits': batter_splits, 'odds': odds,
         'park_factors': park_factors, 'weather': weather,
+        'pitcher_props': pitcher_props,
         '_reverse_remap': reverse_remap,
     }
 
@@ -951,9 +991,15 @@ def run():
                 opp_team_id, sp_hand, odds_row, is_home
             )
 
+            # Vegas pitcher props (IP and K lines)
+            props = data.get('pitcher_props', {}).get(sp_id)
+            v_ip = safe(props.get('implied_ip')) if props else None
+            v_ks = safe(props.get('implied_ks')) if props else None
+
             dk_dist = sim_pitcher_game(
                 talent, opp_qual, park_row, wx_row, odds_row,
-                is_home, n_sims, rng
+                is_home, n_sims, rng,
+                vegas_ip=v_ip, vegas_ks=v_ks
             )
 
             mean   = float(np.mean(dk_dist))
@@ -966,10 +1012,12 @@ def run():
 
             # Compute expected component values for transparency
             PA_PER_IP = 4.3
-            ip_adj = clip(1.0 + (1.0 - opp_qual) * 0.30, 0.90, 1.10)
-            exp_ip = talent['ip_per_gs'] * ip_adj
+            VW = 0.55  # match VEGAS_WEIGHT in sim_pitcher_game
+            talent_ip = talent['ip_per_gs'] * clip(1.0 + (1.0 - opp_qual) * 0.30, 0.90, 1.10)
+            exp_ip = (v_ip * VW + talent_ip * (1.0 - VW)) if v_ip else talent_ip
             exp_pa = exp_ip * PA_PER_IP
-            exp_ks = exp_pa * talent['k_pct'] * clip(1.0 + (1.0 - opp_qual) * 0.35, 0.85, 1.18)
+            talent_ks = exp_pa * talent['k_pct'] * clip(1.0 + (1.0 - opp_qual) * 0.35, 0.85, 1.18)
+            exp_ks = (v_ks * VW + talent_ks * (1.0 - VW)) if v_ks else talent_ks
             exp_bb = exp_pa * talent['bb_pct'] * clip(1.0 + (opp_qual - 1.0) * 0.20, 0.88, 1.15)
             era_anchor = talent['xfip'] * 0.50 + talent['siera'] * 0.50
             park_hr_f = safe(park_row.get('hr_factor'), 100) / 100.0 if park_row else 1.0
