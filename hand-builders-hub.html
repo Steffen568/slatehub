@@ -6145,6 +6145,28 @@ function applyBoost(pid) {
 function applyAllBoosts() {
   Object.keys(projBoosts).forEach(pid => applyBoost(+pid));
 }
+function editSDPlayerExp(pid, role, td) {
+  const key = `${role}_${pid}`;
+  const cur = expTargets[key] ?? expTargets[pid] ?? '';
+  td.innerHTML = `<input type="number" step="1" min="0" max="100" value="${cur}"
+    style="width:46px;font-size:11px;background:var(--s3);color:#a78bfa;border:1px solid #a78bfa;border-radius:3px;padding:1px 4px;text-align:right;"
+    onblur="saveSDPlayerExp(${pid},'${role}',this)"
+    onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape'){delete expTargets['${key}'];renderPool();}"
+    onclick="event.stopPropagation()">`;
+  const inp = td.querySelector('input'); inp.focus(); inp.select();
+}
+function saveSDPlayerExp(pid, role, input) {
+  const val = parseInt(input.value);
+  const key = `${role}_${pid}`;
+  if (!isNaN(val) && val >= 0 && val <= 100) {
+    expTargets[key] = val;
+    // Clear the generic key if role-specific ones now exist
+    delete expTargets[pid];
+  } else {
+    delete expTargets[key];
+  }
+  saveSettings(); renderPool();
+}
 function toggleExcludeSD(e, pid, role) {
   e.stopPropagation();
   const set = role === 'cpt' ? excludedCpt : excludedFlex;
@@ -11344,7 +11366,7 @@ function renderSDPlayerRow(p, expPct, role) {
     <td class="pt-proj" onclick="event.stopPropagation();editPlayerProj(${p.player_id},this)" title="Click to override projection" style="cursor:pointer;${projOv?'color:#fbbf24;font-weight:700;':''}">${proj != null ? Number(proj).toFixed(1) : '—'}</td>
     <td class="pt-val">${value}</td>
     <td style="color:${expColor};font-weight:700;font-family:'Barlow Condensed',sans-serif;">${expPct != null ? expPct.toFixed(0)+'%' : '—'}</td>
-    <td onclick="event.stopPropagation();editPlayerExp(${p.player_id},this)" title="Click to set max exposure %" style="cursor:pointer;color:${expTargets[p.player_id]!=null?'#a78bfa':'var(--muted)'};font-weight:${expTargets[p.player_id]!=null?'700':'400'};">${expTargets[p.player_id]!=null?expTargets[p.player_id]+'%':'—'}</td>
+    <td onclick="event.stopPropagation();editSDPlayerExp(${p.player_id},'${role}',this)" title="Click to set max ${isCpt?'CPT':'FLEX'} exposure %" style="cursor:pointer;color:${(expTargets[`${role}_${p.player_id}`]??expTargets[p.player_id])!=null?'#a78bfa':'var(--muted)'};font-weight:${(expTargets[`${role}_${p.player_id}`]??expTargets[p.player_id])!=null?'700':'400'};">${(expTargets[`${role}_${p.player_id}`]??expTargets[p.player_id])!=null?(expTargets[`${role}_${p.player_id}`]??expTargets[p.player_id])+'%':'—'}</td>
   </tr>`;
 }
 
@@ -11531,12 +11553,20 @@ function generateLineups_Showdown() {
       if ((cptAppearCount[pid] || 0) >= globalMaxCpt)  cptExcluded.add(pid);
       if ((flexAppearCount[pid] || 0) >= globalMaxFlex) flexExcluded.add(pid);
     }
-    // Per-player exposure caps (apply to both roles)
-    Object.entries(expTargets).forEach(([pid, capPct]) => {
-      const playerMax = Math.max(1, Math.ceil(N * capPct / 100));
-      if ((cptAppearCount[+pid] || 0) >= playerMax)  cptExcluded.add(+pid);
-      if ((flexAppearCount[+pid] || 0) >= playerMax) flexExcluded.add(+pid);
-    });
+    // Per-player exposure caps — SD mode uses role-specific keys (cpt_PID / flex_PID)
+    for (const p of pool) {
+      const pid = p.player_id;
+      const cptCap  = expTargets[`cpt_${pid}`]  ?? expTargets[pid];
+      const flexCap = expTargets[`flex_${pid}`] ?? expTargets[pid];
+      if (cptCap != null) {
+        const max = Math.max(1, Math.ceil(N * cptCap / 100));
+        if ((cptAppearCount[pid] || 0) >= max) cptExcluded.add(pid);
+      }
+      if (flexCap != null) {
+        const max = Math.max(1, Math.ceil(N * flexCap / 100));
+        if ((flexAppearCount[pid] || 0) >= max) flexExcluded.add(pid);
+      }
+    }
     // A player is fully excluded only if capped in BOTH roles
     const capExcluded = new Set();
     for (const pid of cptExcluded) {
