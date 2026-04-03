@@ -533,3 +533,19 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 ### sim_projections is the production engine, not compute_projections
 **What happened:** Fixed multipliers in compute_projections but they kept getting overwritten because sim_projections runs after and replaces all data.
 **Rule:** sim_projections.py is what the pipeline (agent_projections.py) actually calls. All projection changes must go in sim_projections.py.
+
+### Auto-fixed DK ID mismatches: Jose Fernandez, Mike Yastrzemski
+**What happened:** Pipeline auto-fixed 2 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### compute_projections.py is legacy — do not modify (Session 35)
+**What happened:** User confirmed sim_projections.py and sim_ownership.py are the primary projection system. compute_projections.py is frozen legacy code.
+**Rule:** Never update or run compute_projections.py unless explicitly told. All projection work goes in sim_projections.py / sim_ownership.py.
+
+### SD slate labels used alphabetical team order instead of away@home (Session 35)
+**What happened:** load_dk_salaries.py built SD slate labels with `sorted(teams)` → `sd_KC@MIN`. Frontend assumed away@home format → game lookup failed → no projections → empty pool.
+**Rule:** SD slate labels must use actual away@home order from DK competition name, not alphabetical sort.
+
+### DK Showdown CSV has different layout than Classic (Session 35)
+**What happened:** Showdown "Edit Entries" CSV has instruction lines at top, pool columns at indices 0-8 (Position, Name+ID, Name, ID, Roster Position...). Classic has pool at indices 15-23. Hardcoded indices broke SD CSV import — all ID maps were empty, export produced blank lineups.
+**Rule:** Always detect CSV column positions dynamically by scanning for the header row containing "Name", "ID", "Roster Position". Never hardcode column indices.
