@@ -86,6 +86,22 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 **What happened:** Attempted to edit a file without reading it, causing the Edit tool to fail.
 **Rule:** Always `Read` the relevant section of a file before making any `Edit` call. For large files, read just the offset/lines needed.
 
+### FanGraphs blocked by Cloudflare — pybaseball unusable (Session 36)
+**What happened:** FanGraphs added Cloudflare JS challenge protection. pybaseball 2.2.7 uses the legacy endpoint and gets 403. curl_cffi also fails. Issue #479 on pybaseball GitHub is open with no fix.
+**Rule:** For FanGraphs data, use manual CSV download or wait for pybaseball fix. Baseball Savant still works but lacks FIP/xFIP/SIERA/Stuff+.
+
+### Pool generator must use leverage-based team selection, not implied totals (Session 36)
+**What happened:** Initial plan was to weight team selection by implied total. But high-implied teams are chalk — everyone stacks them. GPPs are won by leverage (ceiling / ownership), not raw upside.
+**Rule:** Weight team selection by `team_ceiling / team_ownership` (leverage score). This favors underowned high-upside stacks over chalk. Never weight by implied total alone — that builds the same lineups as the field.
+
+### Backtest: lineup-level projection correlation near zero (Session 36)
+**What happened:** Backtest of 33K lineups showed r=0.005 correlation between projected and actual lineup scores, with +15.9 pts over-projection bias. 5-man stacks dominate winners (63.7%). 5-2 is the best config (24.2% of winners).
+**Rule:** Pool construction should optimize for ceiling/upside, not mean projection. STACK_CONFIGS reweighted: 5-2 (30%), 5-naked (20%), 5-3 (20%), 4-3 (30%). 4-2-2 removed (absent from winners). User pool scoring blends 15% toward ceiling.
+
+### Pitcher projections need Vegas props as anchors (Session 36)
+**What happened:** Pitcher projections deviated wildly from industry because IP was based on historical IP/GS average and K rate was purely stat-derived. Neither accounted for current matchup or market consensus.
+**Rule:** Use Vegas pitcher props (IP outs + strikeouts) as anchors, blended 55% Vegas / 45% talent model. Fetch from Odds API first, PrizePicks as fallback. Apply park/weather as edge multipliers on top. Props are in `pitcher_props` table, loaded by `load_pitcher_props.py`.
+
 ### Lineup builder slate selector must use dk_slate_games, not dk_salaries (Session 36)
 **What happened:** The lineup builder derived its slate list from `dk_salaries`, while `index.html` used `dk_slate_games`. When a slate (e.g. "late") existed in `dk_slate_games` but not yet in `dk_salaries`, games got misclassified — recurring bug across multiple sessions.
 **Rule:** Both pages must use `dk_slate_games` as the single source of truth for slate classification. The lineup builder now uses `_slateGameMap` + `getSlatesForGame()` (same logic as index.html) with a button bar instead of a dropdown. Never derive slate membership from `dk_salaries`.

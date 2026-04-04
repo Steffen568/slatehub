@@ -33,6 +33,7 @@ POS_SLOTS = {'SP': 2, 'C': 1, '1B': 1, '2B': 1, '3B': 1, 'SS': 1, 'OF': 3}
 POS_PRIORITY = ['C', 'SS', '2B', '3B', '1B', 'OF', 'SP']
 SALARY_CAP = 50000
 SALARY_FLOOR = 48500
+UPSIDE_BLEND = 0.15    # user pool scoring: 15% weight toward ceiling (P90)
 
 def safe(val, default=None):
     if val is None: return default
@@ -214,13 +215,16 @@ def build_player_pool(data):
 # ── Greedy Lineup Builder ────────────────────────────────────────────────────
 
 STACK_CONFIGS = [
-    {'name': '5-3',       'main': 5, 'subs': [3]},    # best correlated config
-    {'name': '5-3',       'main': 5, 'subs': [3]},    # double-weighted (top performer)
+    {'name': '5-2',       'main': 5, 'subs': [2]},    # 30% — best winner config (backtest)
     {'name': '5-2',       'main': 5, 'subs': [2]},
+    {'name': '5-2',       'main': 5, 'subs': [2]},
+    {'name': '5-3',       'main': 5, 'subs': [3]},    # 20%
+    {'name': '5-3',       'main': 5, 'subs': [3]},
+    {'name': '5-naked',   'main': 5, 'subs': []},     # 20% — over-represented in winners
     {'name': '5-naked',   'main': 5, 'subs': []},
+    {'name': '4-3',       'main': 4, 'subs': [3]},    # 30% — consistent performer
     {'name': '4-3',       'main': 4, 'subs': [3]},
-    {'name': '4-3',       'main': 4, 'subs': [3]},    # double-weighted (2nd best)
-    {'name': '4-2-2',     'main': 4, 'subs': [2, 2]},
+    {'name': '4-3',       'main': 4, 'subs': [3]},
 ]
 
 def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
@@ -352,8 +356,9 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                         return None
                 pick = fallback[-1]  # cheapest
             else:
-                # Weighted random from top 3
-                top = candidates[:3]
+                # Tighter selection for SP (quality matters more), wider for hitters
+                top_k = 2 if pos == 'SP' else 3
+                top = candidates[:top_k]
                 weights = np.array([max(s, 0.1) for _, s, _ in top])
                 weights /= weights.sum()
                 pick_idx = rng.choice(len(top), p=weights)
@@ -435,7 +440,8 @@ def sample_noisy_scores(pool, rng, mode='user'):
         P_W_GAME, P_W_TEAM, P_W_INDIV = -0.30, 0.15, 0.94
 
         for i, p in enumerate(pool):
-            mean = p['proj']
+            # Blend toward ceiling for GPP upside
+            mean = p['proj'] * (1 - UPSIDE_BLEND) + p['ceiling'] * UPSIDE_BLEND
             sd = (p['ceiling'] - p['floor']) / 3.3 if p['ceiling'] > p['floor'] else max(mean * 0.20, 0.5)
             sd = max(sd, 0.5)
 
@@ -476,6 +482,24 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None):
     # Teams that can support 3-man sub stacks
     viable_3sub = [t for t, hs in team_hitters.items() if len(hs) >= 3]
 
+    # Leverage-based team weighting: ceiling / ownership
+    # High-ceiling + low-ownership teams get more lineups (GPP leverage)
+    team_leverage = {}
+    for t in viable_teams:
+        hitters = team_hitters[t]
+        ceiling_sum = sum(h.get('ceiling', h['proj'] * 1.5) for h in hitters)
+        own_sum = sum(h.get('ownership', 5.0) for h in hitters)
+        team_leverage[t] = ceiling_sum / max(own_sum, 5.0)
+    lev_arr = np.array([team_leverage.get(t, 1.0) ** 1.3 for t in viable_teams])
+    team_weights = lev_arr / lev_arr.sum()
+    # Also compute for viable_5
+    lev_5_arr = np.array([team_leverage.get(t, 1.0) ** 1.3 for t in viable_5]) if viable_5 else None
+    team_5_weights = lev_5_arr / lev_5_arr.sum() if lev_5_arr is not None and len(lev_5_arr) else None
+
+    # Log leverage scores
+    lev_sorted = sorted(team_leverage.items(), key=lambda x: x[1], reverse=True)
+    print(f"    Team leverage (ceiling/own): {', '.join(f'{t}={v:.1f}' for t, v in lev_sorted[:8])}")
+
     lineups = []
     seen = set()
     attempts = 0
@@ -483,8 +507,11 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None):
     config_idx = 0
 
     while len(lineups) < n_lineups and attempts < max_attempts:
-        # Round-robin main team + stack config
-        main_team = viable_teams[attempts % len(viable_teams)]
+        # First cycle: round-robin for coverage; then leverage-weighted
+        if attempts < len(viable_teams):
+            main_team = viable_teams[attempts % len(viable_teams)]
+        else:
+            main_team = rng.choice(viable_teams, p=team_weights)
         config = STACK_CONFIGS[config_idx % len(STACK_CONFIGS)]
         config_idx += 1
         attempts += 1
