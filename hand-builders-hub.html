@@ -4878,8 +4878,8 @@ function getSlatesForGame(g) {
   }
   // Fallback: time-based bucketing if dk_slate_games has no data for this game
   if (!g.game_time_utc) return new Set(['main']);
-  const utcHour = new Date(g.game_time_utc).getUTCHours();
-  const etHour = ((utcHour - 4) + 24) % 24;
+  const fbUtcHour = new Date(g.game_time_utc).getUTCHours();
+  const etHour = ((fbUtcHour - 4) + 24) % 24;
   if (etHour < 13)  return new Set(['early']);
   if (etHour < 17)  return new Set(['afternoon']);
   if (etHour < 19.5) return new Set(['main']);
