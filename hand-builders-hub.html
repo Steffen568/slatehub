@@ -4973,11 +4973,8 @@ async function loadSlates(date) {
   const { data: dayGames } = await sb.from('games')
     .select('game_date, away_team, home_team, game_time_utc')
     .eq('game_date', date);
-  const slatesFromGames = new Set();
-  (dayGames || []).forEach(g => getSlatesForGame(g).forEach(s => slatesFromGames.add(s)));
-  // Only show slates that also have dk_salaries data (DG must be open on DK)
-  const salarySlates = new Set(_allSlates.filter(({contestType}) => contestType === 'classic').map(({slate}) => slate));
-  const slatesPresent = new Set([...slatesFromGames].filter(s => salarySlates.has(s)));
+  const slatesPresent = new Set();
+  (dayGames || []).forEach(g => getSlatesForGame(g).forEach(s => slatesPresent.add(s)));
 
   // Build buttons in standard order
   container.innerHTML = '';
