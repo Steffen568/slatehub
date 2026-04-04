@@ -3949,7 +3949,8 @@ function getSlatesForGame(g) {
   // Check dk_slate_games map first — a game can be on multiple slates
   const awayAb = teamAbbr(g.away_team) || '';
   const homeAb = teamAbbr(g.home_team) || '';
-  const key = `${g.game_date}|${awayAb}|${homeAb}`;
+  const utcHour = g.game_time_utc ? new Date(g.game_time_utc).getUTCHours() : '';
+  const key = `${g.game_date}|${awayAb}|${homeAb}|${utcHour}`;
   const allSlates = slateGameMap[key];
   if (allSlates && allSlates.size > 0) {
     // Return only classic slates (not showdown sd_ prefixed ones)
@@ -3972,8 +3973,8 @@ function buildSlateButtons(games) {
   // Collect all classic slates present for today's games
   const slatesPresent = new Set();
   games.forEach(g => getSlatesForGame(g).forEach(s => slatesPresent.add(s)));
-  const slateOrder  = ['all', 'early', 'afternoon', 'main', 'turbo', 'late', 'late_night'];
-  const slateLabels = { all:'All', early:'Early', afternoon:'Afternoon', main:'Main', turbo:'Turbo', late:'Late', late_night:'Late Night' };
+  const slateOrder  = ['all', 'early', 'afternoon', 'main', 'turbo', 'late', 'night'];
+  const slateLabels = { all:'All', early:'Early', afternoon:'Afternoon', main:'Main', turbo:'Turbo', late:'Late', night:'Night' };
 
   const container = document.getElementById('slateButtons');
   container.innerHTML = '';
@@ -5362,14 +5363,15 @@ async function loadGames() {
   const { data: sgRows } = await sb.from('dk_slate_games')
     .select('dk_slate, away_team, home_team, start_time')
     .eq('season', new Date().getFullYear());
-  slateGameMap = {};  // "DATE|AWAY|HOME" → Set of slate labels
+  slateGameMap = {};  // "DATE|AWAY|HOME|UTCHOUR" → Set of slate labels (hour disambiguates doubleheaders)
   (sgRows || []).forEach(r => {
     if (!r.start_time) return;
     // Convert UTC start_time to ET game date (UTC-4 during EDT)
     const utc = new Date(r.start_time);
     const etMs = utc.getTime() - 4 * 3600000;
     const etDate = new Date(etMs).toISOString().split('T')[0];
-    const key = `${etDate}|${dkTeamNorm(r.away_team)}|${dkTeamNorm(r.home_team)}`;
+    const utcHour = utc.getUTCHours();
+    const key = `${etDate}|${dkTeamNorm(r.away_team)}|${dkTeamNorm(r.home_team)}|${utcHour}`;
     if (!slateGameMap[key]) slateGameMap[key] = new Set();
     slateGameMap[key].add(r.dk_slate);
   });

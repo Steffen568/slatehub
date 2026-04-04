@@ -530,9 +530,13 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 
 ## Session 34 — Slate Grouping, SP Inflation, Diagnostics
 
-### DK slate grouping by start time is unreliable
-**What happened:** Main slate starting at 12:15 PM was labeled "early" because the code used time buckets (<13h = early). DK's actual main slate is the one with the most games regardless of time.
-**Rule:** Use DK API `GameCount` field to identify main slate (highest game count >= 6). Only label "turbo" if small slate starts within 2 hours of main.
+### DK slate grouping by start time AND game count is unreliable — use ContestStartTimeSuffix
+**What happened:** Across many sessions (31, 34, 37+), time-bucket heuristics and game-count heuristics both failed to correctly label slates. A 3-game Turbo at 1:10 PM got labeled "afternoon" because it didn't match any turbo rule. A 4-game Early got labeled "afternoon" because ET hour was 16.
+**Rule:** Use `ContestStartTimeSuffix` from the DK DraftGroup API. Values: `(Turbo)` → turbo, `(Early)` → early, `(Night)` → night, `(Afternoon)` → afternoon, `None` → main. Never infer slate labels from time or game count — DK tells us directly.
+
+### Doubleheader games share the same DATE|AWAY|HOME key — must include start hour
+**What happened:** Two MIL@KC games on same date (doubleheader). Frontend `slateGameMap` keyed by `DATE|AWAY|HOME`, so both games got the turbo slate even though only the early game was on it.
+**Rule:** Include UTC hour in the slateGameMap key: `DATE|AWAY|HOME|UTCHOUR`. This disambiguates doubleheader games so each maps to its own set of slates.
 
 ### sim_projections spread_mult was inflating ace pitchers by 25%
 **What happened:** Sale projected at 33.9 (actual ~22). The spread_mult formula `2.0 - era_ratio` boosted aces by up to 1.25x with no calibration haircut.
@@ -577,5 +581,21 @@ requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leader
 **Rule:** Check that py -3.12 and all dependencies are installed. Check API availability.
 
 ### Auto-fixed DK ID mismatches: Angel Martinez, Brandon Lowe, Carson Kelly, David Hamilton, Gabriel Arias, Ivan Herrera, Jacob Wilson, Jose Caballero, Jose Fernandez, Jose Ramirez, Josh Smith, Julio Rodriguez, Miguel Vargas, Will Smith
+**What happened:** Pipeline auto-fixed 14 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### DK ID mismatch (auto-fix failed): David Hamilton
+**What happened:** Auto-fix could not resolve: lineup_id=666152 dk_id=824481
+**Rule:** Manual investigation needed — check players table or DK API for this player.
+
+### Auto-fixed DK ID mismatches: Angel Martinez, Brandon Lowe, Carson Kelly, Cole Young, David Fry, Gabriel Arias, Jacob Wilson, Jose Caballero, Jose Ramirez, Josh Smith, Julio Rodriguez, Miguel Vargas, Mike Yastrzemski, Will Smith
+**What happened:** Pipeline auto-fixed 14 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Angel Martinez, Brandon Lowe, Carson Kelly, Cole Young, David Fry, Gabriel Arias, Jacob Wilson, Jose Caballero, Jose Ramirez, Josh Smith, Julio Rodriguez, Mike Yastrzemski, Will Smith
+**What happened:** Pipeline auto-fixed 13 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Angel Martinez, Brandon Lowe, Carson Kelly, Cole Young, David Fry, Gabriel Arias, Jacob Wilson, Jose Caballero, Jose Ramirez, Josh Smith, Julio Rodriguez, Mike Yastrzemski, Vladimir Guerrero Jr., Will Smith
 **What happened:** Pipeline auto-fixed 14 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.

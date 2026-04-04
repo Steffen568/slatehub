@@ -98,15 +98,21 @@ def find_mismatches(target_date=None, sb=None):
         salary_candidates = salary_by_norm_name.get(name_key, [])
 
         if salary_candidates:
-            for s in salary_candidates:
-                id_mismatches.append({
-                    'name'       : name,
-                    'team'       : team,
-                    'lineup_id'  : pid,
-                    'dk_id'      : s['player_id'],
-                    'salary'     : s['salary'],
-                    'dk_slate'   : s['dk_slate'],
-                })
+            # Filter out salary rows that already match a different lineup player
+            # (same name, different person — e.g. two "David Hamilton" on different teams)
+            real_mismatches = [s for s in salary_candidates if s['player_id'] not in matched_ids]
+            if real_mismatches:
+                for s in real_mismatches:
+                    id_mismatches.append({
+                        'name'       : name,
+                        'team'       : team,
+                        'lineup_id'  : pid,
+                        'dk_id'      : s['player_id'],
+                        'salary'     : s['salary'],
+                        'dk_slate'   : s['dk_slate'],
+                    })
+            else:
+                truly_missing.append({'name': name, 'team': team, 'lineup_id': pid})
         else:
             truly_missing.append({'name': name, 'team': team, 'lineup_id': pid})
 

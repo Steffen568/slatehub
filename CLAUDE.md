@@ -161,6 +161,20 @@ Silent nulls (not errors) happen when you use the wrong column name. Use this ta
 - `dg.get('Games')` is always `[]` from the lobby API — don't try to extract team names from it.
 - Instead: collect unique `teamAbbreviation` values from the draftables list.
 
+### Slate Classification — Use DK's `ContestStartTimeSuffix`
+
+- **Never infer slate labels from time buckets or game counts.** This has caused recurring bugs across many sessions.
+- Each DraftGroup in the DK API has a `ContestStartTimeSuffix` field that gives the actual slate label:
+  - `None` or empty → `main`
+  - `(Turbo)` → `turbo`
+  - `(Early)` → `early`
+  - `(Afternoon)` → `afternoon`
+  - `(Night)` → `night`
+  - `(Late)` → `late`
+- Parse the suffix: strip parens, lowercase, match known keywords.
+- Handle `None` values from the API: use `dg.get('ContestStartTimeSuffix') or ''` (not `dg.get(..., '')`).
+- Frontend slate buttons use these labels: `['all', 'early', 'afternoon', 'main', 'turbo', 'late', 'night']`
+
 ---
 
 ## Salary Pipeline — Recurring Issues

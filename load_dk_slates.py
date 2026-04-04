@@ -57,7 +57,7 @@ for dg in dg_list:
         dg_meta[dgid] = {
             'start_est': dg.get('StartDateEst', ''),
             'game_count': dg.get('GameCount', 0),
-            'suffix': dg.get('ContestStartTimeSuffix', ''),
+            'suffix': dg.get('ContestStartTimeSuffix') or '',
         }
 
 # ── STEP 3: For each Classic DG, fetch draftables to get game matchups
@@ -90,27 +90,20 @@ for dgid in sorted(classic_dg_ids):
                     'dg_id': dgid,
                 }
 
-        # Determine slate name from DG suffix or start time
+        # Determine slate name from DK's ContestStartTimeSuffix
         meta = dg_meta.get(dgid, {})
         suffix = meta.get('suffix', '').strip()
-        start_est_str = meta.get('start_est', '')
 
-        # Parse start hour ET to assign slate label
+        # Parse suffix: "(Turbo)" → "turbo", "(Early)" → "early", None → "main"
         slate_label = 'main'
-        if start_est_str:
-            try:
-                dt = datetime.fromisoformat(start_est_str.replace('Z', ''))
-                et_hour = dt.hour + dt.minute / 60
-                if et_hour < 13:
-                    slate_label = 'early'
-                elif et_hour < 17:
-                    slate_label = 'afternoon'
-                elif et_hour < 19.5:
-                    slate_label = 'main'
-                else:
-                    slate_label = 'late'
-            except Exception:
-                pass
+        if suffix:
+            cleaned = suffix.strip('() ').lower()
+            for key in ['turbo', 'early', 'afternoon', 'night', 'late']:
+                if key in cleaned:
+                    slate_label = key
+                    break
+            else:
+                slate_label = cleaned or 'main'
 
         for comp_id, game in seen_comps.items():
             # Only add if not already seen from another DG (first DG wins)

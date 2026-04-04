@@ -78,19 +78,15 @@ def fetch_payout_details(contest_id):
         return None
 
 
-def classify_slate(start_est):
-    """Classify DK slate from start time (same logic as load_dk_salaries.py)."""
-    if not start_est:
+def classify_slate_from_suffix(suffix):
+    """Classify DK slate from ContestStartTimeSuffix field (e.g. '(Turbo)' → 'turbo')."""
+    if not suffix:
         return 'main'
-    try:
-        dt = datetime.fromisoformat(start_est.replace('Z', ''))
-        et_hour = dt.hour + dt.minute / 60
-        if et_hour < 13:     return 'early'
-        elif et_hour < 17:   return 'afternoon'
-        elif et_hour < 19.5: return 'main'
-        else:                return 'late'
-    except Exception:
-        return 'main'
+    cleaned = suffix.strip('() ').lower()
+    for key in ['turbo', 'early', 'afternoon', 'night', 'late']:
+        if key in cleaned:
+            return key
+    return cleaned or 'main'
 
 
 def run():
@@ -131,8 +127,9 @@ def run():
                 game_date = datetime.fromisoformat(start_est.replace('Z', '')).strftime('%Y-%m-%d')
             except Exception:
                 pass
+        suffix = (dg.get('ContestStartTimeSuffix') or '').strip()
         dg_meta[dgid] = {
-            'slate': classify_slate(start_est),
+            'slate': classify_slate_from_suffix(suffix),
             'game_date': game_date,
             'game_count': dg.get('GameCount', 0),
         }
@@ -148,13 +145,6 @@ def run():
         dg_id = c.get('dg')
         meta = dg_meta.get(dg_id, {})
         slate = meta.get('slate', 'main')
-
-        # Refine slate by game count (same logic as load_dk_salaries.py)
-        game_count = meta.get('game_count', 15)
-        if game_count <= 2:
-            slate = 'late_night'
-        elif game_count <= 5:
-            slate = 'turbo'
 
         if slate_filter and slate != slate_filter:
             continue

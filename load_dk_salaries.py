@@ -105,69 +105,38 @@ for dg in dg_list:
 
     if dgid in classic_dg_ids:
         game_count = dg.get('GameCount', 0)
-        et_hour = None
-        if start_est:
-            try:
-                dt = datetime.fromisoformat(start_est.replace('Z',''))
-                et_hour = dt.hour + dt.minute / 60
-            except Exception:
-                pass
+        suffix = (dg.get('ContestStartTimeSuffix') or '').strip()
         dg_meta[dgid] = {'slate_label': 'pending', 'contest_type': 'classic',
-                         'game_count': game_count, 'et_hour': et_hour}
+                         'game_count': game_count, 'suffix': suffix}
 
     elif dgid in showdown_dg_ids:
         # Team names aren't in DG metadata (Games array is always empty from the lobby API)
         # Slate label will be resolved from draftables in Step 3
         dg_meta[dgid] = {'slate_label': f'sd_{dgid}', 'contest_type': 'showdown', 'game_date': game_date}
 
-# Assign classic slate labels using actual GameCount from the DK API.
-# The DG with the most games is "main". Smaller slates get labeled by time.
+# Assign classic slate labels using DK's ContestStartTimeSuffix field.
+# No suffix = main slate. Otherwise parse the keyword from the suffix.
+SUFFIX_TO_SLATE = {'turbo': 'turbo', 'early': 'early', 'afternoon': 'afternoon',
+                   'night': 'night', 'late': 'late'}
+
 classic_dgs = {did: m for did, m in dg_meta.items() if m['contest_type'] == 'classic'}
-if classic_dgs:
-    max_games = max(m['game_count'] for m in classic_dgs.values())
-    # Find main slate start time so we can identify turbos (small subsets near main's start)
-    main_et = None
-    for m in classic_dgs.values():
-        if m['game_count'] == max_games and m['game_count'] >= 6:
-            main_et = m.get('et_hour')
-            break
-    for did, m in classic_dgs.items():
-        gc = m['game_count']
-        et = m.get('et_hour')
-        if gc == max_games and gc >= 6:
-            m['slate_label'] = 'main'
-        elif et is not None and et >= 19.5 and gc <= 2:
-            m['slate_label'] = 'late_night'
-        elif et is not None and et >= 19.5:
-            m['slate_label'] = 'late'
-        elif et is not None and et < 13:
-            m['slate_label'] = 'early'
-        elif gc <= 5 and main_et is not None and abs(et - main_et) <= 2.0:
-            # Small slate starting within 2 hours of main = turbo (subset of main)
-            m['slate_label'] = 'turbo'
-        elif et is not None and et < 19.5:
-            m['slate_label'] = 'afternoon'
-        else:
-            m['slate_label'] = 'afternoon'
+for did, m in classic_dgs.items():
+    suffix = m.get('suffix', '')
+    if not suffix:
+        m['slate_label'] = 'main'
+    else:
+        cleaned = suffix.strip('() ').lower()
+        matched = False
+        for key, label in SUFFIX_TO_SLATE.items():
+            if key in cleaned:
+                m['slate_label'] = label
+                matched = True
+                break
+        if not matched:
+            m['slate_label'] = cleaned  # fallback: use cleaned suffix as-is
 
-    # Deduplicate labels: if two DGs share a label, append start time to distinguish
-    label_counts = {}
-    for m in classic_dgs.values():
-        label_counts[m['slate_label']] = label_counts.get(m['slate_label'], 0) + 1
-    duped_labels = {lbl for lbl, cnt in label_counts.items() if cnt > 1}
-    if duped_labels:
-        for did, m in classic_dgs.items():
-            if m['slate_label'] in duped_labels:
-                et = m.get('et_hour')
-                if et is not None:
-                    # Convert 14.2 → "2:12pm", 15.7 → "3:42pm"
-                    hr = int(et) % 12 or 12
-                    mn = int((et % 1) * 60)
-                    ampm = 'pm' if int(et) >= 12 else 'am'
-                    m['slate_label'] = f"{m['slate_label']}_{hr}:{mn:02d}{ampm}"
-
-    for did, m in classic_dgs.items():
-        print(f"  DG {did}: {m['game_count']} games, start {m.get('et_hour', 0):.1f}h ET → {m['slate_label']}")
+for did, m in classic_dgs.items():
+    print(f"  DG {did}: {m['game_count']} games, suffix='{m.get('suffix','')}' → {m['slate_label']}")
 
 # ── STEP 2: Load MLBAM player ID map from Supabase
 print("\nLoading player ID map from Supabase...")
@@ -207,7 +176,6 @@ DK_TO_MLBAM = {
     917114 : 665926,   # Andres Gimenez
     665532 : 666126,   # Carlos Cortes
     918435 : 666126,   # Carlos Cortes (alternate slate)
-    824481 : 666152,   # David Hamilton
     1118787: 666310,   # Bo Naylor
     1056129: 668885,   # Austin Martin
     1054992: 671218,   # Heliot Ramos
