@@ -83,9 +83,10 @@ def fetch_data(target_date, slate_filter=None):
     print(f"  Projections: {len(projs)}")
 
     # DK Salaries for this slate
+    contest_type = 'showdown' if (slate_filter or '').startswith('sd_') else 'classic'
     sal_q = sb.table('dk_salaries').select(
         'player_id,name,position,salary,team,dk_slate'
-    ).eq('season', SEASON).eq('contest_type', 'classic')
+    ).eq('season', SEASON).eq('contest_type', contest_type)
     if slate_filter:
         sal_q = sal_q.eq('dk_slate', slate_filter)
     sals = []
