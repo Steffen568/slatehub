@@ -792,6 +792,304 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
     return lineups
 
 
+# ── Showdown Pool Generation ────────────────────────────────────────────────
+
+SD_SALARY_CAP = 50000
+
+def build_lineup_sd(pool, scores, rng, salary_cap=SD_SALARY_CAP,
+                    cpt_pool=None, flex_pool=None):
+    """
+    Build one Showdown lineup: 1 CPT (1.5x sal/proj) + 5 FLEX.
+    cpt_pool/flex_pool: index lists into `pool` for eligible CPT/FLEX candidates.
+    Returns (cpt_pid, [flex_pids]) or None.
+    """
+    if cpt_pool is None:
+        cpt_pool = list(range(len(pool)))
+    if flex_pool is None:
+        flex_pool = list(range(len(pool)))
+
+    # Rank CPT candidates by score (already 1.5x in scores if desired)
+    cpt_ranked = sorted(cpt_pool, key=lambda i: scores[i], reverse=True)
+
+    # Try top-K CPT candidates with weighted random
+    top_k = min(5, len(cpt_ranked))
+    if top_k == 0:
+        return None
+    top_cpt = cpt_ranked[:top_k]
+    weights = np.array([max(scores[i], 0.1) for i in top_cpt])
+    weights /= weights.sum()
+    cpt_idx = top_cpt[rng.choice(len(top_cpt), p=weights)]
+    cpt = pool[cpt_idx]
+    cpt_pid = cpt['player_id']
+    cpt_sal = cpt['salary'] * 1.5
+    sal_left = salary_cap - cpt_sal
+
+    # Fill 5 FLEX greedily — skip CPT player
+    flex_ranked = sorted(flex_pool, key=lambda i: scores[i], reverse=True)
+    flex_pids = []
+    for fi in flex_ranked:
+        if len(flex_pids) >= 5:
+            break
+        fp = pool[fi]
+        if fp['player_id'] == cpt_pid:
+            continue
+        if fp['salary'] > sal_left:
+            continue
+        flex_pids.append(fp['player_id'])
+        sal_left -= fp['salary']
+
+    if len(flex_pids) < 5:
+        return None
+
+    return (cpt_pid, flex_pids)
+
+
+def generate_sd_lineups(pool, n_lineups, mode='user', rng=None,
+                        contest_type='gpp', excluded_cpt=None, excluded_flex=None,
+                        exposure_caps=None, cpt_exp_max=35,
+                        hitter_exp_max=100, pitcher_exp_max=100,
+                        contest_discounts=None, salary_cap=SD_SALARY_CAP):
+    """Generate N Showdown lineups with separate CPT/FLEX exposure tracking."""
+    if rng is None:
+        rng = np.random.default_rng()
+
+    excluded_cpt = set(excluded_cpt or [])
+    excluded_flex = set(excluded_flex or [])
+    _exp_caps = exposure_caps or {}
+    _exp_caps = {k: v for k, v in _exp_caps.items()}  # keep string keys for cpt_/flex_ prefix
+
+    # Build index lists for CPT and FLEX eligible players
+    cpt_indices = [i for i, p in enumerate(pool) if p['player_id'] not in excluded_cpt]
+    flex_indices = [i for i, p in enumerate(pool) if p['player_id'] not in excluded_flex]
+
+    print(f"    SD pool: {len(pool)} players, {len(cpt_indices)} CPT eligible, {len(flex_indices)} FLEX eligible")
+
+    lineups = []
+    seen = set()
+    attempts = 0
+    max_attempts = n_lineups * 6
+
+    # Separate CPT/FLEX appearance tracking
+    cpt_appear = defaultdict(int)
+    flex_appear = defaultdict(int)
+
+    while len(lineups) < n_lineups and attempts < max_attempts:
+        attempts += 1
+        cur_count = max(len(lineups), 1)
+
+        # Filter capped players from this iteration's eligible lists
+        iter_cpt = cpt_indices
+        iter_flex = flex_indices
+
+        if _exp_caps or cpt_exp_max < 100 or hitter_exp_max < 100 or pitcher_exp_max < 100:
+            capped_cpt = set()
+            capped_flex = set()
+            for i in cpt_indices:
+                pid = pool[i]['player_id']
+                # CPT-specific cap
+                cpt_cap_key = f'cpt_{pid}'
+                cap_val = _exp_caps.get(cpt_cap_key, _exp_caps.get(str(pid)))
+                effective_cap = min(cpt_exp_max, cap_val) if cap_val is not None else cpt_exp_max
+                if effective_cap < 100 and cpt_appear[pid] / cur_count >= effective_cap / 100.0:
+                    capped_cpt.add(i)
+            for i in flex_indices:
+                pid = pool[i]['player_id']
+                is_pit = pool[i]['is_pitcher']
+                global_cap = pitcher_exp_max if is_pit else hitter_exp_max
+                flex_cap_key = f'flex_{pid}'
+                cap_val = _exp_caps.get(flex_cap_key, _exp_caps.get(str(pid)))
+                effective_cap = min(global_cap, cap_val) if cap_val is not None else global_cap
+                if effective_cap < 100 and flex_appear[pid] / cur_count >= effective_cap / 100.0:
+                    capped_flex.add(i)
+            if capped_cpt:
+                iter_cpt = [i for i in cpt_indices if i not in capped_cpt]
+            if capped_flex:
+                iter_flex = [i for i in flex_indices if i not in capped_flex]
+
+        if not iter_cpt or len(iter_flex) < 5:
+            continue
+
+        # Sample noisy scores
+        scores = sample_noisy_scores(pool, rng, mode=mode,
+                                      contest_type=contest_type,
+                                      contest_discounts=contest_discounts)
+        # For CPT scoring, boost by 1.5x (CPT gets 1.5x projection)
+        cpt_scores = scores.copy()
+        for i in iter_cpt:
+            cpt_scores[i] *= 1.5
+
+        result = build_lineup_sd(pool, cpt_scores, rng, salary_cap=salary_cap,
+                                  cpt_pool=iter_cpt, flex_pool=iter_flex)
+        if result is None:
+            continue
+
+        cpt_pid, flex_pids = result
+
+        # Dedup
+        key = (cpt_pid, tuple(sorted(flex_pids)))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        # Compute metadata
+        cpt_obj = next(p for p in pool if p['player_id'] == cpt_pid)
+        flex_objs = [next(p for p in pool if p['player_id'] == fid) for fid in flex_pids]
+        salary = int(cpt_obj['salary'] * 1.5) + sum(f['salary'] for f in flex_objs)
+        proj = round(cpt_obj['proj'] * 1.5 + sum(f['proj'] for f in flex_objs), 2)
+
+        lineups.append({
+            'player_ids': [cpt_pid] + flex_pids,  # CPT first, then 5 FLEX
+            'salary': salary,
+            'proj': proj,
+            'stack_team': cpt_obj['team'],
+            'stack_size': 1,
+            'sub_team': None,
+            'sub_size': 0,
+        })
+
+        # Track appearances
+        cpt_appear[cpt_pid] += 1
+        for fid in flex_pids:
+            flex_appear[fid] += 1
+
+        if len(lineups) % 1000 == 0:
+            print(f"    Generated {len(lineups):,} / {n_lineups:,} ({attempts:,} attempts)")
+
+    print(f"    Final: {len(lineups):,} unique SD lineups from {attempts:,} attempts")
+    return lineups
+
+
+def process_sd_request(req):
+    """Process a Showdown pool generation request."""
+    req_id = req['id']
+    print(f"\n{'='*55}")
+    print(f"  Processing SD request #{req_id}")
+    print(f"{'='*55}")
+
+    sb.table('pool_requests').update({'status': 'processing'}).eq('id', req_id).execute()
+
+    try:
+        target_date = str(req['game_date'])
+        slate = req['dk_slate']
+        contest_type = req.get('contest_type', 'gpp')
+        u_size = req.get('user_pool_size') or 5000
+        c_size = req.get('contest_pool_size') or 8000
+        salary_cap = req.get('salary_cap', SD_SALARY_CAP)
+
+        # SD-specific settings
+        excluded_cpt = set(req.get('excluded_cpt') or [])
+        excluded_flex = set(req.get('excluded_flex') or [])
+        exp_caps = req.get('exposure_caps') or {}
+        cpt_exp = req.get('cpt_exp_max', 35)
+        hitter_exp = req.get('hitter_exp_max', 100)
+        pitcher_exp = req.get('pitcher_exp_max', 100)
+        contest_discounts = req.get('contest_discount_teams') or {}
+        proj_overrides = req.get('proj_overrides') or {}
+
+        print(f"  Date: {target_date}  Slate: {slate}  Contest: {contest_type}")
+        print(f"  User pool: {u_size:,}  Contest pool: {c_size:,}  CPT max: {cpt_exp}%")
+
+        # Fetch data — SD slate is scoped to one game
+        data = fetch_data(target_date, slate_filter=slate)
+        if not data:
+            raise ValueError("No data found for SD slate")
+
+        raw_pool = build_player_pool(data)
+        print(f"  SD player pool: {len(raw_pool)} players")
+
+        if len(raw_pool) < 6:
+            raise ValueError(f"Pool too small for SD ({len(raw_pool)} players)")
+
+        # Build user pool with proj overrides applied
+        user_pool = copy.deepcopy(raw_pool)
+        # Apply projection overrides only (exclusions handled by SD builder)
+        for p in user_pool:
+            pid_str = str(p['player_id'])
+            if pid_str in proj_overrides:
+                new_proj = float(proj_overrides[pid_str])
+                p['proj'] = new_proj
+                p['ceiling'] = new_proj * 1.5
+                p['floor'] = new_proj * 0.5
+
+        rng = np.random.default_rng(seed=42)
+
+        # Generate user SD pool
+        print(f"\n  Generating SD USER pool ({u_size:,} target)...")
+        user_lineups = generate_sd_lineups(
+            user_pool, u_size, mode='user', rng=rng,
+            excluded_cpt=excluded_cpt, excluded_flex=excluded_flex,
+            exposure_caps=exp_caps, cpt_exp_max=cpt_exp,
+            hitter_exp_max=hitter_exp, pitcher_exp_max=pitcher_exp,
+            salary_cap=salary_cap,
+        )
+
+        # Generate contest SD pool (raw pool, no user overrides)
+        print(f"\n  Generating SD CONTEST pool ({c_size:,} target)...")
+        contest_lineups = generate_sd_lineups(
+            raw_pool, c_size, mode='contest', rng=rng,
+            contest_type=contest_type, contest_discounts=contest_discounts,
+            salary_cap=salary_cap,
+        )
+
+        # Clear and upload
+        print(f"\n  Clearing existing pools for {target_date}/{slate}...")
+        sb.table('sim_pool').delete().eq('game_date', target_date).eq('dk_slate', slate).execute()
+
+        computed_at = datetime.now(timezone.utc).isoformat()
+        BATCH = 500
+
+        for pool_type, lineups in [('user', user_lineups), ('contest', contest_lineups)]:
+            records = [{
+                'game_date': target_date,
+                'dk_slate': slate,
+                'pool_type': pool_type,
+                'player_ids': lu['player_ids'],
+                'salary': lu['salary'],
+                'proj': lu['proj'],
+                'stack_team': lu.get('stack_team', ''),
+                'stack_size': lu.get('stack_size', 0),
+                'sub_team': lu.get('sub_team'),
+                'sub_size': lu.get('sub_size', 0),
+                'computed_at': computed_at,
+            } for lu in lineups]
+
+            uploaded = 0
+            for j in range(0, len(records), BATCH):
+                batch = records[j:j+BATCH]
+                sb.table('sim_pool').upsert(batch, on_conflict='pool_id').execute()
+                uploaded += len(batch)
+            print(f"  Uploaded {uploaded} {pool_type} SD lineups [{slate}]")
+
+        # Mark complete
+        sb.table('pool_requests').update({
+            'status': 'complete',
+            'user_pool_count': len(user_lineups),
+            'contest_pool_count': len(contest_lineups),
+            'completed_at': datetime.now(timezone.utc).isoformat(),
+        }).eq('id', req_id).execute()
+
+        # CPT exposure summary
+        cpt_counts = defaultdict(int)
+        for lu in user_lineups:
+            cpt_counts[lu['player_ids'][0]] += 1
+        print(f"\n  Top CPT exposures:")
+        pid_name = {p['player_id']: p['name'] for p in raw_pool}
+        for pid, cnt in sorted(cpt_counts.items(), key=lambda x: -x[1])[:8]:
+            pct = cnt / len(user_lineups) * 100 if user_lineups else 0
+            print(f"    {pid_name.get(pid, pid):25s}: {cnt:>5,} ({pct:.1f}%)")
+
+        print(f"\n  SD Request #{req_id} complete: {len(user_lineups)} user + {len(contest_lineups)} contest")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"  ERROR: {e}")
+        sb.table('pool_requests').update({
+            'status': 'error',
+            'error_message': str(e)[:500],
+        }).eq('id', req_id).execute()
+
+
 # ── User Settings (for --watch requests) ────────────────────────────────────
 
 def apply_user_settings(pool, req):
@@ -823,6 +1121,10 @@ def apply_user_settings(pool, req):
 
 def process_request(req):
     """Process a single pool generation request from the frontend."""
+    if req.get('is_showdown'):
+        process_sd_request(req)
+        return
+
     req_id = req['id']
     print(f"\n{'='*55}")
     print(f"  Processing request #{req_id}")

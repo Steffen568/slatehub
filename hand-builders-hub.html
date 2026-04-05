@@ -7732,24 +7732,31 @@ async function requestPoolGeneration() {
   if (!date || date === 'all') { showToast('Select a specific date first'); return; }
   if (!slate || slate === 'all') { showToast('Select a specific slate first'); return; }
 
+  const isSD = _contestMode === 'showdown';
+
   // Collect all user settings from the UI
   const request = {
     game_date: date,
     dk_slate: slate,
     contest_type: document.getElementById('contest-type-select')?.value || 'gpp',
-    user_pool_size: +(document.getElementById('opto-poolsize')?.value) || 10000,
-    contest_pool_size: +(document.getElementById('contest-pool-size')?.value) || 15000,
-    // From player chips
-    excluded_players: [...excludedPlayers],
-    locked_players: [...lockedPlayers],
+    user_pool_size: +(document.getElementById('opto-poolsize')?.value) || (isSD ? 5000 : 10000),
+    contest_pool_size: +(document.getElementById('contest-pool-size')?.value) || (isSD ? 8000 : 15000),
     proj_overrides: projOverrides,
-    exclude_teams: [...(typeof teamExcludes !== 'undefined' ? teamExcludes : [])],
-    // From settings drawer
+    salary_cap: optoSalaryCap || 50000,
+    // SD-specific fields
+    is_showdown: isSD,
+    excluded_cpt: isSD ? [...excludedCpt] : [],
+    excluded_flex: isSD ? [...excludedFlex] : [],
+    cpt_exp_max: isSD ? expCptMax : 100,
+    // Classic-specific fields
+    excluded_players: isSD ? [] : [...excludedPlayers],
+    locked_players: isSD ? [] : [...lockedPlayers],
+    exclude_teams: isSD ? [] : [...(typeof teamExcludes !== 'undefined' ? teamExcludes : [])],
+    // Shared settings
     exposure_caps: expTargets,
     hitter_exp_max: expHitterMax,
     pitcher_exp_max: expPitcherMax,
-    stack_rules: optoSettings.stackRules || [],
-    salary_cap: optoSalaryCap || 50000,
+    stack_rules: isSD ? [] : (optoSettings.stackRules || []),
     min_salary: optoSettings.minSalary || 48500,
   };
 
@@ -9875,7 +9882,7 @@ function savePoolLineupToBuild(idx) {
 }
 
 function generateLineups() {
-  if (_contestMode === 'showdown' && optoSettings.poolMode) { generatePool_SD(); return; }
+  if (_contestMode === 'showdown' && optoSettings.poolMode) { requestPoolGeneration(); return; }
   if (_contestMode === 'showdown') { generateLineups_Showdown(); return; }
   if (lateSwapMode) { lateSwapAllLineups(); return; }
   if (optoSettings.poolMode) { requestPoolGeneration(); return; }
