@@ -5333,14 +5333,20 @@ async function loadPlayerPool(date, slate) {
 
   // 5b. Per-slate ownership overlay (from slate_ownership table)
   if (effectiveDate && effectiveDate !== 'all' && slate) {
-    const ownSelect = _contestMode === 'showdown'
-      ? 'player_id,proj_ownership,cpt_ownership,flex_ownership'
-      : 'player_id,proj_ownership';
-    const { data: slateOwnRows } = await sb.from('slate_ownership')
-      .select(ownSelect)
-      .eq('game_date', effectiveDate)
-      .eq('dk_slate', slate)
-      .limit(5000);
+    let slateOwnRows = null;
+    // Try extended query with CPT/FLEX columns first, fall back to basic
+    if (_contestMode === 'showdown') {
+      const res = await sb.from('slate_ownership')
+        .select('player_id,proj_ownership,cpt_ownership,flex_ownership')
+        .eq('game_date', effectiveDate).eq('dk_slate', slate).limit(5000);
+      if (!res.error) slateOwnRows = res.data;
+    }
+    if (!slateOwnRows) {
+      const res = await sb.from('slate_ownership')
+        .select('player_id,proj_ownership')
+        .eq('game_date', effectiveDate).eq('dk_slate', slate).limit(5000);
+      if (!res.error) slateOwnRows = res.data;
+    }
     if (slateOwnRows && slateOwnRows.length) {
       slateOwnRows.forEach(r => {
         if (projMap[r.player_id]) {
