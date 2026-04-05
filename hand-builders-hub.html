@@ -4894,7 +4894,7 @@ async function loadDates() {
     sb.from('dk_slate_games').select('dk_slate, away_team, home_team, start_time')
       .eq('season', new Date().getFullYear()),
     // Still need dk_salaries for _allSlates (SD slates + loadPlayerPool queries by dk_slate)
-    sb.from('dk_salaries').select('dk_slate,contest_type').limit(5000),
+    sb.from('dk_salaries').select('dk_slate,contest_type').eq('season', new Date().getFullYear()).limit(5000),
   ]);
 
   // Build _slateGameMap: "DATE|AWAY|HOME|UTCHOUR" → Set of slate labels (hour disambiguates doubleheaders)
@@ -4910,8 +4910,16 @@ async function loadDates() {
     _slateGameMap[key].add(r.dk_slate);
   });
 
-  // _allSlates still populated from dk_salaries (needed for SD slate names + pool queries)
+  // Build _allSlates from dk_slate_games (small table, always complete) + dk_salaries fallback
   const seenSlates = new Map();
+  // dk_slate_games has all slates including showdown — use it as primary source
+  (sgRes.data || []).forEach(r => {
+    if (r.dk_slate && !seenSlates.has(r.dk_slate)) {
+      const ct = r.dk_slate.startsWith('sd_') ? 'showdown' : 'classic';
+      seenSlates.set(r.dk_slate, ct);
+    }
+  });
+  // Also add from dk_salaries in case dk_slate_games is missing anything
   (salRes.data||[]).forEach(r => {
     if (r.dk_slate && !seenSlates.has(r.dk_slate))
       seenSlates.set(r.dk_slate, r.contest_type || 'classic');
@@ -4954,10 +4962,10 @@ async function loadSlates(date) {
   const slateOrder  = ['all', 'early', 'afternoon', 'main', 'turbo', 'late', 'night'];
 
   if (_contestMode === 'showdown') {
-    // Showdown mode: use SD slates from dk_salaries (sd_ prefixed, date in name)
-    const sdSlates = _allSlates
-      .filter(({ contestType }) => contestType === 'showdown')
-      .filter(({ slate: s }) => date === 'all' || parseDateFromSlate(s) === date);
+    // Showdown mode: use SD slates from dk_slate_games + dk_salaries (sd_ prefixed, date in name)
+    const allSD = _allSlates.filter(({ contestType }) => contestType === 'showdown');
+    const sdSlates = allSD.filter(({ slate: s }) => date === 'all' || parseDateFromSlate(s) === date);
+    console.log('[SD Slates]', '_allSlates SD:', allSD.map(x=>x.slate), 'date:', date, 'matched:', sdSlates.map(x=>x.slate));
     if (!sdSlates.length) {
       container.innerHTML = '<span style="font-size:11px;color:var(--muted);">No SD slates</span>';
       return;
