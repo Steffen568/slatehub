@@ -1777,9 +1777,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     <div class="cond-row">
       <div class="cond"><div class="cond-lbl">Precip</div><div class="cond-val" id="wxPrecip">2%</div><div class="cond-sub" id="wxPrecipSub">No rain</div></div>
       <div class="cond"><div class="cond-lbl">Humidity</div><div class="cond-val" id="wxHumidity">58%</div><div class="cond-sub" id="wxHumiditySub">Moderate</div></div>
-      <div class="cond"><div class="cond-lbl">Visibility</div><div class="cond-val" id="wxVisibility">10 mi</div><div class="cond-sub" id="wxVisibilitySub">Clear</div></div>
-      <div class="cond"><div class="cond-lbl">Dew Pt</div><div class="cond-val" id="wxDewPt">55&deg;</div><div class="cond-sub" id="wxDewPtSub">—</div></div>
+      <div class="cond"><div class="cond-lbl">Delay Risk</div><div class="cond-val" id="wxDelayRisk" style="font-size:.85em">—</div><div class="cond-sub" id="wxDelayRiskSub">Clear</div></div>
     </div>
+    <div class="wx-forecast-notes" id="wxForecastNotes" style="display:none;padding:8px 12px;margin:6px 0;background:rgba(59,130,246,.08);border-left:3px solid rgba(59,130,246,.5);border-radius:6px;font-size:.85em;color:var(--fg);line-height:1.5;"></div>
     <div class="wx-note" id="wxNote" style="display:none;"></div>
     <div id="radarWrap"></div>
   </div>
@@ -5812,7 +5812,7 @@ async function loadWeather(gamePk, venueName, away, home, time, venueId) {
   _wxLoadingFor = gamePk;
   const { data, error } = await sb
     .from('weather')
-    .select('temp_f,feels_like_f,humidity,wind_speed,wind_dir,wind_deg,conditions,precip_pct,visibility,dew_point,is_outdoor')
+    .select('temp_f,feels_like_f,humidity,wind_speed,wind_dir,wind_deg,conditions,precip_pct,delay_risk,forecaster_notes,is_outdoor')
     .eq('game_pk', gamePk)
     .maybeSingle();
   // If game changed while we were fetching, discard stale result
@@ -5840,14 +5840,13 @@ async function loadWeather(gamePk, venueName, away, home, time, venueId) {
     if (wdir)   wdir.textContent = 'Indoor venue';
     const wxP = document.getElementById('wxPrecip');
     const wxH = document.getElementById('wxHumidity');
-    const wxV = document.getElementById('wxVisibility');
-    const wxD = document.getElementById('wxDewPt');
+    const wxDR = document.getElementById('wxDelayRisk');
     if (wxP) wxP.textContent = 'N/A';
     if (wxH) wxH.textContent = 'N/A';
-    if (wxV) wxV.textContent = 'N/A';
-    if (wxD) wxD.innerHTML   = 'N/A';
+    if (wxDR) { wxDR.textContent = 'N/A'; wxDR.style.color = ''; }
+    const wxDRS = document.getElementById('wxDelayRiskSub'); if (wxDRS) wxDRS.textContent = '—';
     const _wtag = document.getElementById('windTag'); if (_wtag) { _wtag.textContent = 'N/A'; _wtag.style.color = 'var(--muted)'; _wtag.style.background = 'transparent'; _wtag.style.border = 'none'; }
-    const _wdps = document.getElementById('wxDewPtSub'); if (_wdps) _wdps.textContent = '—';
+    const wxFN = document.getElementById('wxForecastNotes'); if (wxFN) wxFN.style.display = 'none';
     const _wnote = document.getElementById('wxNote'); if (_wnote) _wnote.style.display = 'none';
     const _wefB = document.getElementById('windEffectBanner');
     if (_wefB) { _wefB.className = 'wind-effect-banner wef-calm'; }
@@ -5902,17 +5901,33 @@ async function loadWeather(gamePk, venueName, away, home, time, venueId) {
   if (wxHum)  wxHum.textContent  = hum + '%';
   if (wxHumS) wxHumS.textContent = hum < 30 ? 'Dry' : hum < 50 ? 'Comfortable' : hum < 70 ? 'Moderate' : 'Humid';
 
-  // Visibility — Visual Crossing returns miles
-  const vis    = data.visibility != null ? parseFloat(data.visibility).toFixed(0) : null;
-  const wxVis  = document.getElementById('wxVisibility');
-  const wxVisS = document.getElementById('wxVisibilitySub');
-  if (wxVis)  wxVis.textContent  = vis != null ? vis + ' mi' : '--';
-  if (wxVisS) wxVisS.textContent = !vis || vis >= 9 ? 'Clear' : vis >= 5 ? 'Good' : vis >= 2 ? 'Reduced' : 'Poor';
+  // Delay risk
+  const wxDR  = document.getElementById('wxDelayRisk');
+  const wxDRS = document.getElementById('wxDelayRiskSub');
+  const delayRisk = data.delay_risk || null;
+  if (wxDR) {
+    if (!delayRisk) {
+      wxDR.textContent = 'None'; wxDR.style.color = '#4caf50';
+    } else if (delayRisk.toLowerCase().includes('postpone')) {
+      wxDR.textContent = 'PPD Risk'; wxDR.style.color = '#f44336';
+    } else if (delayRisk.toLowerCase().includes('delay likely')) {
+      wxDR.textContent = 'Likely'; wxDR.style.color = '#ff9800';
+    } else {
+      wxDR.textContent = 'Possible'; wxDR.style.color = '#ffeb3b';
+    }
+  }
+  if (wxDRS) wxDRS.textContent = delayRisk || 'Clear';
 
-  // Dew point
-  const dew    = data.dew_point != null ? Math.round(data.dew_point) : null;
-  const wxDew  = document.getElementById('wxDewPt');
-  if (wxDew)  wxDew.innerHTML = dew != null ? dew + '&deg;' : '--&deg;';
+  // Forecaster notes
+  const wxFN = document.getElementById('wxForecastNotes');
+  if (wxFN) {
+    if (data.forecaster_notes) {
+      wxFN.innerHTML = '<strong>Forecaster:</strong> ' + data.forecaster_notes;
+      wxFN.style.display = 'block';
+    } else {
+      wxFN.style.display = 'none';
+    }
+  }
 
   // Wind tag — speed-based label
   const windTagEl = document.getElementById('windTag');
@@ -5949,12 +5964,6 @@ async function loadWeather(gamePk, venueName, away, home, time, venueId) {
     }
   }
 
-  // Dew point sub-label
-  const dewSubEl = document.getElementById('wxDewPtSub');
-  if (dewSubEl) {
-    const dp = data.dew_point != null ? parseFloat(data.dew_point) : null;
-    dewSubEl.textContent = dp == null ? '—' : dp < 50 ? 'Dry' : dp < 60 ? 'Comfortable' : dp < 65 ? 'Humid' : 'Very Humid';
-  }
 
   // Weather narrative note
   const wxNoteEl = document.getElementById('wxNote');
@@ -7951,7 +7960,7 @@ window.auditPitcherIds = function() {
                'sc-xfip','sc-kpct','sc-bbpct','sc-kbb','sc-swstr',
                'sc-csw','sc-hardhit','sc-barrel','sc-babip','sc-lob','sc-whip',
                'sc-k9','sc-bb9','sc-hr9','sc-ev','pfBasic','pfHR',
-               'wxTemp','wxDesc','wxFeels','wxPrecip','wxHumidity','wxVisibility','wxDewPt',
+               'wxTemp','wxDesc','wxFeels','wxPrecip','wxHumidity','wxDelayRisk',
                'windSpeed','windDir'];
   console.group('Element ID Audit');
   ids.forEach(id => {

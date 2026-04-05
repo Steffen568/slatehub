@@ -228,10 +228,13 @@ STACK_CONFIGS = [
 ]
 
 def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
-                         sub_teams=None, sub_sizes=None, rng=None):
+                         sub_teams=None, sub_sizes=None, rng=None,
+                         pvh_off=False, game_teams=None):
     """
     Build one DK Classic lineup using greedy randomized selection.
     Supports multiple sub-stacks and bring-backs.
+    pvh_off: if True, hitters cannot face a pitcher in the same lineup.
+    game_teams: dict mapping (game_pk, team_abbr) → opposing_team_abbr.
     """
     if rng is None: rng = np.random.default_rng()
 
@@ -257,8 +260,37 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
     used_pids = set()
     # Track position assignment for each player so we can output in DK slot order
     pid_to_pos = {}  # player_id → assigned position (e.g. 'SP', 'C', '1B', ...)
+    pvh_excluded_teams = set()  # teams whose hitters face a selected SP
 
-    # Force main stack players first
+    # PvH: fill SPs FIRST so we know which teams to exclude from stack/hitter selection
+    if pvh_off and game_teams and remaining.get('SP', 0) > 0:
+        sp_candidates = [(i, s, p) for i, s, p in pos_players.get('SP', [])
+                         if p['player_id'] not in used_pids]
+        sp_slots = remaining['SP']
+        for _ in range(sp_slots):
+            if not sp_candidates:
+                break
+            top_k = 2
+            top = sp_candidates[:top_k]
+            weights = np.array([max(s, 0.1) for _, s, _ in top])
+            weights /= weights.sum()
+            pick_idx = rng.choice(len(top), p=weights)
+            pick = top[pick_idx]
+            selected.append(pick[2]['player_id'])
+            used_pids.add(pick[2]['player_id'])
+            sal_left -= pick[2]['salary']
+            remaining['SP'] -= 1
+            pid_to_pos[pick[2]['player_id']] = 'SP'
+            # Track opposing team
+            opp = game_teams.get((pick[2].get('game_pk'), pick[2]['team']))
+            if opp:
+                pvh_excluded_teams.add(opp)
+            sp_candidates = [(i, s, p) for i, s, p in sp_candidates
+                             if p['player_id'] not in used_pids]
+
+    # Force main stack players first (skip if main_team is PvH-excluded)
+    if main_team and main_size > 0 and main_team in pvh_excluded_teams:
+        return None  # can't stack a team facing our pitcher
     if main_team and main_size > 0:
         team_hitters = [(i, s, p) for i, s, p in pos_players.get('OF', []) + pos_players.get('1B', []) +
                         pos_players.get('2B', []) + pos_players.get('3B', []) + pos_players.get('SS', []) +
@@ -299,6 +331,7 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
     if sub_sizes is None: sub_sizes = []
     for st, ss in zip(sub_teams, sub_sizes):
         if not st or ss <= 0: continue
+        if st in pvh_excluded_teams: continue  # PvH: skip sub stacks facing our pitcher
         sub_hitters = [(i, s, p) for pos in ['OF','1B','2B','3B','SS','C'] for i, s, p in pos_players.get(pos, [])
                        if p['team'] == st and p['player_id'] not in used_pids and not p['is_pitcher']]
         sub_hitters.sort(key=lambda x: x[1], reverse=True)
@@ -328,8 +361,17 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                 break
     MAX_HITTERS_PER_TEAM = 5
 
+    # PvH: fill SP first so we know which teams to exclude from hitter candidates
     pos_order = list(remaining.keys())
-    rng.shuffle(pos_order)
+    if pvh_off and game_teams:
+        sp_positions = [p for p in pos_order if p == 'SP']
+        non_sp = [p for p in pos_order if p != 'SP']
+        rng.shuffle(non_sp)
+        pos_order = sp_positions + non_sp
+    else:
+        rng.shuffle(pos_order)
+
+    pvh_excluded_teams = set()  # teams whose hitters face a selected SP
 
     for pos in pos_order:
         slots_needed = remaining[pos]
@@ -341,15 +383,17 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
 
             candidates = [(i, s, p) for i, s, p in pos_players.get(pos, [])
                           if p['player_id'] not in used_pids and p['salary'] <= budget
-                          and (p['is_pitcher'] or team_hitter_count[p['team']] < MAX_HITTERS_PER_TEAM)]
+                          and (p['is_pitcher'] or team_hitter_count[p['team']] < MAX_HITTERS_PER_TEAM)
+                          and (p['is_pitcher'] or p['team'] not in pvh_excluded_teams)]
 
             if not candidates:
-                # Fallback: cheapest available (still respect team cap)
+                # Fallback: cheapest available (still respect team cap + pvh)
                 fallback = [(i, s, p) for i, s, p in pos_players.get(pos, [])
                             if p['player_id'] not in used_pids and p['salary'] <= sal_left
-                            and (p['is_pitcher'] or team_hitter_count[p['team']] < MAX_HITTERS_PER_TEAM)]
+                            and (p['is_pitcher'] or team_hitter_count[p['team']] < MAX_HITTERS_PER_TEAM)
+                            and (p['is_pitcher'] or p['team'] not in pvh_excluded_teams)]
                 if not fallback:
-                    # Last resort: ignore team cap to avoid null lineup
+                    # Last resort: ignore pvh + team cap to avoid null lineup
                     fallback = [(i, s, p) for i, s, p in pos_players.get(pos, [])
                                 if p['player_id'] not in used_pids and p['salary'] <= sal_left]
                     if not fallback:
@@ -370,13 +414,18 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
             pid_to_pos[pick[2]['player_id']] = pos
             if not pick[2]['is_pitcher']:
                 team_hitter_count[pick[2]['team']] += 1
+            # PvH: when an SP is picked, exclude the opposing team's hitters
+            if pvh_off and game_teams and pick[2]['is_pitcher']:
+                opp = game_teams.get((pick[2].get('game_pk'), pick[2]['team']))
+                if opp:
+                    pvh_excluded_teams.add(opp)
             remaining[pos] -= 1
             slots_needed -= 1
 
     if len(selected) != 10:
         return None
     total_sal = SALARY_CAP - sal_left
-    if total_sal < SALARY_FLOOR:
+    if total_sal < SALARY_FLOOR or total_sal > SALARY_CAP:
         return None
 
     # Output in DK slot order: SP, SP, C, 1B, 2B, 3B, SS, OF, OF, OF
@@ -461,9 +510,26 @@ def sample_noisy_scores(pool, rng, mode='user'):
 
 # ── Pool Generation ──────────────────────────────────────────────────────────
 
-def generate_lineups(pool, n_lineups, mode='user', rng=None):
+def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0):
     """Generate n_lineups unique lineups using greedy randomized builder."""
     if rng is None: rng = np.random.default_rng()
+
+    # PvH exclusion: on slates with 4+ games, don't pair hitters facing a lineup's SP
+    pvh_off = game_count >= 4
+    game_teams = {}
+    if pvh_off:
+        # Build (game_pk, team_abbr) → opposing_team_abbr from pool data
+        games_teams_map = defaultdict(set)  # game_pk → set of team abbreviations
+        for p in pool:
+            gpk = p.get('game_pk')
+            if gpk and p.get('team'):
+                games_teams_map[gpk].add(p['team'])
+        for gpk, teams in games_teams_map.items():
+            teams_list = list(teams)
+            if len(teams_list) == 2:
+                game_teams[(gpk, teams_list[0])] = teams_list[1]
+                game_teams[(gpk, teams_list[1])] = teams_list[0]
+        print(f"    PvH exclusion: ON ({game_count} games)")
 
     # Get viable main teams (4+ hitters)
     team_hitters = defaultdict(list)
@@ -490,10 +556,14 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None):
         ceiling_sum = sum(h.get('ceiling', h['proj'] * 1.5) for h in hitters)
         own_sum = sum(h.get('ownership', 5.0) for h in hitters)
         team_leverage[t] = ceiling_sum / max(own_sum, 5.0)
-    lev_arr = np.array([team_leverage.get(t, 1.0) ** 1.3 for t in viable_teams])
+    lev_arr = np.array([team_leverage.get(t, 1.0) ** 0.7 for t in viable_teams])
     team_weights = lev_arr / lev_arr.sum()
+    if mode == 'user':
+        min_weight = max(0.025, 1.0 / len(viable_teams))
+        team_weights = np.maximum(team_weights, min_weight)
+        team_weights /= team_weights.sum()
     # Also compute for viable_5
-    lev_5_arr = np.array([team_leverage.get(t, 1.0) ** 1.3 for t in viable_5]) if viable_5 else None
+    lev_5_arr = np.array([team_leverage.get(t, 1.0) ** 0.7 for t in viable_5]) if viable_5 else None
     team_5_weights = lev_5_arr / lev_5_arr.sum() if lev_5_arr is not None and len(lev_5_arr) else None
 
     # Log leverage scores
@@ -506,12 +576,22 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None):
     max_attempts = n_lineups * 4
     config_idx = 0
 
+    # User pool: cap any single team at 15% of lineups
+    team_stack_counts = defaultdict(int)
+    team_cap = int(n_lineups * 0.15) if mode == 'user' else None
+
     while len(lineups) < n_lineups and attempts < max_attempts:
         # First cycle: round-robin for coverage; then leverage-weighted
         if attempts < len(viable_teams):
             main_team = viable_teams[attempts % len(viable_teams)]
         else:
             main_team = rng.choice(viable_teams, p=team_weights)
+
+        # Skip teams that hit the cap (user pool only)
+        if team_cap and team_stack_counts[main_team] >= team_cap:
+            attempts += 1
+            continue
+
         config = STACK_CONFIGS[config_idx % len(STACK_CONFIGS)]
         config_idx += 1
         attempts += 1
@@ -542,7 +622,8 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None):
 
         # Build lineup
         lu = build_lineup_greedy(pool, scores, main_team=main_team, main_size=main_size,
-                                  sub_teams=sub_teams, sub_sizes=sub_sizes, rng=rng)
+                                  sub_teams=sub_teams, sub_sizes=sub_sizes, rng=rng,
+                                  pvh_off=pvh_off, game_teams=game_teams)
         if lu is None:
             continue
 
@@ -579,11 +660,69 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None):
             'sub_team': sub_t,
             'sub_size': sub_s,
         })
+        team_stack_counts[stack_team] += 1
 
         if len(lineups) % 1000 == 0:
             print(f"    Generated {len(lineups):,} / {n_lineups:,} ({attempts:,} attempts)")
 
     print(f"    Final: {len(lineups):,} unique lineups from {attempts:,} attempts")
+
+    # ── User pool top-up: ensure every viable team hits 2.5% floor ──────────
+    if mode == 'user' and lineups:
+        floor_count = max(1, int(len(lineups) * 0.025))
+        teams_count = defaultdict(int)
+        for lu in lineups:
+            teams_count[lu['stack_team']] += 1
+
+        for t in viable_teams:
+            deficit = floor_count - teams_count.get(t, 0)
+            if deficit <= 0:
+                continue
+            print(f"    Top-up: {t} needs {deficit} more lineups to reach 2.5% floor")
+            added = 0
+            topup_attempts = 0
+            while added < deficit and topup_attempts < deficit * 8:
+                topup_attempts += 1
+                config = STACK_CONFIGS[rng.integers(len(STACK_CONFIGS))]
+                main_size = config['main']
+                if main_size >= 5 and t not in viable_5:
+                    main_size = 4
+                sub_cands = [st for st in viable_3sub if st != t]
+                sub_teams_tu = []
+                for ss in config['subs']:
+                    cs = [st for st in sub_cands if st not in sub_teams_tu and len(team_hitters.get(st, [])) >= ss]
+                    sub_teams_tu.append(rng.choice(cs) if cs else None)
+                scores = sample_noisy_scores(pool, rng, mode='user')
+                lu = build_lineup_greedy(pool, scores, main_team=t, main_size=main_size,
+                                          sub_teams=sub_teams_tu, sub_sizes=config['subs'], rng=rng,
+                                          pvh_off=pvh_off, game_teams=game_teams)
+                if lu is None:
+                    continue
+                key = tuple(sorted(lu))
+                if key in seen:
+                    continue
+                seen.add(key)
+                salary = sum(p['salary'] for p in pool if p['player_id'] in set(lu))
+                proj = sum(p['proj'] for p in pool if p['player_id'] in set(lu))
+                pid_set = set(lu)
+                tc = defaultdict(int)
+                for p in pool:
+                    if p['player_id'] in pid_set and not p['is_pitcher']:
+                        tc[p['team']] += 1
+                st_team = max(tc, key=tc.get) if tc else ''
+                st_size = tc.get(st_team, 0)
+                sub_c = {st: c for st, c in tc.items() if st != st_team and c >= 2}
+                sub_t = max(sub_c, key=sub_c.get) if sub_c else None
+                sub_s = sub_c.get(sub_t, 0) if sub_t else 0
+                lineups.append({
+                    'player_ids': list(lu), 'salary': salary, 'proj': round(proj, 2),
+                    'stack_team': st_team, 'stack_size': st_size,
+                    'sub_team': sub_t, 'sub_size': sub_s,
+                })
+                added += 1
+            if added > 0:
+                print(f"    Top-up: added {added} lineups for {t}")
+
     return lineups
 
 
@@ -641,7 +780,8 @@ def run():
             print("  Pool too small — skipping")
             continue
 
-        game_count = len(data['games'])
+        # Count games actually in the pool (not all games on the date)
+        game_count = len({p['game_pk'] for p in pool if p.get('game_pk')})
         u_size = user_size or min(game_count * 1500, 15000)
         c_size = contest_size or min(int(game_count * 1500 * 1.5), 25000)
 
@@ -649,11 +789,11 @@ def run():
 
         # Generate user pool
         print(f"\n  Generating USER pool ({u_size:,} target)...")
-        user_lineups = generate_lineups(pool, u_size, mode='user', rng=rng)
+        user_lineups = generate_lineups(pool, u_size, mode='user', rng=rng, game_count=game_count)
 
         # Generate contest pool
         print(f"\n  Generating CONTEST pool ({c_size:,} target)...")
-        contest_lineups = generate_lineups(pool, c_size, mode='contest', rng=rng)
+        contest_lineups = generate_lineups(pool, c_size, mode='contest', rng=rng, game_count=game_count)
 
         # Clear existing pools for this date/slate
         print(f"\n  Clearing existing pools for {target_date}/{slate}...")
