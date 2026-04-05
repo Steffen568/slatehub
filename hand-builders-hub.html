@@ -8961,18 +8961,23 @@ function renderPoolExposure() {
   const pool = _poolFilteredView.length > 0 ? _poolFilteredView : _poolCandidates;
   if (!pool.length) return;
   const total = pool.length;
-  const hitterSlots = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
+  const isSD = _contestMode === 'showdown';
+  const slots = isSD ? SD_LINEUP_SLOTS : LINEUP_SLOTS;
+  const hitterSlots = isSD
+    ? SD_LINEUP_SLOTS.filter(s => !s.isCpt).map(s => s.key)
+    : LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
 
   // ── Players tab ──
   const playerCounts = {};
   pool.forEach(c => {
     const seen = new Set();
-    for (const slot of LINEUP_SLOTS) {
+    for (const slot of slots) {
       const p = c.lineup?.[slot.key];
       if (!p?.player_id || seen.has(p.player_id)) continue;
       seen.add(p.player_id);
+      const posLabel = isSD ? (slot.isCpt ? 'CPT' : 'FLEX') : (slot.pos || '?');
       if (!playerCounts[p.player_id]) {
-        playerCounts[p.player_id] = { id: p.player_id, name: p.name || '?', team: p.team || '', pos: slot.pos, count: 0 };
+        playerCounts[p.player_id] = { id: p.player_id, name: p.name || '?', team: p.team || '', pos: posLabel, count: 0 };
       }
       playerCounts[p.player_id].count++;
     }
@@ -8980,7 +8985,7 @@ function renderPoolExposure() {
   let playerRows = Object.values(playerCounts).sort((a,b) => b.count - a.count);
   if (_poolExpPosFilter !== 'ALL') playerRows = playerRows.filter(r => r.pos === _poolExpPosFilter);
 
-  const positions = ['ALL', 'SP', 'C', '1B', '2B', '3B', 'SS', 'OF'];
+  const positions = isSD ? ['ALL', 'CPT', 'FLEX'] : ['ALL', 'SP', 'C', '1B', '2B', '3B', 'SS', 'OF'];
   const posTabsHtml = `<div style="display:flex;gap:3px;padding:6px 8px;border-bottom:1px solid var(--border);">
     ${positions.map(p => `<button class="exp-tab${_poolExpPosFilter===p?' active':''}" onclick="_poolExpPosFilter='${p}';renderPoolExposure();" style="font-size:9px;padding:2px 6px;">${p}</button>`).join('')}
   </div>`;
