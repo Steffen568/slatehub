@@ -780,8 +780,12 @@ def run():
     print(f"\nPool Generator — {target_date}")
     print("=" * 55)
 
-    # Detect slates
-    sal_rows = sb.table('dk_salaries').select('dk_slate').eq('season', SEASON).eq('contest_type', 'classic').limit(5000).execute().data or []
+    # Detect slates (paginate to avoid 1000-row default limit)
+    sal_rows = []
+    for i in range(0, 5000, 1000):
+        rows = sb.table('dk_salaries').select('dk_slate').eq('season', SEASON).eq('contest_type', 'classic').range(i, i + 999).execute().data or []
+        sal_rows.extend(rows)
+        if len(rows) < 1000: break
     all_slates = sorted({r['dk_slate'] for r in sal_rows if r.get('dk_slate')})
     if slate_arg:
         all_slates = [slate_arg]
