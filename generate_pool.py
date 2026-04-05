@@ -654,21 +654,22 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
                 sub_teams.append(None)
 
         # Filter out capped players before building
+        # Use current lineup count (not target) for rolling % enforcement
         build_pool = pool
+        cur_count = max(len(lineups), 1)
         if _exp_caps or hitter_exp_max < 100 or pitcher_exp_max < 100:
             capped_pids = set()
             for pid, cnt in player_appear.items():
                 if pid in _exp_caps:
-                    max_count = max(1, int(n_lineups * _exp_caps[pid] / 100))
-                    if cnt >= max_count:
+                    cap_pct = _exp_caps[pid] / 100.0
+                    if cnt / cur_count >= cap_pct:
                         capped_pids.add(pid)
                 # Check global position cap
                 p_obj = _pool_lookup.get(pid)
                 if p_obj:
                     global_cap = pitcher_exp_max if p_obj['is_pitcher'] else hitter_exp_max
                     if global_cap < 100:
-                        max_count = max(1, int(n_lineups * global_cap / 100))
-                        if cnt >= max_count:
+                        if cnt / cur_count >= global_cap / 100.0:
                             capped_pids.add(pid)
             if capped_pids:
                 build_pool = [p for p in pool if p['player_id'] not in capped_pids]
