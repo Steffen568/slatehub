@@ -610,6 +610,11 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
     team_stack_counts = defaultdict(int)
     team_cap = int(n_lineups * 0.15) if mode == 'user' else None
 
+    # Per-player exposure tracking
+    player_appear = defaultdict(int)
+    _exp_caps = exposure_caps or {}
+    _exp_caps = {int(k): v for k, v in _exp_caps.items()}  # ensure int keys
+
     while len(lineups) < n_lineups and attempts < max_attempts:
         # First cycle: round-robin for coverage; then leverage-weighted
         if attempts < len(viable_teams):
@@ -665,6 +670,29 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
             continue
         seen.add(key)
 
+        # Check exposure caps — reject lineup if any player would exceed their cap
+        if _exp_caps or hitter_exp_max < 100 or pitcher_exp_max < 100:
+            lu_set = set(lu)
+            over_cap = False
+            for pid in lu_set:
+                # Per-player cap
+                if pid in _exp_caps:
+                    max_count = max(1, int(n_lineups * _exp_caps[pid] / 100))
+                    if player_appear[pid] >= max_count:
+                        over_cap = True
+                        break
+                # Global position cap
+                p_obj = next((p for p in pool if p['player_id'] == pid), None)
+                if p_obj:
+                    global_cap = pitcher_exp_max if p_obj['is_pitcher'] else hitter_exp_max
+                    if global_cap < 100:
+                        max_count = max(1, int(n_lineups * global_cap / 100))
+                        if player_appear[pid] >= max_count:
+                            over_cap = True
+                            break
+            if over_cap:
+                continue
+
         # Compute metadata
         salary = sum(p['salary'] for p in pool if p['player_id'] in set(lu))
         proj = sum(p['proj'] for p in pool if p['player_id'] in set(lu))
@@ -693,6 +721,8 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
             'sub_size': sub_s,
         })
         team_stack_counts[stack_team] += 1
+        for pid in lu:
+            player_appear[pid] += 1
 
         if len(lineups) % 1000 == 0:
             print(f"    Generated {len(lineups):,} / {n_lineups:,} ({attempts:,} attempts)")
