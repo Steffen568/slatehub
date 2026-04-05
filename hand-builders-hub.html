@@ -5332,15 +5332,22 @@ async function loadPlayerPool(date, slate) {
   });
 
   // 5b. Per-slate ownership overlay (from slate_ownership table)
-  if (effectiveDate && effectiveDate !== 'all' && slate && _contestMode !== 'showdown') {
+  if (effectiveDate && effectiveDate !== 'all' && slate) {
+    const ownSelect = _contestMode === 'showdown'
+      ? 'player_id,proj_ownership,cpt_ownership,flex_ownership'
+      : 'player_id,proj_ownership';
     const { data: slateOwnRows } = await sb.from('slate_ownership')
-      .select('player_id,proj_ownership')
+      .select(ownSelect)
       .eq('game_date', effectiveDate)
       .eq('dk_slate', slate)
       .limit(5000);
     if (slateOwnRows && slateOwnRows.length) {
       slateOwnRows.forEach(r => {
-        if (projMap[r.player_id]) projMap[r.player_id].proj_ownership = r.proj_ownership;
+        if (projMap[r.player_id]) {
+          projMap[r.player_id].proj_ownership = r.proj_ownership;
+          if (r.cpt_ownership != null) projMap[r.player_id].cpt_ownership = r.cpt_ownership;
+          if (r.flex_ownership != null) projMap[r.player_id].flex_ownership = r.flex_ownership;
+        }
       });
       // Also overlay pitcher projections
       pitcherProjRaw.forEach(p => {
@@ -5474,6 +5481,8 @@ async function loadPlayerPool(date, slate) {
       proj_er:          null,
       win_prob:         null,
       proj_ownership:   proj?.proj_ownership ?? null,
+      cpt_ownership:    proj?.cpt_ownership ?? null,
+      flex_ownership:   proj?.flex_ownership ?? null,
       wrc_plus:         bs?.wrc_plus ?? null,
       woba:             bs?.woba     ?? null,
       iso:              bs?.iso      ?? null,
@@ -5532,6 +5541,8 @@ async function loadPlayerPool(date, slate) {
           win_prob:         proj?.win_prob   ?? null,
           stats_level:      proj?.stats_level ?? 'MLB',
           proj_ownership:   proj?.proj_ownership ?? null,
+          cpt_ownership:    proj?.cpt_ownership ?? null,
+          flex_ownership:   proj?.flex_ownership ?? null,
           wrc_plus: null, woba: null, iso: null,
           sp_name: null, sp_grade: null,
           hes:              hesInfo?.score ?? null,
@@ -5590,6 +5601,8 @@ async function loadPlayerPool(date, slate) {
         era:              ps?.era           ?? null,
         sp_grade_self:    ps ? computeSpGrade(ps) : null,
         proj_ownership:   proj.proj_ownership ?? null,
+        cpt_ownership:    proj.cpt_ownership ?? null,
+        flex_ownership:   proj.flex_ownership ?? null,
       });
     });
   }
@@ -11488,6 +11501,7 @@ function renderSDPool() {
     <th>Player</th><th style="width:36px;">Pos</th>
     ${salHeader}
     <th style="width:48px;" title="Click a cell to override">Proj</th>
+    <th style="width:44px;">Own%</th>
     <th style="width:44px;">Val</th>
     <th style="width:44px;">Exp%</th>
     <th style="width:44px;" title="Click a cell to set max exposure %">Cap</th>
@@ -11532,6 +11546,7 @@ function renderSDPlayerRow(p, expPct, role) {
     <td><span class="pt-muted" style="font-size:10px;">${pos}</span></td>
     <td class="pt-sal" style="${isCpt?'color:#fbbf24;font-weight:600;':''}">$${sal.toLocaleString()}</td>
     <td class="pt-proj" onclick="event.stopPropagation();editPlayerProj(${p.player_id},this)" title="Click to override projection" style="cursor:pointer;${projOv?'color:#fbbf24;font-weight:700;':''}">${proj != null ? Number(proj).toFixed(1) : '—'}</td>
+    <td style="color:${(isCpt ? p.cpt_ownership : p.flex_ownership) != null ? '#60a5fa' : 'var(--muted)'};">${(isCpt ? p.cpt_ownership : p.flex_ownership) != null ? (isCpt ? p.cpt_ownership : p.flex_ownership).toFixed(1)+'%' : '—'}</td>
     <td class="pt-val">${value}</td>
     <td style="color:${expColor};font-weight:700;font-family:'Barlow Condensed',sans-serif;">${expPct != null ? expPct.toFixed(0)+'%' : '—'}</td>
     <td onclick="event.stopPropagation();editSDPlayerExp(${p.player_id},'${role}',this)" title="Click to set max ${isCpt?'CPT':'FLEX'} exposure %" style="cursor:pointer;color:${(expTargets[`${role}_${p.player_id}`]??expTargets[p.player_id])!=null?'#a78bfa':'var(--muted)'};font-weight:${(expTargets[`${role}_${p.player_id}`]??expTargets[p.player_id])!=null?'700':'400'};">${(expTargets[`${role}_${p.player_id}`]??expTargets[p.player_id])!=null?(expTargets[`${role}_${p.player_id}`]??expTargets[p.player_id])+'%':'—'}</td>

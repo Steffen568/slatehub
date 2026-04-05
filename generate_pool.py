@@ -1060,6 +1060,44 @@ def process_sd_request(req):
                 uploaded += len(batch)
             print(f"  Uploaded {uploaded} {pool_type} SD lineups [{slate}]")
 
+        # Compute and save SD ownership from contest pool appearances
+        if contest_lineups:
+            total_lu = len(contest_lineups)
+            cpt_counts = defaultdict(int)
+            flex_counts = defaultdict(int)
+            for lu in contest_lineups:
+                cpt_counts[lu['player_ids'][0]] += 1
+                for fid in lu['player_ids'][1:]:
+                    flex_counts[fid] += 1
+
+            pid_pool = {p['player_id']: p for p in raw_pool}
+            ownership_rows = []
+            for pid in set(cpt_counts.keys()) | set(flex_counts.keys()):
+                p_obj = pid_pool.get(pid)
+                if not p_obj:
+                    continue
+                cpt_own = round(cpt_counts.get(pid, 0) / total_lu * 100, 2)
+                flex_own = round(flex_counts.get(pid, 0) / total_lu * 100, 2)
+                ownership_rows.append({
+                    'player_id': pid,
+                    'game_pk': p_obj.get('game_pk'),
+                    'game_date': target_date,
+                    'dk_slate': slate,
+                    'proj_ownership': round(cpt_own + flex_own, 2),
+                    'cpt_ownership': cpt_own,
+                    'flex_ownership': flex_own,
+                    'computed_at': computed_at,
+                })
+
+            if ownership_rows:
+                sb.table('slate_ownership').delete().eq('dk_slate', slate).eq('game_date', target_date).execute()
+                for j in range(0, len(ownership_rows), 500):
+                    sb.table('slate_ownership').upsert(
+                        ownership_rows[j:j+500],
+                        on_conflict='player_id,game_pk,dk_slate'
+                    ).execute()
+                print(f"  Saved SD ownership for {len(ownership_rows)} players")
+
         # Mark complete
         sb.table('pool_requests').update({
             'status': 'complete',
