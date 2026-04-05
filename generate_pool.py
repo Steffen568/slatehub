@@ -35,6 +35,9 @@ SALARY_CAP = 50000
 SALARY_FLOOR = 48500
 UPSIDE_BLEND = 0.15    # user pool scoring: 15% weight toward ceiling (P90)
 
+# Normalize projection team abbreviations to DK abbreviations
+TEAM_ABBR_MAP = {'CHW': 'CWS', 'KCR': 'KC', 'SDP': 'SD', 'TBR': 'TB', 'WSN': 'WSH'}
+
 def safe(val, default=None):
     if val is None: return default
     try:
@@ -176,7 +179,8 @@ def build_player_pool(data):
         odds_row = data['odds'].get(p.get('game_pk'))
         game_total = safe(odds_row.get('game_total'), 8.5) if odds_row else 8.5
 
-        team = sal_row.get('team', '') or p.get('team', '')
+        raw_team = sal_row.get('team', '') or p.get('team', '')
+        team = TEAM_ABBR_MAP.get(raw_team, raw_team)
         own = data['ownership'].get(pid, 5.0)
 
         pool.append({
@@ -681,12 +685,17 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0):
             print(f"    Top-up: {t} needs {deficit} more lineups to reach 2.5% floor")
             added = 0
             topup_attempts = 0
-            while added < deficit and topup_attempts < deficit * 8:
+            max_topup = deficit * 25  # high multiplier for thin rosters
+            n_hitters = len(team_hitters.get(t, []))
+            while added < deficit and topup_attempts < max_topup:
                 topup_attempts += 1
                 config = STACK_CONFIGS[rng.integers(len(STACK_CONFIGS))]
                 main_size = config['main']
                 if main_size >= 5 and t not in viable_5:
                     main_size = 4
+                # For thin rosters (< 6 hitters), try 3-man stacks too
+                if n_hitters < 6 and main_size > 3:
+                    main_size = rng.choice([3, 4])
                 sub_cands = [st for st in viable_3sub if st != t]
                 sub_teams_tu = []
                 for ss in config['subs']:
