@@ -8196,21 +8196,31 @@ async function loadPoolFromDB() {
     console.warn(`[loadPoolFromDB] playerMap: ${Object.keys(playerMap).length} players from ${allPoolPids.length} unique IDs (sal=${salRows.length}, proj=${projRows.length})`);
 
     // Enrich user pool into _poolCandidates format
+    const isSD = _contestMode === 'showdown';
+    const slotDefs = isSD ? SD_LINEUP_SLOTS : LINEUP_SLOTS;
+    const expectedLen = isSD ? 6 : 10;
+
     _poolCandidates = [];
     for (const row of userRes) {
       const pids = row.player_ids;
-      if (!pids || pids.length !== 10) continue;
+      if (!pids || pids.length !== expectedLen) continue;
 
-      // player_ids are stored in DK slot order: SP,SP,C,1B,2B,3B,SS,OF,OF,OF
-      // Assign directly by index — no position reconstruction needed
       const lineup = {};
-      for (let i = 0; i < LINEUP_SLOTS.length && i < pids.length; i++) {
+      for (let i = 0; i < slotDefs.length && i < pids.length; i++) {
         const p = playerMap[pids[i]];
-        if (p) lineup[LINEUP_SLOTS[i].key] = p;
+        if (p) {
+          // For SD CPT slot, apply 1.5x salary/proj multipliers
+          if (isSD && slotDefs[i].isCpt) {
+            lineup[slotDefs[i].key] = { ...p, salary: Math.round(p.salary * 1.5),
+              proj_dk_pts: p.proj_dk_pts != null ? +(p.proj_dk_pts * 1.5).toFixed(1) : null };
+          } else {
+            lineup[slotDefs[i].key] = p;
+          }
+        }
       }
 
       const metrics = scorePoolLineup(lineup);
-      const key = pids.sort((a,b) => a-b).join(',');
+      const key = [...pids].sort((a,b) => a-b).join(',');
       _poolCandidates.push({ lineup, metrics, dedupKey: key });
     }
 
