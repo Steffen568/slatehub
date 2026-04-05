@@ -35,6 +35,12 @@ SALARY_CAP = 50000
 SALARY_FLOOR = 48500
 UPSIDE_BLEND = 0.15    # user pool scoring: 15% weight toward ceiling (P90)
 
+# ── Daily overrides (edit before running) ──────────────────────────────────
+# Teams to exclude entirely from user pool (weather, PPD risk, etc.)
+USER_EXCLUDE_TEAMS = {'NYY', 'MIA'}
+# Teams to discount in contest pool ownership (field will under-own them)
+CONTEST_DISCOUNT_TEAMS = {'NYY': 0.60, 'MIA': 0.60}  # multiply ownership by this factor
+
 # Normalize projection team abbreviations to DK abbreviations
 TEAM_ABBR_MAP = {'CHW': 'CWS', 'KCR': 'KC', 'SDP': 'SD', 'TBR': 'TB', 'WSN': 'WSH'}
 
@@ -473,6 +479,10 @@ def sample_noisy_scores(pool, rng, mode='user'):
                 base *= 5.0
             if not p['is_pitcher'] and not p['confirmed']:
                 base *= 0.4
+            # Discount teams with weather/PPD risk in contest pool
+            discount = CONTEST_DISCOUNT_TEAMS.get(p.get('team'), 1.0)
+            if discount < 1.0:
+                base *= discount
             # Multiplicative noise
             noise_sd = 0.50 if p['is_pitcher'] else 0.30
             mult = 1.0 + rng.normal(0, noise_sd)
@@ -541,6 +551,14 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0):
         if not p['is_pitcher']:
             team_hitters[p['team']].append(p)
     viable_teams = [t for t, hs in team_hitters.items() if len(hs) >= 4]
+
+    # User pool: exclude risky teams (weather/PPD)
+    if mode == 'user' and USER_EXCLUDE_TEAMS:
+        excluded = [t for t in viable_teams if t in USER_EXCLUDE_TEAMS]
+        viable_teams = [t for t in viable_teams if t not in USER_EXCLUDE_TEAMS]
+        if excluded:
+            print(f"    User pool excluding: {excluded}")
+
     print(f"    Viable main teams: {len(viable_teams)} — {viable_teams}")
 
     if not viable_teams:
