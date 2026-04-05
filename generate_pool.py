@@ -825,19 +825,25 @@ def build_lineup_sd(pool, scores, rng, salary_cap=SD_SALARY_CAP,
     cpt_sal = cpt['salary'] * 1.5
     sal_left = salary_cap - cpt_sal
 
-    # Fill 5 FLEX greedily — skip CPT player
+    # Fill 5 FLEX with randomized top-K selection — skip CPT player
     flex_ranked = sorted(flex_pool, key=lambda i: scores[i], reverse=True)
+    flex_candidates = [i for i in flex_ranked if pool[i]['player_id'] != cpt_pid]
     flex_pids = []
-    for fi in flex_ranked:
-        if len(flex_pids) >= 5:
+    used_flex = set()
+    for _ in range(5):
+        # Filter to affordable candidates not yet picked
+        affordable = [i for i in flex_candidates
+                      if i not in used_flex and pool[i]['salary'] <= sal_left]
+        if not affordable:
             break
-        fp = pool[fi]
-        if fp['player_id'] == cpt_pid:
-            continue
-        if fp['salary'] > sal_left:
-            continue
-        flex_pids.append(fp['player_id'])
-        sal_left -= fp['salary']
+        top_k = min(3, len(affordable))
+        top = affordable[:top_k]
+        wts = np.array([max(scores[i], 0.1) for i in top])
+        wts /= wts.sum()
+        pick = top[rng.choice(len(top), p=wts)]
+        flex_pids.append(pool[pick]['player_id'])
+        used_flex.add(pick)
+        sal_left -= pool[pick]['salary']
 
     if len(flex_pids) < 5:
         return None
