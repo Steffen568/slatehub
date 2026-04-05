@@ -157,7 +157,13 @@ def run():
     # Load player ID maps for resolution
     mlbam_id_set, name_to_mlbam, mlbam_to_name = load_player_id_maps()
 
-    dates_to_load = [today + timedelta(days=i) for i in range(8)]
+    # --today flag: only load today's games (used by --quick pipeline)
+    today_only = '--today' in sys.argv
+    if today_only:
+        dates_to_load = [today]
+        print("  Mode: --today (single day)")
+    else:
+        dates_to_load = [today + timedelta(days=i) for i in range(8)]
 
     total_games   = 0
     total_lineups = 0
@@ -187,6 +193,13 @@ def run():
         lineups_to_insert = []
 
         for g in games_data:
+            # Skip doubleheader Game 2 with TBD start time (not on any DK slate)
+            if g.get("status", {}).get("startTimeTBD", False):
+                away_name = g.get("teams", {}).get("away", {}).get("team", {}).get("name", "?")
+                home_name = g.get("teams", {}).get("home", {}).get("team", {}).get("name", "?")
+                print(f"  SKIP TBD game: {away_name} @ {home_name} (gamePk={g.get('gamePk')})")
+                continue
+
             gm   = g.get("gamePk")
             home = g.get("teams", {}).get("home", {})
             away = g.get("teams", {}).get("away", {})
