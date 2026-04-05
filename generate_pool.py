@@ -614,6 +614,7 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
     player_appear = defaultdict(int)
     _exp_caps = exposure_caps or {}
     _exp_caps = {int(k): v for k, v in _exp_caps.items()}  # ensure int keys
+    _pool_lookup = {p['player_id']: p for p in pool}  # fast lookup for cap checks
 
     while len(lineups) < n_lineups and attempts < max_attempts:
         # First cycle: round-robin for coverage; then leverage-weighted
@@ -652,13 +653,33 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
             else:
                 sub_teams.append(None)
 
+        # Filter out capped players before building
+        build_pool = pool
+        if _exp_caps or hitter_exp_max < 100 or pitcher_exp_max < 100:
+            capped_pids = set()
+            for pid, cnt in player_appear.items():
+                if pid in _exp_caps:
+                    max_count = max(1, int(n_lineups * _exp_caps[pid] / 100))
+                    if cnt >= max_count:
+                        capped_pids.add(pid)
+                # Check global position cap
+                p_obj = _pool_lookup.get(pid)
+                if p_obj:
+                    global_cap = pitcher_exp_max if p_obj['is_pitcher'] else hitter_exp_max
+                    if global_cap < 100:
+                        max_count = max(1, int(n_lineups * global_cap / 100))
+                        if cnt >= max_count:
+                            capped_pids.add(pid)
+            if capped_pids:
+                build_pool = [p for p in pool if p['player_id'] not in capped_pids]
+
         # Sample noisy scores
-        scores = sample_noisy_scores(pool, rng, mode=mode,
+        scores = sample_noisy_scores(build_pool, rng, mode=mode,
                                       contest_type=contest_type,
                                       contest_discounts=contest_discounts)
 
         # Build lineup
-        lu = build_lineup_greedy(pool, scores, main_team=main_team, main_size=main_size,
+        lu = build_lineup_greedy(build_pool, scores, main_team=main_team, main_size=main_size,
                                   sub_teams=sub_teams, sub_sizes=sub_sizes, rng=rng,
                                   pvh_off=pvh_off, game_teams=game_teams)
         if lu is None:
@@ -669,29 +690,6 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         if key in seen:
             continue
         seen.add(key)
-
-        # Check exposure caps — reject lineup if any player would exceed their cap
-        if _exp_caps or hitter_exp_max < 100 or pitcher_exp_max < 100:
-            lu_set = set(lu)
-            over_cap = False
-            for pid in lu_set:
-                # Per-player cap
-                if pid in _exp_caps:
-                    max_count = max(1, int(n_lineups * _exp_caps[pid] / 100))
-                    if player_appear[pid] >= max_count:
-                        over_cap = True
-                        break
-                # Global position cap
-                p_obj = next((p for p in pool if p['player_id'] == pid), None)
-                if p_obj:
-                    global_cap = pitcher_exp_max if p_obj['is_pitcher'] else hitter_exp_max
-                    if global_cap < 100:
-                        max_count = max(1, int(n_lineups * global_cap / 100))
-                        if player_appear[pid] >= max_count:
-                            over_cap = True
-                            break
-            if over_cap:
-                continue
 
         # Compute metadata
         salary = sum(p['salary'] for p in pool if p['player_id'] in set(lu))
