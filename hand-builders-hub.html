@@ -4402,7 +4402,10 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <div class="opto-row"><label>Min Unique</label><input class="opto-input" id="opto-unique" type="number" min="0" max="8" value="3" oninput="optoSettings.minUnique=+this.value;saveSettings()"></div>
       <div class="opto-row"><label>Mode</label><select class="opto-input" id="opto-mode" style="width:80px;" onchange="setOptoMode(this.value==='pool')"><option value="noise">Noise</option><option value="pool">Pool</option></select></div>
       <div class="opto-row" id="opto-randpct-row"><label>Randomness %</label><input class="opto-input" id="opto-randpct" type="number" min="0" max="30" value="10" title="Adds ±N% noise to projections — produces diverse lineups quickly. 0=off (exhaustive), 5-15=recommended for 20+ lineups" oninput="optoSettings.randPct=+this.value;saveSettings()"></div>
-      <div class="opto-row" id="opto-poolsize-row" style="display:none"><label>Pool Size</label><input class="opto-input" id="opto-poolsize" type="number" min="500" max="3000" step="100" value="2000" title="Number of simulations to run" oninput="optoSettings.poolSize=+this.value;saveSettings()"></div>
+      <div class="opto-row" id="opto-poolsize-row" style="display:none"><label>User Pool</label><input class="opto-input" id="opto-poolsize" type="number" min="1000" max="20000" step="1000" value="10000" title="User pool size (backend generation)" oninput="optoSettings.poolSize=+this.value;saveSettings()"></div>
+      <div class="opto-row" id="opto-contest-poolsize-row" style="display:none"><label>Contest Pool</label><input class="opto-input" id="contest-pool-size" type="number" min="1000" max="30000" step="1000" value="15000" title="Contest pool size (field simulation)" oninput="optoSettings.contestPoolSize=+this.value;saveSettings()"></div>
+      <div class="opto-row" id="opto-contest-type-row" style="display:none"><label>Contest Type</label><select class="opto-input" id="contest-type-select" style="width:120px;" onchange="optoSettings.contestType=this.value;saveSettings()"><option value="gpp">GPP (Large)</option><option value="small">Small Field</option></select></div>
+      <div id="pool-gen-status" style="display:none;padding:6px 10px;margin:4px 0;font-size:11px;border-radius:6px;background:rgba(167,139,250,.08);color:#a78bfa;text-align:center;"></div>
       <div class="opto-row"><label>Hitter Max Exp%</label><input class="opto-input" id="opto-expmax-hit" type="number" min="1" max="100" value="100" oninput="expHitterMax=+this.value;saveSettings()"></div>
       <div class="opto-row classic-only"><label>Pitcher Max Exp%</label><input class="opto-input" id="opto-expmax-pit" type="number" min="1" max="100" value="100" oninput="expPitcherMax=+this.value;saveSettings()"></div>
       <div class="opto-row sd-only" style="display:none"><label>CPT Max Exp%</label><input class="opto-input" id="opto-cpt-max" type="number" min="1" max="100" value="35" oninput="expCptMax=+this.value;saveSettings()" title="Max % of lineups any player can appear as Captain"></div>
@@ -4750,8 +4753,10 @@ const optoSettings = {
   ],
   teamStacks: [],   // [{ team:'ATL', role:'main'|'sub', exposure:40 }]
   blockedMainTeams: [],  // teams excluded from main stack but still in pool/sub-stacks
-  poolMode: false,       // false = noise mode, true = pool generation mode
-  poolSize: 2000,        // number of sims for pool generation
+  poolMode: false,       // false = noise mode, true = backend pool generation mode
+  poolSize: 10000,       // user pool size (backend generation)
+  contestPoolSize: 15000, // contest pool size (backend generation)
+  contestType: 'gpp',    // 'gpp' or 'small'
   contestSims: 5000,     // number of sims for contest simulation
   coverageWt: 50,        // quality vs coverage blend (0=pure quality, 100=pure coverage)
   teamOverrides: {},
@@ -4773,6 +4778,8 @@ function saveSettings() {
     blockedMainTeams: optoSettings.blockedMainTeams,
     poolMode: optoSettings.poolMode,
     poolSize: optoSettings.poolSize,
+    contestPoolSize: optoSettings.contestPoolSize,
+    contestType: optoSettings.contestType,
     coverageWt: optoSettings.coverageWt,
     expHitterMax,
     expPitcherMax,
@@ -4807,6 +4814,8 @@ function restoreSettings() {
     if (s.poolMode != null) { optoSettings.poolMode = s.poolMode; setOptoMode(s.poolMode); }
     if (s.coverageWt != null) { optoSettings.coverageWt = s.coverageWt; const el = document.getElementById('pool-coverage-wt'); if (el) el.value = s.coverageWt; const lb = document.getElementById('pool-cov-label'); if (lb) lb.textContent = s.coverageWt+'%'; }
     if (s.poolSize != null) { optoSettings.poolSize = s.poolSize; const el = document.getElementById('opto-poolsize'); if (el) el.value = s.poolSize; }
+    if (s.contestPoolSize != null) { optoSettings.contestPoolSize = s.contestPoolSize; const el = document.getElementById('contest-pool-size'); if (el) el.value = s.contestPoolSize; }
+    if (s.contestType) { optoSettings.contestType = s.contestType; const el = document.getElementById('contest-type-select'); if (el) el.value = s.contestType; }
     if (s.projOverrides) projOverrides = s.projOverrides;
     if (s.projBoosts)    projBoosts    = s.projBoosts;
     if (s.expTargets)    expTargets    = s.expTargets;
@@ -7688,11 +7697,122 @@ function setOptoMode(isPool) {
   // Update settings drawer visibility
   const randRow = document.getElementById('opto-randpct-row');
   const poolRow = document.getElementById('opto-poolsize-row');
+  const contestPoolRow = document.getElementById('opto-contest-poolsize-row');
+  const contestTypeRow = document.getElementById('opto-contest-type-row');
   const modeSelect = document.getElementById('opto-mode');
   if (randRow) randRow.style.display = isPool ? 'none' : '';
   if (poolRow) poolRow.style.display = isPool ? '' : 'none';
+  if (contestPoolRow) contestPoolRow.style.display = isPool ? '' : 'none';
+  if (contestTypeRow) contestTypeRow.style.display = isPool ? '' : 'none';
   if (modeSelect) modeSelect.value = isPool ? 'pool' : 'noise';
   saveSettings();
+}
+
+// ── ON-DEMAND POOL GENERATION (Supabase relay) ──────────────────────────────
+
+function showPoolStatus(msg, isError) {
+  const el = document.getElementById('pool-gen-status');
+  if (!el) return;
+  el.style.display = 'block';
+  el.textContent = msg;
+  el.style.color = isError ? '#f87171' : '#a78bfa';
+  el.style.background = isError ? 'rgba(248,113,113,.08)' : 'rgba(167,139,250,.08)';
+}
+
+function hidePoolStatus() {
+  const el = document.getElementById('pool-gen-status');
+  if (el) el.style.display = 'none';
+}
+
+let _poolRequestInterval = null;
+
+async function requestPoolGeneration() {
+  const date = document.getElementById('date-select')?.value;
+  const slate = _activeSlate;
+  if (!date || date === 'all') { showToast('Select a specific date first'); return; }
+  if (!slate || slate === 'all') { showToast('Select a specific slate first'); return; }
+
+  // Collect all user settings from the UI
+  const request = {
+    game_date: date,
+    dk_slate: slate,
+    contest_type: document.getElementById('contest-type-select')?.value || 'gpp',
+    user_pool_size: +(document.getElementById('opto-poolsize')?.value) || 10000,
+    contest_pool_size: +(document.getElementById('contest-pool-size')?.value) || 15000,
+    // From player chips
+    excluded_players: [...excludedPlayers],
+    locked_players: [...lockedPlayers],
+    proj_overrides: projOverrides,
+    exclude_teams: [...(typeof teamExcludes !== 'undefined' ? teamExcludes : [])],
+    // From settings drawer
+    exposure_caps: expTargets,
+    hitter_exp_max: expHitterMax,
+    pitcher_exp_max: expPitcherMax,
+    stack_rules: optoSettings.stackRules || [],
+    salary_cap: optoSalaryCap || 50000,
+    min_salary: optoSettings.minSalary || 48500,
+  };
+
+  showPoolStatus('Submitting request...');
+  const genBtn = document.getElementById('generate-btn');
+  if (genBtn) { genBtn.disabled = true; genBtn.textContent = 'Generating...'; }
+
+  const { data, error } = await sb.from('pool_requests')
+    .insert(request).select('id').single();
+
+  if (error) {
+    showPoolStatus('Error submitting request: ' + error.message, true);
+    if (genBtn) { genBtn.disabled = false; genBtn.textContent = 'Build Pool'; }
+    return;
+  }
+
+  console.log('[Pool] Request submitted:', data.id);
+  showPoolStatus('Request submitted — waiting for backend...');
+  pollForCompletion(data.id);
+}
+
+function pollForCompletion(requestId) {
+  if (_poolRequestInterval) clearInterval(_poolRequestInterval);
+
+  _poolRequestInterval = setInterval(async () => {
+    try {
+      const { data, error } = await sb.from('pool_requests')
+        .select('status,user_pool_count,contest_pool_count,error_message')
+        .eq('id', requestId).single();
+
+      if (error) {
+        clearInterval(_poolRequestInterval);
+        showPoolStatus('Error checking status', true);
+        resetBuildPoolBtn();
+        return;
+      }
+
+      if (data.status === 'processing') {
+        showPoolStatus('Backend generating pools...');
+      } else if (data.status === 'complete') {
+        clearInterval(_poolRequestInterval);
+        showPoolStatus(`Pool ready: ${data.user_pool_count.toLocaleString()} user + ${data.contest_pool_count.toLocaleString()} contest`);
+        resetBuildPoolBtn();
+        showToast(`Pools generated: ${data.user_pool_count.toLocaleString()} user + ${data.contest_pool_count.toLocaleString()} contest`);
+        // Load the freshly generated pools
+        await loadPoolFromDB();
+      } else if (data.status === 'error') {
+        clearInterval(_poolRequestInterval);
+        showPoolStatus('Error: ' + (data.error_message || 'Unknown error'), true);
+        resetBuildPoolBtn();
+      }
+    } catch (e) {
+      console.error('[Pool] Poll error:', e);
+    }
+  }, 3000);
+}
+
+function resetBuildPoolBtn() {
+  const genBtn = document.getElementById('generate-btn');
+  if (genBtn && optoSettings.poolMode) {
+    genBtn.disabled = false;
+    genBtn.textContent = 'Build Pool';
+  }
 }
 
 // ── POOL LOADING OVERLAY ─────────────────────────────────────────────────────
@@ -9758,7 +9878,7 @@ function generateLineups() {
   if (_contestMode === 'showdown' && optoSettings.poolMode) { generatePool_SD(); return; }
   if (_contestMode === 'showdown') { generateLineups_Showdown(); return; }
   if (lateSwapMode) { lateSwapAllLineups(); return; }
-  if (optoSettings.poolMode) { generatePool(); return; }
+  if (optoSettings.poolMode) { requestPoolGeneration(); return; }
   const N = optoSettings.numLineups || 1;
 
   // Validate pool

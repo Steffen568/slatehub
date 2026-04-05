@@ -2,22 +2,19 @@
 import sys
 sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
 """
-generate_pool.py — Pre-compute lineup pools for contest simulation
+generate_pool.py — Lineup pool generation for contest simulation
 
 Generates TWO pools per slate:
   1. User pool: optimized lineups using real projections + greedy randomized builder
   2. Contest pool: ownership-weighted lineups representing the DK field
 
-Uses a greedy randomized builder (not LP solver) for massive diversity.
-Round-robin team selection ensures every viable team gets coverage.
-
-Run:
-  py -3.12 generate_pool.py
-  py -3.12 generate_pool.py --slate main
-  py -3.12 generate_pool.py --user-size 15000 --contest-size 20000
+Modes:
+  py -3.12 generate_pool.py                    # Auto-generate for all slates (legacy)
+  py -3.12 generate_pool.py --slate main       # Single slate
+  py -3.12 generate_pool.py --watch            # Poll for frontend requests via Supabase
 """
 
-import os, math, random, json
+import os, math, random, json, time, copy
 import numpy as np
 from datetime import date, datetime, timezone
 from collections import defaultdict
@@ -35,11 +32,15 @@ SALARY_CAP = 50000
 SALARY_FLOOR = 48500
 UPSIDE_BLEND = 0.15    # user pool scoring: 15% weight toward ceiling (P90)
 
-# ── Daily overrides (edit before running) ──────────────────────────────────
-# Teams to exclude entirely from user pool (weather, PPD risk, etc.)
-USER_EXCLUDE_TEAMS = {'NYY', 'MIA'}
-# Teams to discount in contest pool ownership (field will under-own them)
-CONTEST_DISCOUNT_TEAMS = {'NYY': 0.65, 'MIA': 0.65}  # multiply ownership by this factor
+# ── Daily overrides (used by legacy run(), overridden by --watch requests) ──
+USER_EXCLUDE_TEAMS = set()
+CONTEST_DISCOUNT_TEAMS = {}
+
+# Contest type profiles for contest pool generation
+CONTEST_PROFILES = {
+    'gpp':   {'noise_pit': 0.50, 'noise_hit': 0.30, 'pitcher_mult': 5.0, 'unconf_pen': 0.4},
+    'small': {'noise_pit': 0.25, 'noise_hit': 0.15, 'pitcher_mult': 6.0, 'unconf_pen': 0.2},
+}
 
 # Normalize projection team abbreviations to DK abbreviations
 TEAM_ABBR_MAP = {'CHW': 'CWS', 'KCR': 'KC', 'SDP': 'SD', 'TBR': 'TB', 'WSN': 'WSH'}
@@ -454,15 +455,18 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
 
 # ── Noise Sampling ───────────────────────────────────────────────────────────
 
-def sample_noisy_scores(pool, rng, mode='user'):
+def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_discounts=None):
     """
     Sample noisy projection scores for one sim.
     mode='user': real projections with game/team/individual correlation
     mode='contest': ownership-weighted public bias scoring
     """
     scores = np.zeros(len(pool))
+    if contest_discounts is None:
+        contest_discounts = CONTEST_DISCOUNT_TEAMS
 
     if mode == 'contest':
+        profile = CONTEST_PROFILES.get(contest_type, CONTEST_PROFILES['gpp'])
         # Public bias scoring (same as sim_ownership.py)
         for i, p in enumerate(pool):
             proj_score = p['proj'] ** 1.5
@@ -476,15 +480,15 @@ def sample_noisy_scores(pool, rng, mode='user'):
             env_score = (p['game_total'] / 8.5) ** 1.5
             base = proj_score * 0.40 + sal_score * 0.30 + env_score * 0.10 + bo_score * 0.15
             if p['is_pitcher']:
-                base *= 5.0
+                base *= profile['pitcher_mult']
             if not p['is_pitcher'] and not p['confirmed']:
-                base *= 0.4
-            # Discount teams with weather/PPD risk in contest pool
-            discount = CONTEST_DISCOUNT_TEAMS.get(p.get('team'), 1.0)
+                base *= profile['unconf_pen']
+            # Discount teams with weather/PPD risk
+            discount = contest_discounts.get(p.get('team'), 1.0)
             if discount < 1.0:
                 base *= discount
             # Multiplicative noise
-            noise_sd = 0.50 if p['is_pitcher'] else 0.30
+            noise_sd = profile['noise_pit'] if p['is_pitcher'] else profile['noise_hit']
             mult = 1.0 + rng.normal(0, noise_sd)
             scores[i] = base * max(mult, 0.05)
     else:
@@ -524,7 +528,10 @@ def sample_noisy_scores(pool, rng, mode='user'):
 
 # ── Pool Generation ──────────────────────────────────────────────────────────
 
-def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0):
+def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
+                     contest_type='gpp', contest_discounts=None,
+                     exclude_teams=None, exposure_caps=None,
+                     hitter_exp_max=100, pitcher_exp_max=100):
     """Generate n_lineups unique lineups using greedy randomized builder."""
     if rng is None: rng = np.random.default_rng()
 
@@ -552,12 +559,13 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0):
             team_hitters[p['team']].append(p)
     viable_teams = [t for t, hs in team_hitters.items() if len(hs) >= 4]
 
-    # User pool: exclude risky teams (weather/PPD)
-    if mode == 'user' and USER_EXCLUDE_TEAMS:
-        excluded = [t for t in viable_teams if t in USER_EXCLUDE_TEAMS]
-        viable_teams = [t for t in viable_teams if t not in USER_EXCLUDE_TEAMS]
+    # User pool: exclude teams (weather/PPD, or from request)
+    _exclude = exclude_teams or (USER_EXCLUDE_TEAMS if mode == 'user' else set())
+    if _exclude:
+        excluded = [t for t in viable_teams if t in _exclude]
+        viable_teams = [t for t in viable_teams if t not in _exclude]
         if excluded:
-            print(f"    User pool excluding: {excluded}")
+            print(f"    Excluding teams: {excluded}")
 
     print(f"    Viable main teams: {len(viable_teams)} — {viable_teams}")
 
@@ -640,7 +648,9 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0):
                 sub_teams.append(None)
 
         # Sample noisy scores
-        scores = sample_noisy_scores(pool, rng, mode=mode)
+        scores = sample_noisy_scores(pool, rng, mode=mode,
+                                      contest_type=contest_type,
+                                      contest_discounts=contest_discounts)
 
         # Build lineup
         lu = build_lineup_greedy(pool, scores, main_team=main_team, main_size=main_size,
@@ -751,6 +761,189 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0):
                 print(f"    Top-up: added {added} lineups for {t}")
 
     return lineups
+
+
+# ── User Settings (for --watch requests) ────────────────────────────────────
+
+def apply_user_settings(pool, req):
+    """Apply frontend user customizations to the player pool."""
+    excluded = set(req.get('excluded_players') or [])
+    locked = set(req.get('locked_players') or [])
+    proj_overrides = req.get('proj_overrides') or {}
+    exclude_teams = set(req.get('exclude_teams') or [])
+
+    # Remove excluded players and teams
+    pool = [p for p in pool if p['player_id'] not in excluded
+            and p['team'] not in exclude_teams]
+
+    # Apply projection overrides
+    for p in pool:
+        pid_str = str(p['player_id'])
+        if pid_str in proj_overrides:
+            new_proj = float(proj_overrides[pid_str])
+            p['proj'] = new_proj
+            p['ceiling'] = new_proj * 1.5
+            p['floor'] = new_proj * 0.5
+
+    # Mark locked players (used by build_lineup_greedy if we add lock support)
+    for p in pool:
+        p['locked'] = p['player_id'] in locked
+
+    return pool
+
+
+def process_request(req):
+    """Process a single pool generation request from the frontend."""
+    req_id = req['id']
+    print(f"\n{'='*55}")
+    print(f"  Processing request #{req_id}")
+    print(f"{'='*55}")
+
+    sb.table('pool_requests').update({'status': 'processing'}).eq('id', req_id).execute()
+
+    try:
+        target_date = str(req['game_date'])
+        slate = req['dk_slate']
+        contest_type = req.get('contest_type', 'gpp')
+        u_size = req.get('user_pool_size') or 10000
+        c_size = req.get('contest_pool_size') or 15000
+
+        # Read user customizations
+        exclude_teams = set(req.get('exclude_teams') or [])
+        contest_discounts = req.get('contest_discount_teams') or {}
+        exp_caps = req.get('exposure_caps') or {}
+        hitter_exp = req.get('hitter_exp_max', 100)
+        pitcher_exp = req.get('pitcher_exp_max', 100)
+
+        salary_cap_override = req.get('salary_cap', SALARY_CAP)
+        min_salary_override = req.get('min_salary', SALARY_FLOOR)
+
+        print(f"  Date: {target_date}  Slate: {slate}  Contest: {contest_type}")
+        print(f"  User pool: {u_size:,}  Contest pool: {c_size:,}")
+
+        excluded_count = len(req.get('excluded_players') or [])
+        locked_count = len(req.get('locked_players') or [])
+        override_count = len(req.get('proj_overrides') or {})
+        if excluded_count or locked_count or override_count:
+            print(f"  Customizations: {excluded_count} excluded, {locked_count} locked, "
+                  f"{override_count} proj overrides")
+
+        # Fetch data
+        data = fetch_data(target_date, slate_filter=slate)
+        if not data:
+            raise ValueError("No data found for date/slate")
+
+        # Build raw pool (for contest — no user overrides)
+        raw_pool = build_player_pool(data)
+        print(f"  Raw player pool: {len(raw_pool)} players")
+
+        if len(raw_pool) < 15:
+            raise ValueError(f"Pool too small ({len(raw_pool)} players)")
+
+        # Build user pool (with overrides applied)
+        user_pool = copy.deepcopy(raw_pool)
+        user_pool = apply_user_settings(user_pool, req)
+        print(f"  User player pool (after settings): {len(user_pool)} players")
+
+        game_count = len({p['game_pk'] for p in raw_pool if p.get('game_pk')})
+        rng = np.random.default_rng(seed=42)
+
+        # Generate user pool
+        print(f"\n  Generating USER pool ({u_size:,} target)...")
+        user_lineups = generate_lineups(
+            user_pool, u_size, mode='user', rng=rng, game_count=game_count,
+            exclude_teams=exclude_teams,
+            exposure_caps=exp_caps, hitter_exp_max=hitter_exp, pitcher_exp_max=pitcher_exp,
+        )
+
+        # Generate contest pool (raw pool, ownership-weighted, no user overrides)
+        print(f"\n  Generating CONTEST pool ({c_size:,} target)...")
+        contest_lineups = generate_lineups(
+            raw_pool, c_size, mode='contest', rng=rng, game_count=game_count,
+            contest_type=contest_type, contest_discounts=contest_discounts,
+        )
+
+        # Clear existing pools for this date/slate and upload
+        print(f"\n  Clearing existing pools for {target_date}/{slate}...")
+        sb.table('sim_pool').delete().eq('game_date', target_date).eq('dk_slate', slate).execute()
+
+        computed_at = datetime.now(timezone.utc).isoformat()
+        BATCH = 500
+
+        for pool_type, lineups in [('user', user_lineups), ('contest', contest_lineups)]:
+            records = [{
+                'game_date': target_date,
+                'dk_slate': slate,
+                'pool_type': pool_type,
+                'player_ids': lu['player_ids'],
+                'salary': lu['salary'],
+                'proj': lu['proj'],
+                'stack_team': lu['stack_team'],
+                'stack_size': lu['stack_size'],
+                'sub_team': lu.get('sub_team'),
+                'sub_size': lu.get('sub_size', 0),
+                'computed_at': computed_at,
+            } for lu in lineups]
+
+            uploaded = 0
+            for j in range(0, len(records), BATCH):
+                batch = records[j:j+BATCH]
+                sb.table('sim_pool').upsert(batch, on_conflict='pool_id').execute()
+                uploaded += len(batch)
+            print(f"  Uploaded {uploaded} {pool_type} lineups [{slate}]")
+
+        # Mark complete
+        sb.table('pool_requests').update({
+            'status': 'complete',
+            'user_pool_count': len(user_lineups),
+            'contest_pool_count': len(contest_lineups),
+            'completed_at': datetime.now(timezone.utc).isoformat(),
+        }).eq('id', req_id).execute()
+
+        # Summary
+        teams_user = defaultdict(int)
+        for lu in user_lineups:
+            teams_user[lu['stack_team']] += 1
+        print(f"\n  User pool stack distribution:")
+        for t, cnt in sorted(teams_user.items(), key=lambda x: -x[1]):
+            pct = cnt / len(user_lineups) * 100 if user_lineups else 0
+            print(f"    {t:5s}: {cnt:>5,} ({pct:.1f}%)")
+
+        print(f"\n  Request #{req_id} complete: {len(user_lineups)} user + {len(contest_lineups)} contest")
+
+    except Exception as e:
+        print(f"  ERROR: {e}")
+        sb.table('pool_requests').update({
+            'status': 'error',
+            'error_message': str(e)[:500],
+        }).eq('id', req_id).execute()
+
+
+def watch():
+    """Poll Supabase for pending pool generation requests."""
+    print("\n" + "=" * 55)
+    print("  Pool Generator — Watch Mode")
+    print("  Polling for frontend requests... (Ctrl+C to stop)")
+    print("=" * 55)
+
+    while True:
+        try:
+            rows = (sb.table('pool_requests')
+                    .select('*')
+                    .eq('status', 'pending')
+                    .order('created_at')
+                    .limit(1)
+                    .execute().data)
+            if rows:
+                process_request(rows[0])
+            else:
+                time.sleep(3)
+        except KeyboardInterrupt:
+            print("\n  Watch mode stopped.")
+            break
+        except Exception as e:
+            print(f"  Poll error: {e}")
+            time.sleep(5)
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -870,4 +1063,7 @@ def run():
 
 
 if __name__ == '__main__':
-    run()
+    if '--watch' in sys.argv:
+        watch()
+    else:
+        run()
