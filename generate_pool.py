@@ -39,7 +39,7 @@ UPSIDE_BLEND = 0.15    # user pool scoring: 15% weight toward ceiling (P90)
 # Teams to exclude entirely from user pool (weather, PPD risk, etc.)
 USER_EXCLUDE_TEAMS = {'NYY', 'MIA'}
 # Teams to discount in contest pool ownership (field will under-own them)
-CONTEST_DISCOUNT_TEAMS = {'NYY': 0.60, 'MIA': 0.60}  # multiply ownership by this factor
+CONTEST_DISCOUNT_TEAMS = {'NYY': 0.65, 'MIA': 0.65}  # multiply ownership by this factor
 
 # Normalize projection team abbreviations to DK abbreviations
 TEAM_ABBR_MAP = {'CHW': 'CWS', 'KCR': 'KC', 'SDP': 'SD', 'TBR': 'TB', 'WSN': 'WSH'}
