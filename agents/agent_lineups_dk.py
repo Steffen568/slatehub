@@ -29,12 +29,13 @@ LINEUP_DK_SCRIPTS_POST_GATE = [
     ('load_weather.py',        'Weather'),
 ]
 
-# Quick mode: only schedule + weather + projected lineups + pitcher props
+# Quick mode: only today's schedule + weather + projected lineups + pitcher props
 QUICK_SCRIPTS = [
-    ('load_schedule.py',        'Schedule & Lineups'),
-    ('load_lineups_rg.py',      'RotoGrinders Projected Lineups'),
-    ('load_weather.py',         'Weather'),
-    ('load_pitcher_props.py',   'Pitcher Props'),
+    ('load_schedule.py --today', 'Schedule & Lineups (today only)'),
+    ('load_lineups_rg.py',       'RotoGrinders Projected Lineups'),
+    ('load_odds.py',             'Odds'),
+    ('load_weather.py',          'Weather'),
+    ('load_pitcher_props.py',    'Pitcher Props'),
 ]
 
 

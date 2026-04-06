@@ -10078,13 +10078,15 @@ async function buildPoolFromCSV(csvPool, date) {
     .select('player_id,full_name,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,game_pk,team')
     .eq('game_date', projDate).limit(5000);
   // Also fetch dk_salaries to fill gaps when CSV pool section is incomplete
-  // Must paginate — Supabase silently truncates at 1000 rows
+  // Filter by active slate so we don't pull in players from other slates
   async function fetchAllSalaries() {
     let all = [], offset = 0;
     while (true) {
-      const { data } = await sb.from('dk_salaries')
+      let q = sb.from('dk_salaries')
         .select('player_id,name,salary,position,team,dk_slate,dg_id')
-        .eq('contest_type', 'classic').range(offset, offset + 999);
+        .eq('contest_type', 'classic');
+      if (_activeSlate && _activeSlate !== 'all') q = q.eq('dk_slate', _activeSlate);
+      const { data } = await q.range(offset, offset + 999);
       if (!data || !data.length) break;
       all = all.concat(data);
       if (data.length < 1000) break;
@@ -10129,11 +10131,12 @@ async function buildPoolFromCSV(csvPool, date) {
   });
 
   // Backfill _csvPoolData with dk_salaries for any entry players not in the CSV pool
-  // This ensures stub players get salary/team even when the CSV pool section is truncated
+  // Only backfill players whose team is already on the slate (prevents cross-slate pollution)
   if (csvPool) {
     let backfilled = 0;
     dbSalaries.forEach(s => {
-      if (!s.name) return;
+      if (!s.name || !s.team) return;
+      if (!csvTeams.has(s.team)) return;  // only teams already in the CSV pool
       const key = normName(s.name);
       if (!csvPool[key] && !csvPool[(s.name||'').toLowerCase()]) {
         csvPool[key] = { name: s.name, draftableId: '', position: s.position || '', salary: s.salary || 0, team: s.team || '' };

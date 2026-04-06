@@ -655,22 +655,22 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
                 sub_teams.append(None)
 
         # Filter out capped players before building
-        # Use current lineup count (not target) for rolling % enforcement
+        # Use absolute max appearances (% of target pool size) — not rolling ratio
         build_pool = pool
-        cur_count = max(len(lineups), 1)
         if _exp_caps or hitter_exp_max < 100 or pitcher_exp_max < 100:
             capped_pids = set()
             for pid, cnt in player_appear.items():
                 if pid in _exp_caps:
-                    cap_pct = _exp_caps[pid] / 100.0
-                    if cnt / cur_count >= cap_pct:
+                    max_appearances = int(n_lineups * _exp_caps[pid] / 100.0)
+                    if cnt >= max_appearances:
                         capped_pids.add(pid)
                 # Check global position cap
                 p_obj = _pool_lookup.get(pid)
                 if p_obj:
                     global_cap = pitcher_exp_max if p_obj['is_pitcher'] else hitter_exp_max
                     if global_cap < 100:
-                        if cnt / cur_count >= global_cap / 100.0:
+                        max_app = int(n_lineups * global_cap / 100.0)
+                        if cnt >= max_app:
                             capped_pids.add(pid)
             if capped_pids:
                 build_pool = [p for p in pool if p['player_id'] not in capped_pids]
@@ -882,9 +882,8 @@ def generate_sd_lineups(pool, n_lineups, mode='user', rng=None,
 
     while len(lineups) < n_lineups and attempts < max_attempts:
         attempts += 1
-        cur_count = max(len(lineups), 1)
-
         # Filter capped players from this iteration's eligible lists
+        # Use absolute max appearances (% of target pool size)
         iter_cpt = cpt_indices
         iter_flex = flex_indices
 
@@ -897,7 +896,8 @@ def generate_sd_lineups(pool, n_lineups, mode='user', rng=None,
                 cpt_cap_key = f'cpt_{pid}'
                 cap_val = _exp_caps.get(cpt_cap_key, _exp_caps.get(str(pid)))
                 effective_cap = min(cpt_exp_max, cap_val) if cap_val is not None else cpt_exp_max
-                if effective_cap < 100 and cpt_appear[pid] / cur_count >= effective_cap / 100.0:
+                max_app = int(n_lineups * effective_cap / 100.0)
+                if effective_cap < 100 and cpt_appear[pid] >= max_app:
                     capped_cpt.add(i)
             for i in flex_indices:
                 pid = pool[i]['player_id']
@@ -906,7 +906,8 @@ def generate_sd_lineups(pool, n_lineups, mode='user', rng=None,
                 flex_cap_key = f'flex_{pid}'
                 cap_val = _exp_caps.get(flex_cap_key, _exp_caps.get(str(pid)))
                 effective_cap = min(global_cap, cap_val) if cap_val is not None else global_cap
-                if effective_cap < 100 and flex_appear[pid] / cur_count >= effective_cap / 100.0:
+                max_app = int(n_lineups * effective_cap / 100.0)
+                if effective_cap < 100 and flex_appear[pid] >= max_app:
                     capped_flex.add(i)
             if capped_cpt:
                 iter_cpt = [i for i in cpt_indices if i not in capped_cpt]
