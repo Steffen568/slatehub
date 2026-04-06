@@ -5906,14 +5906,15 @@ async function loadWeather(gamePk, venueName, away, home, time, venueId) {
   const wxDRS = document.getElementById('wxDelayRiskSub');
   const delayRisk = data.delay_risk || null;
   if (wxDR) {
+    const dr = delayRisk ? delayRisk.toLowerCase() : '';
     if (!delayRisk) {
-      wxDR.textContent = 'None'; wxDR.style.color = '#4caf50';
-    } else if (delayRisk.toLowerCase().includes('postpone')) {
-      wxDR.textContent = 'PPD Risk'; wxDR.style.color = '#f44336';
-    } else if (delayRisk.toLowerCase().includes('delay likely')) {
-      wxDR.textContent = 'Likely'; wxDR.style.color = '#ff9800';
+      wxDR.textContent = 'Clear'; wxDR.style.color = '#4caf50';
+    } else if (dr.includes('postponement likely')) {
+      wxDR.textContent = 'PPD Likely'; wxDR.style.color = '#f44336';
+    } else if (dr.includes('postpone') || dr.includes('delay likely')) {
+      wxDR.textContent = dr.includes('postpone') ? 'PPD Risk' : 'Delay Likely'; wxDR.style.color = '#ff9800';
     } else {
-      wxDR.textContent = 'Possible'; wxDR.style.color = '#ffeb3b';
+      wxDR.textContent = 'Chance of Delay'; wxDR.style.color = '#ffeb3b';
     }
   }
   if (wxDRS) wxDRS.textContent = delayRisk || 'Clear';
@@ -5922,7 +5923,7 @@ async function loadWeather(gamePk, venueName, away, home, time, venueId) {
   const wxFN = document.getElementById('wxForecastNotes');
   if (wxFN) {
     if (data.forecaster_notes) {
-      wxFN.innerHTML = '<strong>Forecaster:</strong> ' + data.forecaster_notes;
+      wxFN.innerHTML = '<strong>Kevin Roth:</strong> ' + data.forecaster_notes;
       wxFN.style.display = 'block';
     } else {
       wxFN.style.display = 'none';
