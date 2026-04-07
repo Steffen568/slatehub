@@ -50,8 +50,10 @@ CONFIRMED_BOOST = 1.5
 UNCONFIRMED_PENALTY = 0.4
 
 # Softmax temperature per position — lower = sharper (more concentrated)
-SOFTMAX_TEMP = {'SP': 0.8, 'C': 1.4, '1B': 1.4, '2B': 1.4,
-                '3B': 1.4, 'SS': 1.4, 'OF': 1.4}
+# Tuned for log-score inputs: SP needs sharp concentration (top 2-3 get 30-45%),
+# hitters need moderate spread but clear differentiation
+SOFTMAX_TEMP = {'SP': 0.25, 'C': 0.50, '1B': 0.50, '2B': 0.50,
+                '3B': 0.50, 'SS': 0.50, 'OF': 0.50}
 
 # Per-position ownership cap (large slate)
 POSITION_MAX_OWN = {'SP': 55.0, 'C': 30.0, '1B': 30.0, '2B': 30.0,
@@ -350,10 +352,7 @@ def compute_ownership_scores(pool):
 
         slots = POS_SLOTS.get(pos, 1)
         target_sum = slots * 100.0
-        base_temp = SOFTMAX_TEMP.get(pos, 1.4)
-        # Scale temperature with pool size — more players = softer distribution
-        # Prevents 100%/0% binary splits on large slates
-        temp = base_temp * max(1.0, len(players) / (slots * 4))
+        temp = SOFTMAX_TEMP.get(pos, 1.4)
         cap = POSITION_MAX_OWN.get(pos, 30.0)
 
         # Dynamic cap for small pools: if few players, allow higher concentration
@@ -362,14 +361,9 @@ def compute_ownership_scores(pool):
             cap = min(max(cap, avg_target * 2), 90.0)
 
         raw_scores = [p['base_score'] for p in players]
-        # Normalize to z-scores so softmax operates on relative differences,
-        # not raw magnitudes (which can have huge gaps from PITCHER_BOOST etc.)
-        mean_s = sum(raw_scores) / len(raw_scores)
-        std_s = (sum((s - mean_s) ** 2 for s in raw_scores) / len(raw_scores)) ** 0.5
-        if std_s > 0:
-            scores = [(s - mean_s) / std_s for s in raw_scores]
-        else:
-            scores = [0.0] * len(raw_scores)
+        # Use log-scores to compress PITCHER_BOOST / proj**1.5 gaps while
+        # preserving meaningful relative differences. Z-scores were too flat.
+        scores = [math.log(max(s, 0.01)) for s in raw_scores]
         shares = softmax(scores, temperature=temp)
 
         # Scale to target sum
