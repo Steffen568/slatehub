@@ -479,7 +479,9 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
             else:
                 bo_score = 1.0
             env_score = (p['game_total'] / 8.5) ** 1.5
-            base = proj_score * 0.40 + sal_score * 0.30 + env_score * 0.10 + bo_score * 0.15
+            value = (p['proj'] / p['salary'] * 1000) if p['salary'] > 0 else 0
+            value_score = value ** 0.6
+            base = proj_score * 0.40 + sal_score * 0.30 + value_score * 0.05 + env_score * 0.10 + bo_score * 0.15
             if p['is_pitcher']:
                 base *= profile['pitcher_mult']
             if not p['is_pitcher'] and not p['confirmed']:

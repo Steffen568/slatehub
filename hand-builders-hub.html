@@ -4355,6 +4355,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     <span style="color:var(--border);margin:0 2px;">|</span>
     <label style="color:var(--muted);font-weight:700;">Sort:</label>
     <select class="opto-input" style="width:80px;" onchange="setPoolSort(this.value)">
+      <option value="gppScore">GPP Score</option>
       <option value="proj">Proj</option>
       <option value="leverage">Leverage</option>
       <option value="totalOwn">Own (low)</option>
@@ -4365,6 +4366,11 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <option value="roi">ROI</option>
       <option value="cashPct">Cash%</option>
     </select>
+    <span id="gpp-slider-wrap" style="display:inline-flex;align-items:center;gap:3px;margin-left:4px;">
+      <span style="font-size:8px;color:var(--muted);font-weight:700;">Sharp</span>
+      <input type="range" id="gpp-leverage-wt" min="0" max="100" value="40" style="width:60px;height:12px;" oninput="updateGppScores()" title="0=Pure Sharp (proj/boom) ← → 100=Pure Leverage (contrarian)">
+      <span style="font-size:8px;color:var(--muted);font-weight:700;">Lev</span>
+    </span>
   </div>
   <!-- Two-column body -->
   <div class="lineups-body">
@@ -8308,6 +8314,7 @@ async function loadPoolFromDB() {
 
     hidePoolLoading();
     showToast(`Pool loaded: ${_poolCandidates.length} user lineups + ${_contestPool.length} contest lineups`);
+    updateGppScores();
     renderPoolCards();
     renderPoolExposure();
 
@@ -8576,7 +8583,7 @@ function _deadCode_renderPortfolioCards() {
   if (f.minBoom && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.boomPct || 0) >= f.minBoom);
 
   const sc = _poolSortCol, dir = _poolSortDir;
-  const getVal = (c) => { if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
+  const getVal = (c) => { if (sc === 'gppScore') return c.gppScore||0; if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
   const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
   if (lowerIsBetter) {
     filtered.sort((a,b) => (getVal(a) - getVal(b)) * dir || b.metrics.proj - a.metrics.proj);
@@ -8858,6 +8865,7 @@ function renderPoolCards() {
   const sc = _poolSortCol;
   const dir = _poolSortDir;
   const getVal = (c) => {
+    if (sc === 'gppScore') return c.gppScore || 0;
     if (c.contest && sc in c.contest) return c.contest[sc] || 0;
     if (sc in (c.metrics || {})) return c.metrics[sc] || 0;
     return c.metrics?.proj || 0;
@@ -9340,7 +9348,7 @@ function generateOpponentField(numOpponents, contestDb) {
 // ── CONTEST SIMULATION ───────────────────────────────────────────────────────
 
 let _contestSimResults = null; // { perLineup: [{winCount, top1Count, ...}], simWinners: [[]] }
-let _poolSortCol = 'proj';
+let _poolSortCol = 'gppScore';
 let _poolSortDir = 1;
 let _poolFilteredView = []; // current filtered+sliced lineup list for exposure panel
 
@@ -9563,8 +9571,51 @@ function finalizeContest(stats, simWinners, simTop1, numSims, contestDb, payoutT
     ? ` | Avg ROI: ${(_poolCandidates.reduce((s,c) => s + (c.contest.roi||0), 0) / n).toFixed(1)}%`
     : '';
   showToast(`Contest sim complete! ${numSims} sims${contestLabel}${roiMsg}`);
+  updateGppScores();
   renderPoolCards();
   renderPoolExposure();
+}
+
+// ── GPP SCORE ────────────────────────────────────────────────────────────────
+function updateGppScores() {
+  // Compute blended GPP score per lineup using sharp/leverage slider
+  if (!_poolCandidates.length) return;
+  const levWt = (+(document.getElementById('gpp-leverage-wt')?.value ?? 40)) / 100;
+  const sharpWt = 1 - levWt;
+
+  // Normalization maxes (avoid div-by-zero)
+  const norm = (arr) => Math.max(...arr) || 1;
+  const maxProj = norm(_poolCandidates.map(c => c.metrics?.proj || 0));
+  const maxCeil = norm(_poolCandidates.map(c => c.metrics?.ceil || 0));
+  const maxLev = norm(_poolCandidates.map(c => c.metrics?.leverage || 0));
+  const maxStackLev = norm(_poolCandidates.map(c => c.metrics?.stackLeverage || 0));
+  const hasSim = !!_poolCandidates[0]?.contest;
+  const maxBoom = hasSim ? norm(_poolCandidates.map(c => c.contest?.boomPct || 0)) : 1;
+  const maxSharpe = hasSim ? norm(_poolCandidates.map(c => c.contest?.sharpe || 0)) : 1;
+  const maxWinUpside = hasSim ? norm(_poolCandidates.map(c => c.contest?.winUpside || 0)) : 1;
+
+  for (const c of _poolCandidates) {
+    const m = c.metrics || {};
+    const ct = c.contest || {};
+
+    // Sharp: projection quality + boom + Sharpe
+    const sharpScore = hasSim
+      ? 0.40 * ((m.proj||0) / maxProj) + 0.35 * ((ct.boomPct||0) / maxBoom) + 0.25 * ((ct.sharpe||0) / maxSharpe)
+      : (m.proj||0) / maxProj;
+
+    // Leverage: ceiling/ownership + win upside + stack leverage
+    const levScore = hasSim
+      ? 0.35 * ((m.leverage||0) / maxLev) + 0.35 * ((ct.winUpside||0) / maxWinUpside) + 0.30 * ((m.stackLeverage||0) / maxStackLev)
+      : 0.50 * ((m.leverage||0) / maxLev) + 0.50 * ((m.stackLeverage||0) / maxStackLev);
+
+    c.gppScore = +(sharpWt * sharpScore + levWt * levScore).toFixed(4);
+  }
+
+  // Re-sort if GPP Score is active sort
+  if (_poolSortCol === 'gppScore') {
+    renderPoolCards();
+    renderPoolExposure();
+  }
 }
 
 // ── PORTFOLIO STRATEGIES ──────────────────────────────────────────────────────
@@ -9613,6 +9664,7 @@ function selectOptimalPortfolio(k) {
   const maxWinPct = norm(pool.map(c => c.contest?.winPct || 0));
   const maxCashPct = norm(pool.map(c => c.contest?.cashPct || 0));
   const maxBoomPct = norm(pool.map(c => c.contest?.boomPct || 0));
+  const maxSharpe = norm(pool.map(c => c.contest?.sharpe || 0));
   const maxWinUpside = norm(pool.map(c => c.contest?.winUpside || 0));
   const maxStackLev = norm(pool.map(c => c.metrics.stackLeverage || 0));
 
@@ -9775,6 +9827,13 @@ function selectOptimalPortfolio(k) {
         const teamN = stackTeamFreq[mainTeam] || 0;
         const stackPen = 1 / (1 + stackDivWt * 0.3 * teamN);
         score = (0.40 * ((m.corrScore||0) / maxCorr) + 0.25 * (m.proj / maxProj) + 0.15 * ((ct.boomPct||0) / maxBoomPct) + 0.20 * (uncoveredTop1[i] / covNorm)) * stackPen;
+
+      } else if (strat === 'gpp') {
+        const gppLev = (+(document.getElementById('gpp-leverage-wt')?.value ?? 40)) / 100;
+        const gppSharp = 1 - gppLev;
+        const sharpS = 0.40 * (m.proj / maxProj) + 0.35 * ((ct.boomPct||0) / maxBoomPct) + 0.25 * ((ct.sharpe||0) / maxSharpe);
+        const levS = 0.35 * ((m.leverage||0) / maxLev) + 0.35 * ((ct.winUpside||0) / maxWinUpside) + 0.30 * ((m.stackLeverage||0) / maxStackLev);
+        score = (gppSharp * sharpS + gppLev * levS) * 0.70 + (uncoveredTop1[i] / covNorm) * 0.30;
       }
 
       // Min targets already force-filled in Phase 1; still boost to favor remaining mins
@@ -9813,7 +9872,7 @@ function addOptimalPortfolio() {
   if (!indices.length) { showToast('No lineups selected'); return; }
 
   const selected = indices.map(i => _poolCandidates[i]);
-  const stratNames = {balanced:'Balanced GPP',firstPlace:'First Place',contrarian:'Contrarian',leverage:'Leverage',cash:'Cash',maxCorr:'Max Correlation'};
+  const stratNames = {gpp:'GPP (Sharp+Lev)',balanced:'Balanced GPP',firstPlace:'First Place',contrarian:'Contrarian',leverage:'Leverage',cash:'Cash',maxCorr:'Max Correlation'};
   const stratLabel = stratNames[optoSettings.portfolioStrategy||'balanced'] || 'Portfolio';
 
   // Store full pool candidates with sim metrics for portfolio tab
@@ -9904,7 +9963,7 @@ function exportPoolDK() {
   // Get the filtered pool (same as what's displayed)
   let pool = filterPoolCandidates();
   const sc = _poolSortCol, dir = _poolSortDir;
-  const getVal = (c) => { if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
+  const getVal = (c) => { if (sc === 'gppScore') return c.gppScore||0; if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
   const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
   if (lowerIsBetter) {
     pool.sort((a,b) => (getVal(a) - getVal(b)) * dir || b.metrics.proj - a.metrics.proj);
