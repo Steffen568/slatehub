@@ -251,6 +251,13 @@ def build_pool(data, slate=None):
         base_score = (proj_score * W_PROJ + salary_score * W_SALARY +
                       value_score * W_VALUE + env_score * W_ENV + bo_score * W_BAT_ORDER)
 
+        # High-total game multiplier — public piles into Coors/high-total games
+        # disproportionately. This multiplicative boost survives position-level
+        # softmax normalization (the additive env weight alone gets diluted).
+        if not is_pitcher and game_total > 9.0:
+            env_mult = 1.0 + (game_total - 9.0) * 0.20
+            base_score *= env_mult
+
         if is_pitcher:
             base_score *= PITCHER_BOOST
         if confirmed:
@@ -310,6 +317,8 @@ def build_pool(data, slate=None):
         es = (gt / 8.5) ** 2.0
         best['base_score'] = (ps * W_PROJ + ss * W_SALARY + vs * W_VALUE +
                               es * W_ENV + bo_s * W_BAT_ORDER)
+        if not best['is_pitcher'] and gt > 9.0:
+            best['base_score'] *= 1.0 + (gt - 9.0) * 0.20
         if best['is_pitcher']:
             best['base_score'] *= PITCHER_BOOST
         lu = data['lineup_map'].get(best['player_id'])
