@@ -396,6 +396,13 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
         )
         dk_pts += pts * active
 
+    # Contact hitter adjustment: low-K% batters (K%<15%) are under-projected
+    # by ~0.9 pts per research. Their extra balls in play produce more hits/RBI
+    # than the baseline model captures.
+    if talent['k_pct'] < 0.15:
+        contact_boost = clip((0.15 - talent['k_pct']) / 0.15 * 0.9, 0.0, 0.9)
+        dk_pts += contact_boost
+
     return dk_pts
 
 
@@ -562,6 +569,14 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     gb_pct = talent.get('gb_pct', 0.43)
     gb_adj = clip(1.0 - (gb_pct - 0.43) * 0.15, 0.92, 1.04)
     dk_pts = dk_pts * gb_adj
+
+    # Walk rate penalty: high-BB pitchers (bb_pct > league avg 8.2%) are over-projected.
+    # Research: bb9 correlates r=+0.195 with projection error — walks per 9 IP
+    # is the strongest missing pitcher predictor. High-walk pitchers allow more
+    # baserunners, leading to more ER than the xFIP/SIERA anchor captures.
+    bb_pct = talent.get('bb_pct', LEAGUE_AVG_BB_PCT)
+    bb_adj = clip(1.0 - (bb_pct - LEAGUE_AVG_BB_PCT) * 1.5, 0.92, 1.04)
+    dk_pts = dk_pts * bb_adj
 
     return dk_pts
 
@@ -930,7 +945,7 @@ def run():
         _vegas_mult = round2(clip((_implied / LEAGUE_AVG_IMPLIED) if _implied else 1.0, 0.70, 1.45))
         _park_mult = round2(_park_basic)
         _weather_mult = round2(_wx_hit)
-        _context_mult = round2(1.0 + (_vegas_mult - 1.0) * 0.58 + (_park_mult - 1.0) * 0.26 + (_weather_mult - 1.0) * 0.16)
+        _context_mult = round2(1.0 + (_vegas_mult - 1.0) * 0.80 + (_park_mult - 1.0) * 0.05 + (_weather_mult - 1.0) * 0.15)
 
         records.append({
             'player_id': pid, 'game_pk': gpk, 'game_date': target_date,
