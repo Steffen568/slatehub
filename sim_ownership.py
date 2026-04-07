@@ -36,10 +36,10 @@ POS_PRIORITY = ['C', 'SS', '2B', '3B', '1B', 'OF', 'SP']
 
 # ── Scoring weights (from research correlation analysis) ────────────────────
 # Projection r=0.557, Salary r=0.536, Value r=-0.055, BatOrder r=0.203
-W_PROJ      = 0.40   # projection magnitude — strongest driver
-W_SALARY    = 0.30   # salary / star power
+W_PROJ      = 0.35   # projection magnitude — strongest driver
+W_SALARY    = 0.25   # salary / star power
 W_BAT_ORDER = 0.15   # lineup position premium
-W_ENV       = 0.10   # game environment (Vegas total)
+W_ENV       = 0.20   # game environment (Vegas total) — public heavily targets high-total games
 W_VALUE     = 0.05   # pts per $1k — near-zero correlation but kept
 
 # Pitcher gets a multiplicative boost — top SPs get 30-47% actual ownership
@@ -240,7 +240,7 @@ def build_pool(data, slate=None):
         salary_score = (salary / 3500) ** 1.3
         value = (proj / salary * 1000) if salary > 0 else 0
         value_score = value ** 0.6
-        env_score = (game_total / 8.5) ** 1.5
+        env_score = (game_total / 8.5) ** 2.0  # steeper curve — public piles into high-total games
 
         if not is_pitcher and batting_order:
             bo_score = {1: 1.30, 2: 1.25, 3: 1.20, 4: 1.15, 5: 1.05,
@@ -307,7 +307,7 @@ def build_pool(data, slate=None):
         vs = v ** 0.6
         odds_row = data['odds'].get(best.get('game_pk'))
         gt = safe(odds_row.get('game_total'), 8.5) if odds_row else 8.5
-        es = (gt / 8.5) ** 1.5
+        es = (gt / 8.5) ** 2.0
         best['base_score'] = (ps * W_PROJ + ss * W_SALARY + vs * W_VALUE +
                               es * W_ENV + bo_s * W_BAT_ORDER)
         if best['is_pitcher']:
