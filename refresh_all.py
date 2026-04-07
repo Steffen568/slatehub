@@ -5,9 +5,9 @@ SlateHub — Master Refresh Script (Agent Pipeline Edition)
 Modes and when to run them:
 
   --quick      Every 15 min (all day)
-                       Schedule + lineups + weather only. Fast (~30 sec).
+                       Today's schedule + lineups + weather + pitcher props. Fast (~50 sec).
                        Catches lineup confirmations and weather updates.
-                       Re-runs projections + sim pool generation on new confirmations.
+                       Re-runs projections + ownership only on new confirmations.
 
   --morning    9:00 AM   Full morning pull: schedule, DK slates/salaries,
                          odds, weather. Stats run in parallel.
@@ -90,14 +90,12 @@ if QUICK:
         if new_confirms > 0:
             print(f"\n  {new_confirms} new lineup confirmation(s) — re-running projections & ownership")
             try:
-                run_projections(logger)
+                run_projections(logger)  # includes sim_projections + sim_ownership
             except Exception as e:
                 print(f"\n  ERROR in Agent 3 (quick projections): {e}")
                 logger.record('Agent 3 — Quick Projections', False, 0.0, str(e))
         else:
             print(f"\n  No new confirmations — projections unchanged")
-        # Always regenerate sim pools (reflects latest projections/lineups/odds)
-        run_script('generate_pool.py', 'Sim Pool Generation', logger)
     except Exception as e:
         print(f"\n  ERROR in Agent 2 (quick): {e}")
         logger.record('Agent 2 — Quick', False, 0.0, str(e))
@@ -135,8 +133,6 @@ if MORNING:
             except Exception as e:
                 print(f"\n  ERROR in Agent 3 (projections): {e}")
                 logger.record('Agent 3 — Projections', False, 0.0, str(e))
-            # Generate sim pools after projections
-            run_script('generate_pool.py', 'Sim Pool Generation', logger)
         else:
             print("\n  PROJECTIONS SKIPPED — DK validation gate failed.")
             print("  Auto-fix could not resolve all mismatches — manual investigation needed, then re-run --morning.")
@@ -169,8 +165,6 @@ if FULL:
             except Exception as e:
                 print(f"\n  ERROR in Agent 3 (projections): {e}")
                 logger.record('Agent 3 — Projections', False, 0.0, str(e))
-            # Generate sim pools after projections
-            run_script('generate_pool.py', 'Sim Pool Generation', logger)
         else:
             print("\n  PROJECTIONS SKIPPED — DK validation gate failed.")
             print("  Auto-fix could not resolve all mismatches — manual investigation needed, then re-run --morning or --full.")

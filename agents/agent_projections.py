@@ -17,7 +17,6 @@ REPO_ROOT = Path(__file__).parent.parent
 PROJECTION_SCRIPTS = [
     ('sim_projections.py',     'DFS Projections (Monte Carlo Sim)'),
     ('sim_ownership.py',       'Ownership Projections (Sim-Based)'),
-    ('generate_pool.py',       'Lineup Pool Generation'),
 ]
 
 

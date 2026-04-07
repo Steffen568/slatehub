@@ -5906,15 +5906,16 @@ async function loadWeather(gamePk, venueName, away, home, time, venueId) {
   const wxDRS = document.getElementById('wxDelayRiskSub');
   const delayRisk = data.delay_risk || null;
   if (wxDR) {
-    const dr = delayRisk ? delayRisk.toLowerCase() : '';
-    if (!delayRisk) {
+    if (!delayRisk || delayRisk === 'Clear') {
       wxDR.textContent = 'Clear'; wxDR.style.color = '#4caf50';
-    } else if (dr.includes('postponement likely')) {
+    } else if (delayRisk === 'Postponement Likely') {
       wxDR.textContent = 'PPD Likely'; wxDR.style.color = '#f44336';
-    } else if (dr.includes('postpone') || dr.includes('delay likely')) {
-      wxDR.textContent = dr.includes('postpone') ? 'PPD Risk' : 'Delay Likely'; wxDR.style.color = '#ff9800';
-    } else {
+    } else if (delayRisk === 'Delay Likely') {
+      wxDR.textContent = 'Delay Likely'; wxDR.style.color = '#ff9800';
+    } else if (delayRisk === 'Chance For Delay') {
       wxDR.textContent = 'Chance of Delay'; wxDR.style.color = '#ffeb3b';
+    } else {
+      wxDR.textContent = delayRisk; wxDR.style.color = '#ffeb3b';
     }
   }
   if (wxDRS) wxDRS.textContent = delayRisk || 'Clear';
