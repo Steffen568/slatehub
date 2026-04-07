@@ -52,7 +52,7 @@ UNCONFIRMED_PENALTY = 0.4
 # Softmax temperature per position — lower = sharper (more concentrated)
 # Tuned for log-score inputs: SP needs sharp concentration (top 2-3 get 30-45%),
 # hitters need moderate spread but clear differentiation
-SOFTMAX_TEMP = {'SP': 0.25, 'C': 0.50, '1B': 0.50, '2B': 0.50,
+SOFTMAX_TEMP = {'SP': 0.40, 'C': 0.50, '1B': 0.50, '2B': 0.50,
                 '3B': 0.50, 'SS': 0.50, 'OF': 0.50}
 
 # Per-position ownership cap (large slate)
