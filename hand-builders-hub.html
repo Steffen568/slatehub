@@ -4416,6 +4416,12 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       </div>
       <div class="opto-row classic-only"><label>Auto-Detect Locks</label><input type="checkbox" id="opto-autodetect-locks" checked onchange="lateSwapAutoDetect=this.checked; if(lateSwapMode) refreshLateSwapUI();"></div>
     </div>
+    <!-- Exclusion Groups (SD only) -->
+    <div class="opto-col sd-only" id="opto-exgroups-col" style="display:none">
+      <div class="opto-col-title">Exclusion Groups <span style="font-size:9px;color:var(--muted)">(max 1 per lineup)</span></div>
+      <div id="exgroups-list"></div>
+      <button class="sr-add-btn" onclick="addExclusionGroup()">+ Add Group</button>
+    </div>
     <!-- Stack Rules — rendered by renderStackRules() -->
     <div class="opto-col classic-only" id="opto-stack-col">
       <div class="opto-col-title">Stack Rules</div>
@@ -4610,6 +4616,7 @@ let pvhOff          = true;        // true = hide hitters facing lineup's SP
 let projOverrides   = {};          // player_id → manual proj override
 let projBoosts      = {};          // player_id → boost level (-5 to +5), each tick = 3%
 let expTargets      = {};          // player_id → manual max exposure % (0–100)
+let exclusionGroups = [];          // [{playerIds: [pid1, pid2, ...]}, ...] — max 1 per lineup
 let expHitterMax    = 100;         // global hitter exposure cap %
 let expPitcherMax   = 100;         // global pitcher exposure cap %
 let expCptMax       = 35;          // Showdown: max % any player can appear as CPT
@@ -4789,6 +4796,7 @@ function saveSettings() {
     projBoosts,
     expTargets,
     stackExpCaps,
+    exclusionGroups,
   };
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch(e) {}
 }
@@ -4820,6 +4828,7 @@ function restoreSettings() {
     if (s.projBoosts)    projBoosts    = s.projBoosts;
     if (s.expTargets)    expTargets    = s.expTargets;
     if (s.stackExpCaps)  stackExpCaps  = s.stackExpCaps;
+    if (s.exclusionGroups) exclusionGroups = s.exclusionGroups;
   } catch(e) {}
 }
 
@@ -5678,6 +5687,7 @@ async function loadPlayerPool(date, slate) {
   buildTeamOptoTable();
   populateTeamExclDropdown();
   renderTeamExclChips();
+  if (_contestMode === 'showdown') renderExclusionGroups();
 }
 
 function getPitcherStats(playerId, statMap, name, nameMap) {
@@ -7104,6 +7114,71 @@ function renderTeamExclChips() {
 }
 
 // ── OPTIMIZER PANEL ───────────────────────────────────────────────────────────
+
+// ── Exclusion Groups (SD) ───────────────────────────────────────────────────
+function addExclusionGroup() {
+  exclusionGroups.push({ playerIds: [] });
+  renderExclusionGroups();
+  saveSettings();
+}
+function removeExclusionGroup(idx) {
+  exclusionGroups.splice(idx, 1);
+  renderExclusionGroups();
+  saveSettings();
+}
+function addPlayerToGroup(groupIdx, pid) {
+  pid = +pid;
+  if (!pid || groupIdx >= exclusionGroups.length) return;
+  const grp = exclusionGroups[groupIdx];
+  if (!grp.playerIds.includes(pid)) grp.playerIds.push(pid);
+  renderExclusionGroups();
+  saveSettings();
+}
+function removePlayerFromGroup(groupIdx, pid) {
+  pid = +pid;
+  if (groupIdx >= exclusionGroups.length) return;
+  const grp = exclusionGroups[groupIdx];
+  grp.playerIds = grp.playerIds.filter(id => id !== pid);
+  renderExclusionGroups();
+  saveSettings();
+}
+function renderExclusionGroups() {
+  const container = document.getElementById('exgroups-list');
+  if (!container) return;
+  if (!exclusionGroups.length) { container.innerHTML = '<div style="font-size:10px;color:var(--muted);padding:4px 0;">No groups — players in a group are mutually exclusive (max 1 per lineup).</div>'; return; }
+
+  // Build set of all player IDs already in any group
+  const usedIds = new Set(exclusionGroups.flatMap(g => g.playerIds));
+  // Pool of available players for dropdowns
+  const pool = [...allHitters, ...allPitchers].filter(p => (p.salary||0) > 0).sort((a,b) => (a.name||'').localeCompare(b.name||''));
+
+  container.innerHTML = exclusionGroups.map((grp, gi) => {
+    const chips = grp.playerIds.map(pid => {
+      const p = pool.find(x => x.player_id === pid);
+      const name = p ? p.name : `#${pid}`;
+      const team = p ? p.team : '';
+      return `<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(167,139,250,.12);color:#c4b5fd;border:1px solid rgba(167,139,250,.25);border-radius:4px;padding:1px 6px;font-size:10px;margin:2px;">
+        ${name}<span style="color:var(--muted);font-size:9px;">${team}</span>
+        <span onclick="removePlayerFromGroup(${gi},${pid})" style="cursor:pointer;color:#f87171;font-size:12px;margin-left:2px;" title="Remove">&times;</span>
+      </span>`;
+    }).join('');
+
+    const options = pool.filter(p => !usedIds.has(p.player_id))
+      .map(p => `<option value="${p.player_id}">${p.name} (${p.team})</option>`).join('');
+
+    return `<div style="border:1px solid var(--border);border-radius:6px;padding:6px 8px;margin-bottom:6px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+        <span style="font-size:10px;font-weight:700;color:var(--text2);">Group ${gi+1}</span>
+        <span onclick="removeExclusionGroup(${gi})" style="cursor:pointer;color:#f87171;font-size:10px;" title="Delete group">Remove</span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:4px;">${chips || '<span style="font-size:9px;color:var(--muted);">Empty</span>'}</div>
+      <select class="opto-input" style="width:100%;font-size:10px;" onchange="if(this.value)addPlayerToGroup(${gi},this.value);this.value='';">
+        <option value="">+ Add player...</option>
+        ${options}
+      </select>
+    </div>`;
+  }).join('');
+}
 
 // ── Stack Rules ──────────────────────────────────────────────────────────────
 function renderStackRules() {
@@ -11359,6 +11434,7 @@ function setContestMode(mode) {
   buildSlots();
   renderBuildTabs();
   renderSavedCards();
+  if (mode === 'showdown') renderExclusionGroups();
   // Reload slate picker filtered to the correct contest type, which triggers loadPlayerPool
   const currentDate = document.getElementById('date-select')?.value || 'all';
   loadSlates(currentDate);
@@ -11665,6 +11741,18 @@ function optoBuildLP_Showdown(pool, rule, cptCount, totalGenerated) {
       if (model.variables[ck]) model.variables[ck][`lock_${pid}`] = 1;
       if (model.variables[fk]) model.variables[fk][`lock_${pid}`] = 1;
     }
+  });
+
+  // Exclusion group constraints — at most 1 player from each group
+  exclusionGroups.forEach((grp, gi) => {
+    if (!grp.playerIds || grp.playerIds.length < 2) return;
+    const ckey = `exgrp_${gi}`;
+    model.constraints[ckey] = { max: 1 };
+    grp.playerIds.forEach(pid => {
+      const ck = `c${pid}`, fk = `f${pid}`;
+      if (model.variables[ck]) model.variables[ck][ckey] = 1;
+      if (model.variables[fk]) model.variables[fk][ckey] = 1;
+    });
   });
 
   return model;
