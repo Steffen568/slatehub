@@ -614,7 +614,7 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
     # Per-player exposure tracking
     player_appear = defaultdict(int)
     _exp_caps = exposure_caps or {}
-    _exp_caps = {int(k): v for k, v in _exp_caps.items()}  # ensure int keys
+    _exp_caps = {int(k): v for k, v in _exp_caps.items() if str(k).isdigit()}  # skip cpt_/flex_ SD keys
     _pool_lookup = {p['player_id']: p for p in pool}  # fast lookup for cap checks
 
     while len(lineups) < n_lineups and attempts < max_attempts:
