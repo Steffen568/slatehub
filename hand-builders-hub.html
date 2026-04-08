@@ -4549,7 +4549,8 @@ function teamAbbr(fullName) { return NAME_TO_ABBR[fullName] || (fullName||'').sl
 // Strips periods, apostrophes, Jr/Sr/II/III/IV suffixes, lowercases, collapses spaces
 function normName(n) {
   if (!n) return '';
-  return n.toLowerCase()
+  return n.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
     .replace(/[.''\u2019]/g, '')
     .replace(/\s+(jr|sr|ii|iii|iv)\s*$/, '')
     .replace(/\s+/g, ' ').trim();
