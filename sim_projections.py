@@ -668,22 +668,28 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     }
 
 
-def _bullpen_rates(talent, park, weather):
-    """PA outcome rates when batter faces bullpen (league-average reliever)."""
+def _bullpen_rates(talent, park, weather, bp_quality=None):
+    """PA outcome rates when batter faces bullpen.
+    Uses team-specific reliever rates if bp_quality provided, else league average."""
+    bp_k = bp_quality['k_pct'] if bp_quality else BULLPEN_K_PCT
+    bp_bb = bp_quality['bb_pct'] if bp_quality else BULLPEN_BB_PCT
+    bp_hr9 = bp_quality['hr9'] if bp_quality else BULLPEN_HR9
+    bp_babip = bp_quality['babip'] if bp_quality else BULLPEN_BABIP
+
     park_k = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
-    k_rate = clip(talent['k_pct'] * (BULLPEN_K_PCT / LEAGUE_AVG_K_PCT) * park_k, 0.05, 0.50)
+    k_rate = clip(talent['k_pct'] * (bp_k / LEAGUE_AVG_K_PCT) * park_k, 0.05, 0.50)
     park_bb = safe(park.get('bb_factor'), 100) / 100.0 if park else 1.0
-    bb_rate = clip(talent['bb_pct'] * (LEAGUE_AVG_BB_PCT / BULLPEN_BB_PCT) * park_bb, 0.02, 0.22)
+    bb_rate = clip(talent['bb_pct'] * (LEAGUE_AVG_BB_PCT / bp_bb) * park_bb, 0.02, 0.22)
 
     qoc_mult = clip(1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3, 0.85, 1.25)
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather)
-    hit_prob = clip(BULLPEN_BABIP * qoc_mult * park_basic * wx_hit, 0.18, 0.42)
+    hit_prob = clip(bp_babip * qoc_mult * park_basic * wx_hit, 0.18, 0.42)
 
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
     wx_hr = weather_hr_mult(weather)
-    hr_per_hit = clip((talent['iso'] / 3.5) * park_hr * fb_adj * wx_hr * (BULLPEN_HR9 / LEAGUE_AVG_HR9) / hit_prob, 0.03, 0.30)
+    hr_per_hit = clip((talent['iso'] / 3.5) * park_hr * fb_adj * wx_hr * (bp_hr9 / LEAGUE_AVG_HR9) / hit_prob, 0.03, 0.30)
     xb_per_hit = clip((talent['iso'] - 3 * talent['iso'] / 3.5) / hit_prob, 0.03, 0.20)
 
     return {
@@ -972,12 +978,67 @@ def fetch_data(target_date: str) -> dict:
         except Exception:
             pass  # table may not exist yet
 
+    # ── Team bullpen quality ────────────────────────────────────────────
+    # Fetch reliever stats per team for team-specific bullpen rates in game sim
+    bullpen_quality = {}
+    try:
+        team_ids = list({g.get('home_team_id') for g in games} | {g.get('away_team_id') for g in games})
+        team_ids = [t for t in team_ids if t]
+        roster_rows = []
+        for i in range(0, len(team_ids), 30):
+            chunk = team_ids[i:i+30]
+            rows = sb.table('rosters').select(
+                'player_id,team_id'
+            ).in_('team_id', chunk).eq('position_type', 'Pitcher').execute().data or []
+            roster_rows.extend(rows)
+        team_pitcher_ids = {}
+        for r in roster_rows:
+            team_pitcher_ids.setdefault(r['team_id'], []).append(r['player_id'])
+        all_rp_ids = [pid for pids in team_pitcher_ids.values() for pid in pids]
+        rp_stat_rows = []
+        # Try current season first (relaxed: g>=1 for early season), then prior season
+        for szn in [SEASON, SEASON - 1]:
+            for i in range(0, len(all_rp_ids), 500):
+                chunk = all_rp_ids[i:i+500]
+                rows = sb.table('pitcher_stats').select(
+                    'player_id,ip,g,gs,k_pct,bb_pct,hr9,babip'
+                ).in_('player_id', chunk).eq('season', szn).lte('gs', 2).gte('g', 1).execute().data or []
+                rp_stat_rows.extend(rows)
+        # IP-weighted composite per team
+        rp_by_pid = {}
+        for r in rp_stat_rows:
+            pid = r['player_id']
+            ip = safe(r.get('ip'), 0)
+            if pid not in rp_by_pid or ip > safe(rp_by_pid[pid].get('ip'), 0):
+                rp_by_pid[pid] = r
+        for tid, pids in team_pitcher_ids.items():
+            team_rp = [rp_by_pid[pid] for pid in pids if pid in rp_by_pid]
+            if not team_rp:
+                continue
+            total_ip = sum(safe(r.get('ip'), 0) for r in team_rp)
+            if total_ip <= 0:
+                continue
+            wt_k = sum(safe(r.get('k_pct'), BULLPEN_K_PCT) * safe(r.get('ip'), 0) for r in team_rp) / total_ip
+            wt_bb = sum(safe(r.get('bb_pct'), BULLPEN_BB_PCT) * safe(r.get('ip'), 0) for r in team_rp) / total_ip
+            wt_hr9 = sum(safe(r.get('hr9'), BULLPEN_HR9) * safe(r.get('ip'), 0) for r in team_rp) / total_ip
+            wt_babip = sum(safe(r.get('babip'), BULLPEN_BABIP) * safe(r.get('ip'), 0) for r in team_rp) / total_ip
+            bullpen_quality[tid] = {
+                'k_pct': clip(wt_k, 0.12, 0.40),
+                'bb_pct': clip(wt_bb, 0.04, 0.16),
+                'hr9': clip(wt_hr9, 0.5, 2.5),
+                'babip': clip(wt_babip, 0.24, 0.34),
+            }
+        print(f"  Bullpen quality: {len(bullpen_quality)} teams")
+    except Exception as e:
+        print(f"  Bullpen quality: skipped ({e})")
+
     return {
         'games': games, 'lineups': lineups,
         'batter_stats': batter_stats, 'pitcher_stats': pitcher_stats,
         'batter_splits': batter_splits, 'odds': odds,
         'park_factors': park_factors, 'weather': weather,
         'pitcher_props': pitcher_props,
+        'bullpen_quality': bullpen_quality,
         '_reverse_remap': reverse_remap,
     }
 
@@ -1169,6 +1230,10 @@ def run():
             wx_row = None  # indoor — no weather effect
         odds_row = data['odds'].get(gpk)
 
+        # Opposing team's bullpen quality (for after SP exits)
+        opp_team_id = game.get('away_team_id') if is_home else game.get('home_team_id')
+        bp_quality = data.get('bullpen_quality', {}).get(opp_team_id)
+
         # Build talent + rates for each batter
         lineup_talents = []
         lineup_meta = []  # (pid, stats_pid, stats_by_yr, talent, lu)
@@ -1206,7 +1271,7 @@ def run():
 
             # Compute PA rates vs SP and vs bullpen
             rates_sp = _compute_pa_rates(talent, pitcher, park_row, wx_row)
-            rates_bp = _bullpen_rates(talent, park_row, wx_row)
+            rates_bp = _bullpen_rates(talent, park_row, wx_row, bp_quality)
 
             talent['rates_vs_sp'] = rates_sp
             talent['rates_vs_bp'] = rates_bp
