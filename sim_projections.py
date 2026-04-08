@@ -118,11 +118,13 @@ def marcel_batter(stats_by_season: dict, current_season: int) -> dict:
     babip  = clip(weighted_stat('babip',  LEAGUE_AVG_BABIP),   0.22, 0.38)
     woba   = clip(weighted_stat('woba',   LEAGUE_AVG_WOBA),    0.20, 0.55)
 
-    # Quality of contact
+    # Quality of contact + batted ball profile
     barrel  = safe(weighted_stat('barrel_pct',   0.065), 0.065)
     hard_hit = safe(weighted_stat('hard_hit_pct', 0.35),  0.35)
     avg_ev  = safe(weighted_stat('avg_ev',       88.0),   88.0)
     ld_pct  = safe(weighted_stat('ld_pct',       0.21),   0.21)
+    fb_pct  = safe(weighted_stat('fb_pct',       0.35),   0.35)
+    pull_pct = safe(weighted_stat('pull_pct',    0.40),   0.40)
 
     # SB rate
     sb_num = 0.0
@@ -142,7 +144,7 @@ def marcel_batter(stats_by_season: dict, current_season: int) -> dict:
         'k_pct': k_pct, 'bb_pct': bb_pct, 'iso': iso, 'avg': avg,
         'babip': babip, 'woba': woba, 'barrel': barrel,
         'hard_hit': hard_hit, 'avg_ev': avg_ev, 'ld_pct': ld_pct,
-        'sb_per_pa': sb_per_pa,
+        'fb_pct': fb_pct, 'pull_pct': pull_pct, 'sb_per_pa': sb_per_pa,
     }
 
 
@@ -197,11 +199,13 @@ def marcel_pitcher(stats_by_season: dict, current_season: int) -> dict:
 
     # Stuff+ / quality metrics (current or most recent)
     stuff_plus = None
+    swstr_pct = None
     for yr in ([current_season] if use_current else []) + [current_season-1, current_season-2]:
         row = stats_by_season.get(yr)
-        if row and safe(row.get('stuff_plus')):
+        if row and safe(row.get('stuff_plus')) and not stuff_plus:
             stuff_plus = safe(row.get('stuff_plus'))
-            break
+        if row and safe(row.get('swstr_pct')) and not swstr_pct:
+            swstr_pct = safe(row.get('swstr_pct'))
     stuff_plus = stuff_plus or 100.0
 
     # IP per GS
@@ -222,7 +226,7 @@ def marcel_pitcher(stats_by_season: dict, current_season: int) -> dict:
     return {
         'k_pct': k_pct, 'bb_pct': bb_pct, 'hr9': hr9, 'babip': babip,
         'xfip': xfip, 'siera': siera, 'stuff_plus': stuff_plus,
-        'gb_pct': gb_pct, 'ip_per_gs': ip_per_gs,
+        'swstr_pct': swstr_pct, 'gb_pct': gb_pct, 'ip_per_gs': ip_per_gs,
     }
 
 
@@ -268,8 +272,12 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     proj_pa = LINEUP_PA.get(batting_order, LEAGUE_AVG_PA)
 
     # ── PA outcome probabilities ──────────────────────────────────────────
-    # K rate: batter talent × pitcher skill ratio × park K factor
+    # K rate: batter talent × pitcher skill ratio × stuff+ adjustment × park K factor
     pitcher_k_ratio = (pitcher['k_pct'] / LEAGUE_AVG_K_PCT) if pitcher else 1.0
+    # Stuff+ captures pitch quality beyond raw K% (movement, velo, deception)
+    if pitcher and pitcher.get('stuff_plus'):
+        stuff_adj = (pitcher['stuff_plus'] / 100.0) ** 0.3  # damped — stuff+ of 120 → ~6% K boost
+        pitcher_k_ratio *= stuff_adj
     park_k = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
     k_rate = clip(talent['k_pct'] * pitcher_k_ratio * park_k, 0.05, 0.50)
 
@@ -297,10 +305,26 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
 
     # ── Hit type distribution ─────────────────────────────────────────────
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
+
+    # Batter-specific park factor: pull hitters get bigger boost at short-porch parks
+    if park and talent.get('pull_pct'):
+        lf_dist = safe(park.get('lf_dist'), 330)
+        rf_dist = safe(park.get('rf_dist'), 330)
+        # Positive asymmetry = RF shorter (helps LHH pull hitters)
+        # Negative asymmetry = LF shorter (helps RHH pull hitters)
+        # We don't know handedness directly, but high pull% + short porch = boost either way
+        short_porch = min(lf_dist, rf_dist)
+        porch_factor = clip((330 - short_porch) / 330.0, -0.05, 0.10)  # shorter = bigger boost
+        pull_dev = talent['pull_pct'] - 0.40  # deviation from average pull%
+        park_hr *= 1.0 + pull_dev * porch_factor * 3.0  # pull hitters amplified at short porches
+
+    # Fly ball hitters have higher HR/FB rates — their batted ball profile drives more HRs
+    fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
+
     wx_hr = weather_hr_mult(weather)
     pitcher_hr_ratio = (pitcher['hr9'] / LEAGUE_AVG_HR9) if pitcher else 1.0
 
-    hr_per_hit = clip((talent['iso'] / 3.5) * park_hr * wx_hr * pitcher_hr_ratio / hit_prob,
+    hr_per_hit = clip((talent['iso'] / 3.5) * park_hr * fb_adj * wx_hr * pitcher_hr_ratio / hit_prob,
                        0.03, 0.30)
     xb_per_hit = clip((talent['iso'] - 3 * talent['iso']/3.5) / hit_prob, 0.03, 0.20)
     triple_per_hit = 0.015
@@ -442,6 +466,10 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # ── K rate: blend Vegas + talent ────────────────────────────────────────
     # Talent-based K rate (matchup + park adjusted)
     talent_k_rate = talent['k_pct'] * (1.0 + (1.0 - opp_quality) * 0.35) * park_k
+    # swstr_pct (swinging strike rate) is more predictive of future K% than K% itself
+    if talent.get('swstr_pct') and talent['swstr_pct'] > 0:
+        swstr_adj = (talent['swstr_pct'] / 0.11) ** 0.2  # league avg ~11%, damped
+        talent_k_rate *= clip(swstr_adj, 0.90, 1.12)
     if vegas_ks and proj_ip > 0:
         # Derive Vegas-implied K rate from expected Ks / expected batters faced
         vegas_bf = proj_ip * PA_PER_IP
@@ -498,6 +526,10 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # Elite arms (low ERA) are more consistent → tighter SD
     era_consistency = clip(era_anchor / LEAGUE_AVG_XFIP, 0.70, 1.50)
     stuff_sd = 0.18 + 0.06 * era_consistency  # elite ~0.22, mid ~0.24, bad ~0.27
+    # High stuff+ pitchers are more consistent start-to-start
+    stuff_plus = talent.get('stuff_plus', 100)
+    stuff_sd -= (stuff_plus - 100) / 100.0 * 0.05  # ±5% SD per 100 stuff+ deviation
+    stuff_sd = max(0.15, stuff_sd)  # floor
     stuff_day = rng.normal(1.0, stuff_sd, size=n_sims).clip(0.40, 1.65)
 
     # Scale rates per sim: good stuff day → more Ks, fewer hits, deeper IP
@@ -633,7 +665,7 @@ def fetch_data(target_date: str) -> dict:
         chunk = all_stat_ids[i:i+500]
         rows = sb.table('batter_stats').select(
             'player_id,season,pa,woba,xwoba,k_pct,bb_pct,iso,avg,sb,babip,'
-            'barrel_pct,hard_hit_pct,avg_ev,wrc_plus,full_name,team'
+            'barrel_pct,hard_hit_pct,avg_ev,wrc_plus,full_name,team,fb_pct,pull_pct'
         ).in_('player_id', chunk).in_('season', [SEASON, SEASON-1, SEASON-2]).execute().data or []
         for r in rows:
             batter_stats.setdefault(r['player_id'], {})[r['season']] = r
