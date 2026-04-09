@@ -142,6 +142,29 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
     fb_pct  = safe(weighted_stat('fb_pct',       0.35),   0.35)
     pull_pct = safe(weighted_stat('pull_pct',    0.40),   0.40)
 
+    # Bat tracking metrics (current or most recent — not Marcel'd across seasons
+    # because these are Statcast measurements that change with swing mechanics)
+    bat_speed = None
+    squared_up = None
+    blast = None
+    o_swing = None
+    for yr in ([current_season] if use_current else []) + [current_season-1, current_season-2]:
+        row = stats_by_season.get(yr)
+        if not row:
+            continue
+        if bat_speed is None and safe(row.get('bat_speed')):
+            bat_speed = safe(row.get('bat_speed'))
+        if squared_up is None and safe(row.get('squared_up_pct')):
+            squared_up = safe(row.get('squared_up_pct'))
+        if blast is None and safe(row.get('blast_pct')):
+            blast = safe(row.get('blast_pct'))
+        if o_swing is None and safe(row.get('o_swing_pct')):
+            o_swing = safe(row.get('o_swing_pct'))
+    bat_speed = bat_speed or 72.0    # league avg ~72 mph
+    squared_up = squared_up or 0.18  # league avg ~18%
+    blast = blast or 0.08            # league avg ~8%
+    o_swing = o_swing or 0.30        # league avg ~30%
+
     # SB rate
     sb_num = 0.0
     sb_den = 0.0
@@ -161,6 +184,8 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
         'babip': babip, 'woba': woba, 'barrel': barrel,
         'hard_hit': hard_hit, 'avg_ev': avg_ev, 'ld_pct': ld_pct,
         'fb_pct': fb_pct, 'pull_pct': pull_pct, 'sb_per_pa': sb_per_pa,
+        'bat_speed': bat_speed, 'squared_up': squared_up, 'blast': blast,
+        'o_swing': o_swing,
     }
 
 
@@ -659,9 +684,15 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     total_er = rng.poisson(expected_er.clip(0.1, 15.0)).astype(float)
     total_er = total_er.clip(0, sim_ip * 2.5)
 
-    # Win decision
+    # Win decision — correlated with stuff_day and ER
+    # A pitcher having a great outing (high stuff_day, low ER, deep IP) is more likely
+    # to get the win. A pitcher shelled after 3 IP almost never gets the W.
+    # Scale win_prob per sim based on how the outing went
+    ip_factor = np.clip(sim_ip / 5.1, 0.50, 1.30)  # deeper = better chance
+    er_factor = np.clip(1.0 - total_er * 0.08, 0.30, 1.15)  # fewer ER = better chance
+    sim_win_prob = np.clip(win_prob * ip_factor * er_factor * stuff_day, 0.02, 0.55)
     win_rolls = rng.random(n_sims)
-    wins = (win_rolls < win_prob).astype(float)
+    wins = (win_rolls < sim_win_prob).astype(float)
 
     # CG / CGSO / NH bonuses
     is_cg   = sim_ip >= 9.0
@@ -724,14 +755,16 @@ def _compute_pa_rates(talent, pitcher, park, weather):
 
     hbp_rate = 0.010
 
-    # Hit probability
+    # Hit probability — quality of contact drives BABIP outcomes
+    # avg_ev: harder average contact = more hits (each mph above 88 boosts BABIP)
+    ev_adj = clip(1.0 + (talent.get('avg_ev', 88.0) - 88.0) * 0.008, 0.92, 1.10)
     qoc_mult = clip(1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3, 0.85, 1.25)
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather)
     ld_adj = clip(1.0 + (talent.get('ld_pct', 0.21) - 0.21) * 0.5, 0.90, 1.12)
-    hit_prob = clip(talent['babip'] * qoc_mult * park_basic * wx_hit * ld_adj, 0.18, 0.42)
+    hit_prob = clip(talent['babip'] * qoc_mult * ev_adj * park_basic * wx_hit * ld_adj, 0.18, 0.42)
 
-    # HR rate
+    # HR rate — bat tracking metrics drive power ceiling
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
     if park and talent.get('pull_pct'):
         lf_dist = safe(park.get('lf_dist'), 330)
@@ -743,8 +776,13 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
     wx_hr = weather_hr_mult(weather)
     pitcher_hr_ratio = (pitcher['hr9'] / LEAGUE_AVG_HR9) if pitcher else 1.0
-    hr_per_hit = clip((talent['iso'] / 3.5) * park_hr * fb_adj * wx_hr * pitcher_hr_ratio / hit_prob, 0.03, 0.30)
-    xb_per_hit = clip((talent['iso'] - 3 * talent['iso'] / 3.5) / hit_prob, 0.03, 0.20)
+    # Bat speed: raw power — each mph above 72 (avg) scales HR probability
+    bat_spd_adj = clip(1.0 + (talent.get('bat_speed', 72.0) - 72.0) * 0.015, 0.88, 1.15)
+    # Squared-up%: how often they barrel the ball — complements barrel%
+    squp_adj = clip(1.0 + (talent.get('squared_up', 0.18) - 0.18) * 1.5, 0.90, 1.12)
+    hr_per_hit = clip((talent['iso'] / 3.5) * park_hr * fb_adj * wx_hr * pitcher_hr_ratio * bat_spd_adj * squp_adj / hit_prob, 0.03, 0.30)
+    # XB rate: avg_ev drives doubles (harder contact = more XBH)
+    xb_per_hit = clip((talent['iso'] - 3 * talent['iso'] / 3.5) / hit_prob * ev_adj, 0.03, 0.20)
     triple_per_hit = 0.015
 
     return {
@@ -767,16 +805,19 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     park_bb = safe(park.get('bb_factor'), 100) / 100.0 if park else 1.0
     bb_rate = clip(talent['bb_pct'] * (LEAGUE_AVG_BB_PCT / bp_bb) * park_bb, 0.02, 0.22)
 
+    ev_adj = clip(1.0 + (talent.get('avg_ev', 88.0) - 88.0) * 0.008, 0.92, 1.10)
     qoc_mult = clip(1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3, 0.85, 1.25)
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather)
-    hit_prob = clip(bp_babip * qoc_mult * park_basic * wx_hit, 0.18, 0.42)
+    hit_prob = clip(bp_babip * qoc_mult * ev_adj * park_basic * wx_hit, 0.18, 0.42)
 
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
     wx_hr = weather_hr_mult(weather)
-    hr_per_hit = clip((talent['iso'] / 3.5) * park_hr * fb_adj * wx_hr * (bp_hr9 / LEAGUE_AVG_HR9) / hit_prob, 0.03, 0.30)
-    xb_per_hit = clip((talent['iso'] - 3 * talent['iso'] / 3.5) / hit_prob, 0.03, 0.20)
+    bat_spd_adj = clip(1.0 + (talent.get('bat_speed', 72.0) - 72.0) * 0.015, 0.88, 1.15)
+    squp_adj = clip(1.0 + (talent.get('squared_up', 0.18) - 0.18) * 1.5, 0.90, 1.12)
+    hr_per_hit = clip((talent['iso'] / 3.5) * park_hr * fb_adj * wx_hr * (bp_hr9 / LEAGUE_AVG_HR9) * bat_spd_adj * squp_adj / hit_prob, 0.03, 0.30)
+    xb_per_hit = clip((talent['iso'] - 3 * talent['iso'] / 3.5) / hit_prob * ev_adj, 0.03, 0.20)
 
     return {
         'k': k_rate, 'bb': bb_rate, 'hbp': BULLPEN_HBP,
@@ -808,8 +849,25 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
     # SP exits after this many batters faced (varies per sim)
     sp_bf_limit = rng.normal(sp_proj_ip * PA_PER_IP, 5.0, size=n_sims).clip(8, 40).astype(int)
 
-    # Per-sim hot/cold team factor — all batters on the team share this
-    team_factor = rng.normal(1.0, 0.12, size=n_sims).clip(0.65, 1.40)
+    # Per-sim team factor — driven by game environment, not pure random
+    # Teams with higher implied totals facing weaker SPs get a higher mean
+    team_env_mean = 1.0
+    if odds:
+        implied = safe(odds.get('home_implied' if is_home else 'away_implied'))
+        if not implied:
+            total = safe(odds.get('game_total'))
+            implied = total / 2.0 if total else None
+        if implied:
+            # Scale team factor mean by implied runs vs league average (4.5)
+            team_env_mean = clip(implied / LEAGUE_AVG_IMPLIED, 0.80, 1.30)
+    # Opposing SP quality: weaker SP → higher team factor
+    if sp_talent:
+        opp_era = sp_talent.get('xfip', LEAGUE_AVG_XFIP) * 0.5 + sp_talent.get('siera', LEAGUE_AVG_XFIP) * 0.5
+        sp_quality = clip(LEAGUE_AVG_XFIP / opp_era, 0.85, 1.20)  # >1 if SP is worse than avg
+        # Blend: Vegas captures most of this, so only apply 30% of the SP delta
+        team_env_mean *= 1.0 + (sp_quality - 1.0) * 0.30
+    team_env_mean = clip(team_env_mean, 0.75, 1.35)
+    team_factor = rng.normal(team_env_mean, 0.12, size=n_sims).clip(0.55, 1.50)
 
     # Pre-allocate DK points per batter
     dk_pts = {i: np.zeros(n_sims) for i in range(9)}
@@ -834,8 +892,14 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 rates = batter['rates_vs_sp'] if team_bf < sp_limit else batter['rates_vs_bp']
 
                 # Apply team factor to hit/HR probabilities
-                hit_p = clip(rates['hit'] * tf, 0.12, 0.45)
-                hr_p = clip(rates['hr'] * tf, 0.02, 0.35)
+                # Per-batter volatility: o_swing% (chase rate) widens outcomes
+                # High-chase hitters are boom/bust: sometimes they run into one, sometimes they chase everything
+                o_swing_vol = batter.get('o_swing', 0.30)
+                batter_vol_sd = 0.05 + (o_swing_vol - 0.30) * 0.3  # higher chase = wider SD
+                batter_day = rng.normal(1.0, max(0.03, batter_vol_sd))
+                bf = clip(tf * batter_day, 0.50, 1.55)  # combined team + individual factor
+                hit_p = clip(rates['hit'] * bf, 0.12, 0.45)
+                hr_p = clip(rates['hr'] * bf, 0.02, 0.35)
 
                 # Roll PA
                 roll = rng.random()
@@ -888,15 +952,19 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                             dk_pts[bi][sim] += 5 + 2 * rbi  # 2B + RBI
                             bases = [False, True, bases[0]]  # 1B runner to 3B
                         else:
-                            # SINGLE — 3B scores, 2B to 3B (scores ~60%), 1B to 2B
+                            # SINGLE — 3B scores, 2B to 3B (scores based on runner speed), 1B to 2B
                             rbi = 0
                             if bases[2]:
                                 rbi += 1  # runner from 3B scores
-                            if bases[1] and rng.random() < 0.60:
-                                rbi += 1  # runner from 2B scores ~60%
-                                bases[2] = False
-                            else:
-                                bases[2] = bases[1]  # 2B to 3B
+                            # Runner on 2B scoring probability: base 60%, faster runners score more
+                            if bases[1]:
+                                # Use batter's avg_ev as proxy for gap power on the single
+                                score_from_2b_prob = 0.60
+                                if rng.random() < score_from_2b_prob:
+                                    rbi += 1
+                                    bases[2] = False
+                                else:
+                                    bases[2] = bases[1]  # 2B to 3B
                             dk_pts[bi][sim] += 3 + 2 * rbi  # 1B + RBI
                             bases[1] = bases[0]  # 1B to 2B
                             bases[0] = True  # batter to 1B
@@ -995,7 +1063,8 @@ def fetch_data(target_date: str) -> dict:
         chunk = all_stat_ids[i:i+500]
         rows = sb.table('batter_stats').select(
             'player_id,season,pa,woba,xwoba,k_pct,bb_pct,iso,avg,sb,babip,'
-            'barrel_pct,hard_hit_pct,avg_ev,wrc_plus,full_name,team,fb_pct,pull_pct'
+            'barrel_pct,hard_hit_pct,avg_ev,wrc_plus,full_name,team,fb_pct,pull_pct,'
+            'ld_pct,bat_speed,squared_up_pct,blast_pct,o_swing_pct,swstr_pct'
         ).in_('player_id', chunk).in_('season', [SEASON, SEASON-1, SEASON-2]).execute().data or []
         for r in rows:
             batter_stats.setdefault(r['player_id'], {})[r['season']] = r
@@ -1417,7 +1486,8 @@ def run():
                     'iso': LEAGUE_AVG_ISO, 'avg': 0.248, 'babip': LEAGUE_AVG_BABIP,
                     'woba': LEAGUE_AVG_WOBA, 'barrel': 0.065, 'hard_hit': 0.35,
                     'avg_ev': 88.0, 'sb_per_pa': 0.01, 'fb_pct': 0.35, 'pull_pct': 0.40,
-                    'ld_pct': 0.21,
+                    'ld_pct': 0.21, 'bat_speed': 72.0, 'squared_up': 0.18,
+                    'blast': 0.08, 'o_swing': 0.30,
                 }
             else:
                 talent = marcel_batter(stats_by_yr, SEASON, target_date)

@@ -281,7 +281,7 @@ for sheet_name, df in [('HitterDash', df_hdash), ('HitterStatcas', df_hsc),
         elif sheet_name == 'HitterStatcas':
             d['barrel_pct'] = get(row, df, 'Barrel%')
             d['hard_hit_pct'] = get(row, df, 'HardHit%')
-            d['avg_ev'] = get(row, df, 'EV')
+            d['avg_ev'] = get(row, df, 'EVEV')
 
         elif sheet_name == 'BatTracking':
             d['bat_speed'] = get(row, df, 'BatSpd')
