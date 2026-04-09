@@ -11501,12 +11501,20 @@ function applySwapSelections() {
   }
 
   updateActiveBuild(updated);
+
+  // Auto-assign active build to all contests so Export DK works
+  if (_dkTemplate && _dkTemplate.contests) {
+    for (const c of _dkTemplate.contests) {
+      _contestAssignments[c.contestId] = activeBuildId;
+    }
+  }
+
   renderSavedCards();
 
-  const el = document.getElementById('lateswap-sim-results');
-  if (el) el.style.display = 'none';
+  // Auto-export the swapped lineups
+  showToast('Swap selections applied — exporting DK CSV...');
   _lateSwapVariations = [];
-  showToast('Swap selections applied');
+  setTimeout(() => exportToDK(), 100);
 }
 
 // ── TEAM STACK PREFERENCES ────────────────────────────────────────────────────
