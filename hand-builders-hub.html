@@ -8122,6 +8122,14 @@ function scorePoolLineup(lineupObj) {
     });
   }
 
+  // Pitcher ownership (SP slots) — chalk pitchers drag leverage down
+  let pitcherOwn = 0;
+  players.forEach(([k, p]) => {
+    if (p.positions && p.positions.some(pos => ['SP','RP','P'].includes(pos))) {
+      pitcherOwn += p.proj_ownership ?? 0;
+    }
+  });
+
   // GPP metrics
   const leverage = totalOwn > 0 ? +(ceil / totalOwn * 100).toFixed(1) : 0;
   // Correlation quality: stack size + bring-back + sub-stack
@@ -8155,7 +8163,7 @@ function scorePoolLineup(lineupObj) {
     proj: +proj.toFixed(1), ceil: +ceil.toFixed(1), floor: +floor.toFixed(1),
     sigma: +sigma.toFixed(1), salary, games: gamePks.size,
     stack: mainStack, sub: subStack, bringBacks, pids,
-    totalOwn: +totalOwn.toFixed(1), leverage, corrScore, stackLeverage
+    totalOwn: +totalOwn.toFixed(1), leverage, corrScore, stackLeverage, pitcherOwn: +pitcherOwn.toFixed(1)
   };
 }
 
@@ -8450,7 +8458,7 @@ function scorePoolLineup_SD(lineupObj) {
     proj: +proj.toFixed(1), ceil: +ceil.toFixed(1), floor: +floor.toFixed(1),
     sigma: +sigma.toFixed(1), salary, games: gamePks.size,
     stack, sub: '—', bringBacks: 0, pids,
-    totalOwn: +totalOwn.toFixed(1), leverage, corrScore: 0, stackLeverage: 0
+    totalOwn: +totalOwn.toFixed(1), leverage, corrScore: 0, stackLeverage: 0, pitcherOwn: 0
   };
 }
 
@@ -9604,10 +9612,14 @@ function updateGppScores() {
       ? 0.40 * ((m.proj||0) / maxProj) + 0.35 * ((ct.boomPct||0) / maxBoom) + 0.25 * ((ct.sharpe||0) / maxSharpe)
       : (m.proj||0) / maxProj;
 
-    // Leverage: ceiling/ownership + win upside + stack leverage
+    // Leverage: low pitcher ownership + stack leverage + ceiling/ownership
+    // pitcherContrarian: 1.0 for lowest-owned SPs, ~0 for chalkiest
+    const pitOwn = m.pitcherOwn || 0;
+    const maxPitOwn = norm(_poolCandidates.map(c => c.metrics?.pitcherOwn || 0));
+    const pitcherContrarian = maxPitOwn > 0 ? 1.0 - (pitOwn / maxPitOwn) : 0.5;
     const levScore = hasSim
-      ? 0.35 * ((m.leverage||0) / maxLev) + 0.35 * ((ct.winUpside||0) / maxWinUpside) + 0.30 * ((m.stackLeverage||0) / maxStackLev)
-      : 0.50 * ((m.leverage||0) / maxLev) + 0.50 * ((m.stackLeverage||0) / maxStackLev);
+      ? 0.35 * pitcherContrarian + 0.25 * ((m.stackLeverage||0) / maxStackLev) + 0.20 * ((ct.winUpside||0) / maxWinUpside) + 0.20 * ((m.leverage||0) / maxLev)
+      : 0.40 * pitcherContrarian + 0.30 * ((m.stackLeverage||0) / maxStackLev) + 0.30 * ((m.leverage||0) / maxLev);
 
     c.gppScore = +(sharpWt * sharpScore + levWt * levScore).toFixed(4);
   }
@@ -9668,6 +9680,7 @@ function selectOptimalPortfolio(k) {
   const maxSharpe = norm(pool.map(c => c.contest?.sharpe || 0));
   const maxWinUpside = norm(pool.map(c => c.contest?.winUpside || 0));
   const maxStackLev = norm(pool.map(c => c.metrics.stackLeverage || 0));
+  const maxPitOwn = norm(pool.map(c => c.metrics.pitcherOwn || 0));
 
   const covered = new Uint8Array(numSims);
   const selected = [];
@@ -9810,7 +9823,9 @@ function selectOptimalPortfolio(k) {
 
       } else if (strat === 'contrarian') {
         if ((m.totalOwn || 0) > maxLineupOwn) continue; // hard filter
-        score = 0.35 * ((m.leverage||0) / maxLev) + 0.25 * ((ct.winUpside||0) / maxWinUpside) + 0.15 * (m.ceil / maxCeil) + 0.25 * (uncoveredTop1[i] / covNorm);
+        const pitOwn_con = m.pitcherOwn || 0;
+        const pitContrarian_con = maxPitOwn > 0 ? 1.0 - (pitOwn_con / maxPitOwn) : 0.5;
+        score = 0.30 * pitContrarian_con + 0.25 * ((m.leverage||0) / maxLev) + 0.20 * ((ct.winUpside||0) / maxWinUpside) + 0.25 * (uncoveredTop1[i] / covNorm);
 
       } else if (strat === 'cash') {
         // Overlap penalty for diversity (no coverage bitmap)
@@ -9820,8 +9835,10 @@ function selectOptimalPortfolio(k) {
         score = (0.30 * ((m.floor||0) / maxFloor) + 0.30 * ((ct.cashPct||0) / maxCashPct) + 0.25 * (m.proj / maxProj) + 0.15 * (1 - (ct.bustPct||50)/100)) * overlapPen;
 
       } else if (strat === 'leverage') {
-        // Favor stacks vs high-ownership pitchers — when that SP busts, the field drops and we surge
-        score = 0.30 * ((m.stackLeverage||0) / maxStackLev) + 0.25 * (m.proj / maxProj) + 0.20 * (m.ceil / maxCeil) + 0.25 * (uncoveredTop1[i] / covNorm);
+        // Favor low-owned pitchers + stacks vs high-ownership pitchers
+        const pitOwn_lev = m.pitcherOwn || 0;
+        const pitContrarian_lev = maxPitOwn > 0 ? 1.0 - (pitOwn_lev / maxPitOwn) : 0.5;
+        score = 0.30 * pitContrarian_lev + 0.25 * ((m.stackLeverage||0) / maxStackLev) + 0.20 * (m.proj / maxProj) + 0.25 * (uncoveredTop1[i] / covNorm);
 
       } else if (strat === 'maxCorr') {
         const mainTeam = (m.stack || '').split(' ')[0];
@@ -9833,7 +9850,9 @@ function selectOptimalPortfolio(k) {
         const gppLev = (+(document.getElementById('gpp-leverage-wt')?.value ?? 40)) / 100;
         const gppSharp = 1 - gppLev;
         const sharpS = 0.40 * (m.proj / maxProj) + 0.35 * ((ct.boomPct||0) / maxBoomPct) + 0.25 * ((ct.sharpe||0) / maxSharpe);
-        const levS = 0.35 * ((m.leverage||0) / maxLev) + 0.35 * ((ct.winUpside||0) / maxWinUpside) + 0.30 * ((m.stackLeverage||0) / maxStackLev);
+        const pitOwn_gpp = m.pitcherOwn || 0;
+        const pitContrarian_gpp = maxPitOwn > 0 ? 1.0 - (pitOwn_gpp / maxPitOwn) : 0.5;
+        const levS = 0.35 * pitContrarian_gpp + 0.25 * ((m.stackLeverage||0) / maxStackLev) + 0.20 * ((ct.winUpside||0) / maxWinUpside) + 0.20 * ((m.leverage||0) / maxLev);
         score = (gppSharp * sharpS + gppLev * levS) * 0.70 + (uncoveredTop1[i] / covNorm) * 0.30;
       }
 

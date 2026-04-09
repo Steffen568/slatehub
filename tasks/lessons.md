@@ -158,6 +158,10 @@ Found CAN, DR, ISR, ITA, MEX, NED, PR, USA, VEN rows from old WBC DFS data. Thes
 3. Re-run `diagnose_salary_mismatch.py` to verify — expect 0 ID mismatches
 4. If any stale rows with wrong IDs remain from old slate labels not in the current run, fix with the auto-generated SQL from the diagnose output
 
+### PLAYER_ID_REMAP auto-fix can generate backwards entries (Session 39)
+**What happened:** The auto-fix in `agent_lineups_dk.py` detects mismatches as `dk_id` (wrong stored ID) → `lineup_id` (correct MLBAM). But when the name resolver happens to find the CORRECT MLBAM and then a later step changes it, the auto-fix sees the correct MLBAM as the `dk_id` and maps it to some other value — creating a backwards entry that actively breaks future runs. Found 4 backwards entries (Vlad Jr, Will Smith, Cole Young, Jose Fernandez) plus 1 chain-break (Cole Young's intermediate hop).
+**Rule:** After any auto-fix run, verify PLAYER_ID_REMAP entries by checking that the VALUE matches `player_projections.player_id` for that player. The KEY should be the wrong ID, the VALUE should be the correct MLBAM. If an entry maps a known MLBAM to something else, it's backwards.
+
 ### load_rosters.py failed during --stats run
 **What happened:**     return codecs.charmap_encode(input,self.errors,encoding_table)[0]
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -538,6 +542,10 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 **What happened:** Two MIL@KC games on same date (doubleheader). Frontend `slateGameMap` keyed by `DATE|AWAY|HOME`, so both games got the turbo slate even though only the early game was on it.
 **Rule:** Include UTC hour in the slateGameMap key: `DATE|AWAY|HOME|UTCHOUR`. This disambiguates doubleheader games so each maps to its own set of slates.
 
+### DK cross-slate draftables pollute other slates
+**What happened:** DK listed MIL/KC players as draftables on the Early DG (145093) even though the MIL@KC game wasn't on that slate (it was turbo-only). These players showed up in the early pool with no matching game.
+**Rule:** In `load_dk_salaries.py`, build a `valid_teams` set from each DG's actual competitions (games). Skip any draftable whose `teamAbbreviation` is not in that set. Log skipped count as `cross_slate_skipped`.
+
 ### sim_projections spread_mult was inflating ace pitchers by 25%
 **What happened:** Sale projected at 33.9 (actual ~22). The spread_mult formula `2.0 - era_ratio` boosted aces by up to 1.25x with no calibration haircut.
 **Rule:** sim_projections must apply SP calibration haircut (0.87-0.95) matching compute_projections, not an ace boost.
@@ -599,3 +607,43 @@ requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leader
 ### Auto-fixed DK ID mismatches: Angel Martinez, Brandon Lowe, Carson Kelly, Cole Young, David Fry, Gabriel Arias, Jacob Wilson, Jose Caballero, Jose Ramirez, Josh Smith, Julio Rodriguez, Mike Yastrzemski, Vladimir Guerrero Jr., Will Smith
 **What happened:** Pipeline auto-fixed 14 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Same-name players cause validation ping-pong (David Hamilton)
+**What happened:** Two different David Hamiltons (MLBAM 666152 MIL, 824481 different team) exist. DK_TO_MLBAM had `824481: 666152`, collapsing them into one. The auto-fix would fix one, breaking the other, then re-validation would flip it back — infinite loop, blocking projections.
+**Rule:** When DK_TO_MLBAM maps ID A to ID B, verify A is actually a wrong DK ID and not a real different player. If two players share a name, they need separate IDs. Also, `find_mismatches()` must skip dk_salaries rows whose player_id already matches a different lineup player (same name, different person).
+
+### Slate label mismatch between dk_salaries and sim_pool
+**What happened:** dk_salaries labeled a 3-game turbo DG as `afternoon_1:09pm` (old time-bucket logic). sim_pool had it as `turbo`. Lineup builder couldn't find the pool because it queries sim_pool by the dk_slate from dk_salaries.
+**Rule:** Always use DK's `ContestStartTimeSuffix` field for slate classification, never infer from time buckets or game counts. When slate labels change in the code, existing sim_pool entries may need their dk_slate updated to match.
+
+### Auto-fixed DK ID mismatches: Angel Martinez, Brandon Lowe, Bryce Johnson, Cole Young, David Fry, Gary Sanchez, Ivan Herrera, J.P. Crawford, Jacob Wilson, Jose Caballero, Jose Fernandez, Josh Smith, Julio Rodriguez, Lane Thomas, Miguel Vargas, Mike Yastrzemski, Will Smith
+**What happened:** Pipeline auto-fixed 17 salary ID mismatch(es) in dk_salaries and added 2 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Angel Martinez, Brandon Lowe, Carson Kelly, David Hamilton, Gabriel Arias, Jose Ramirez, Josh Smith, Julio Rodriguez, Max Muncy, Miguel Rojas, Miguel Vargas, Mike Yastrzemski
+**What happened:** Pipeline auto-fixed 12 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Brandon Lowe, Carson Kelly, Gary Sanchez, Jacob Wilson, Jose Caballero, Jose Fernandez, Josh Smith, Juan Brito, Julio Rodriguez, Luis Matos, Miguel Vargas
+**What happened:** Pipeline auto-fixed 11 salary ID mismatch(es) in dk_salaries and added 2 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Luis Matos, Vladimir Guerrero Jr., Will Smith
+**What happened:** Pipeline auto-fixed 3 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Carson Kelly, Cole Young, Jacob Wilson, Jose Caballero, Jose Fernandez, Julio Rodriguez, Michael Massey, Tyler O'Neill
+**What happened:** Pipeline auto-fixed 8 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Jacob Wilson, Jose Caballero, Lane Thomas, Miguel Vargas
+**What happened:** Pipeline auto-fixed 4 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### PvH disabled on short slates + pvh_excluded_teams reset bug
+**What happened:** `generate_pool.py` had `pvh_off = game_count >= 4`, so 3-game slates had no PvH protection — lineups paired hitters vs their own pitcher. Also, `pvh_excluded_teams` was reset to empty at line 386, wiping SP-first picks. The "last resort" fallback ignored all constraints (PvH + team cap).
+**Rule:** PvH must be ON for all slate sizes. Never reset pvh_excluded_teams after SP-first fills. Never bypass PvH/team-cap in fallback — return None and reject the lineup instead.
+
+### GPP leverage slider didn't penalize chalk pitchers
+**What happened:** The leverage score formula (`ceil / totalOwn`) treated pitcher ownership the same as hitter ownership. Chalk SPs with 25%+ ownership still topped leverage-sorted pools because their ceiling was high enough to offset.
+**Rule:** Pitcher ownership gets a dedicated penalty in leverage scoring. SPs above 15% combined ownership are penalized proportionally (up to 60% penalty at 55%+ ownership). Penalty scales with the leverage slider position.

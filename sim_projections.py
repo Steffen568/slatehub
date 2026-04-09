@@ -56,8 +56,23 @@ WIND_IN_DIRS  = {"N", "NNW", "NW", "NNE", "NE", "WNW"}
 
 # Marcel weights: current season (if enough PA/IP), prior1, prior2
 MARCEL_WEIGHTS = {0: 5, 1: 4, 2: 3}
-MIN_PA_BATTER  = 75
-MIN_IP_PITCHER = 25
+
+# Season-scaled minimums: ramp up as sample grows through the year
+# Opening Day ~Mar 27 → full season ~Sep 28 ≈ 185 days
+def _season_min(full_season_min, target_date=None):
+    """Scale minimum PA/IP threshold by how deep into the season we are."""
+    if target_date is None:
+        target_date = date.today()
+    elif isinstance(target_date, str):
+        target_date = date.fromisoformat(target_date)
+    opening_day = date(target_date.year, 3, 27)
+    days_in = max(0, (target_date - opening_day).days)
+    # Ramp: 0.25 at Opening Day → 1.0 by June (90 days in)
+    scale = min(1.0, 0.25 + 0.75 * (days_in / 90.0))
+    return max(5, int(full_season_min * scale))
+
+MIN_PA_BATTER_FULL  = 75
+MIN_IP_PITCHER_FULL = 25
 
 # SP covers ~60% of a batter's PA, bullpen ~40%
 SP_SHARE = 0.60
@@ -82,11 +97,12 @@ def round2(val):
 
 # ── Marcel True Talent ────────────────────────────────────────────────────────
 
-def marcel_batter(stats_by_season: dict, current_season: int) -> dict:
+def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) -> dict:
     """Marcel-weighted batter true talent across 3 seasons."""
     curr = stats_by_season.get(current_season)
     curr_pa = safe(curr.get('pa'), 0) if curr else 0
-    use_current = curr_pa >= MIN_PA_BATTER
+    min_pa = _season_min(MIN_PA_BATTER_FULL, target_date)
+    use_current = curr_pa >= min_pa
 
     weights = [
         (current_season,     5 if use_current else 0),
@@ -148,11 +164,12 @@ def marcel_batter(stats_by_season: dict, current_season: int) -> dict:
     }
 
 
-def marcel_pitcher(stats_by_season: dict, current_season: int) -> dict:
+def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None) -> dict:
     """Marcel-weighted pitcher true talent across 3 seasons."""
     curr = stats_by_season.get(current_season)
     curr_ip = safe(curr.get('ip'), 0) if curr else 0
-    use_current = curr_ip >= MIN_IP_PITCHER
+    min_ip = _season_min(MIN_IP_PITCHER_FULL, target_date)
+    use_current = curr_ip >= min_ip
 
     weights = [
         (current_season,     5 if use_current else 0),
@@ -199,14 +216,30 @@ def marcel_pitcher(stats_by_season: dict, current_season: int) -> dict:
 
     # Stuff+ / quality metrics (current or most recent)
     stuff_plus = None
+    pitching_plus = None
+    location_plus = None
     swstr_pct = None
+    velo = None
+    lob_pct = None
     for yr in ([current_season] if use_current else []) + [current_season-1, current_season-2]:
         row = stats_by_season.get(yr)
-        if row and safe(row.get('stuff_plus')) and not stuff_plus:
+        if not row:
+            continue
+        if safe(row.get('stuff_plus')) and not stuff_plus:
             stuff_plus = safe(row.get('stuff_plus'))
-        if row and safe(row.get('swstr_pct')) and not swstr_pct:
+        if safe(row.get('pitching_plus')) and not pitching_plus:
+            pitching_plus = safe(row.get('pitching_plus'))
+        if safe(row.get('location_plus')) and not location_plus:
+            location_plus = safe(row.get('location_plus'))
+        if safe(row.get('swstr_pct')) and not swstr_pct:
             swstr_pct = safe(row.get('swstr_pct'))
+        if safe(row.get('velo')) and not velo:
+            velo = safe(row.get('velo'))
+        if safe(row.get('lob_pct')) and not lob_pct:
+            lob_pct = safe(row.get('lob_pct'))
     stuff_plus = stuff_plus or 100.0
+    pitching_plus = pitching_plus or 100.0
+    location_plus = location_plus or 100.0
 
     # IP per GS
     ip_per_gs = 5.1
@@ -226,7 +259,9 @@ def marcel_pitcher(stats_by_season: dict, current_season: int) -> dict:
     return {
         'k_pct': k_pct, 'bb_pct': bb_pct, 'hr9': hr9, 'babip': babip,
         'xfip': xfip, 'siera': siera, 'stuff_plus': stuff_plus,
+        'pitching_plus': pitching_plus, 'location_plus': location_plus,
         'swstr_pct': swstr_pct, 'gb_pct': gb_pct, 'ip_per_gs': ip_per_gs,
+        'velo': velo, 'lob_pct': lob_pct,
     }
 
 
@@ -437,7 +472,9 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
                      is_home: bool, n_sims: int,
                      rng: np.random.Generator,
                      vegas_ip: float = None,
-                     vegas_ks: float = None) -> np.ndarray:
+                     vegas_ks: float = None,
+                     pitcher_split_data: dict = None,
+                     opp_hand_pct: float = None) -> np.ndarray:
     """
     Simulate n_sims starts for one pitcher. Returns array of DK points per sim.
 
@@ -456,20 +493,53 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     wx_hr = weather_hr_mult(weather)
 
     # ── IP projection: blend Vegas + talent ─────────────────────────────────
-    # Talent-based IP (matchup-adjusted)
-    talent_ip = talent['ip_per_gs'] * clip(1.0 + (1.0 - opp_quality) * 0.30, 0.90, 1.10)
+    # Talent-based IP (raw — no matchup adjustment; Vegas already prices matchup)
+    talent_ip = talent['ip_per_gs']
     if vegas_ip:
         proj_ip = vegas_ip * VEGAS_WEIGHT + talent_ip * (1.0 - VEGAS_WEIGHT)
     else:
-        proj_ip = talent_ip
+        # No Vegas anchor — regress toward league avg to avoid inflated IP/GS
+        proj_ip = talent_ip * 0.60 + 5.1 * 0.40
+
+    # ── Pitcher splits adjustment ──────────────────────────────────────────
+    # Blend split-specific K%, BB%, xFIP based on opposing lineup handedness
+    # opp_hand_pct = fraction of RHH in opposing lineup (0.0 to 1.0)
+    split_k = talent['k_pct']
+    split_bb = talent['bb_pct']
+    split_xfip = talent['xfip']
+    if pitcher_split_data and opp_hand_pct is not None:
+        r_split = pitcher_split_data.get('R', {})  # vs RHH
+        l_split = pitcher_split_data.get('L', {})  # vs LHH
+        r_pct = opp_hand_pct       # fraction of RHH
+        l_pct = 1.0 - opp_hand_pct  # fraction of LHH
+        r_pa = safe(r_split.get('pa'), 0)
+        l_pa = safe(l_split.get('pa'), 0)
+        # Only use splits with reasonable sample (30+ combined PA)
+        if r_pa + l_pa >= 30:
+            # Regress each split toward overall — more PA = less regression
+            r_rf = clip(r_pa / 200.0, 0.0, 0.80)
+            l_rf = clip(l_pa / 200.0, 0.0, 0.80)
+            r_k = (safe(r_split.get('k_pct')) or talent['k_pct']) * r_rf + talent['k_pct'] * (1 - r_rf)
+            l_k = (safe(l_split.get('k_pct')) or talent['k_pct']) * l_rf + talent['k_pct'] * (1 - l_rf)
+            split_k = r_k * r_pct + l_k * l_pct
+            r_bb = (safe(r_split.get('bb_pct')) or talent['bb_pct']) * r_rf + talent['bb_pct'] * (1 - r_rf)
+            l_bb = (safe(l_split.get('bb_pct')) or talent['bb_pct']) * l_rf + talent['bb_pct'] * (1 - l_rf)
+            split_bb = r_bb * r_pct + l_bb * l_pct
+            r_xfip = (safe(r_split.get('xfip')) or talent['xfip']) * r_rf + talent['xfip'] * (1 - r_rf)
+            l_xfip = (safe(l_split.get('xfip')) or talent['xfip']) * l_rf + talent['xfip'] * (1 - l_rf)
+            split_xfip = r_xfip * r_pct + l_xfip * l_pct
 
     # ── K rate: blend Vegas + talent ────────────────────────────────────────
     # Talent-based K rate (matchup + park adjusted)
-    talent_k_rate = talent['k_pct'] * (1.0 + (1.0 - opp_quality) * 0.35) * park_k
+    talent_k_rate = split_k * (1.0 + (1.0 - opp_quality) * 0.35) * park_k
     # swstr_pct (swinging strike rate) is more predictive of future K% than K% itself
     if talent.get('swstr_pct') and talent['swstr_pct'] > 0:
         swstr_adj = (talent['swstr_pct'] / 0.11) ** 0.2  # league avg ~11%, damped
         talent_k_rate *= clip(swstr_adj, 0.90, 1.12)
+    # Velo boost: each mph above 93 adds ~0.5% K rate (research-backed)
+    if talent.get('velo') and talent['velo'] > 0:
+        velo_adj = 1.0 + (talent['velo'] - 93.0) * 0.005
+        talent_k_rate *= clip(velo_adj, 0.96, 1.06)
     if vegas_ks and proj_ip > 0:
         # Derive Vegas-implied K rate from expected Ks / expected batters faced
         vegas_bf = proj_ip * PA_PER_IP
@@ -482,7 +552,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
         k_rate = clip(blended_k * park_k_edge, 0.10, 0.45)
     else:
         k_rate = clip(talent_k_rate, 0.10, 0.45)
-    bb_rate = clip(talent['bb_pct'] * (1.0 + (opp_quality - 1.0) * 0.20) * park_bb, 0.03, 0.16)
+    bb_rate = clip(split_bb * (1.0 + (opp_quality - 1.0) * 0.20) * park_bb, 0.03, 0.16)
     contact_rate = max(0.15, 1.0 - k_rate - bb_rate)
 
     # Hit rate when ball in play
@@ -511,7 +581,16 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # and environment as the per-9 ER rate, then simulate variance around it.
     #
     # This grounds ER in real pitching metrics instead of a fragile base-runner sim.
-    era_anchor = (talent['xfip'] * 0.50 + talent['siera'] * 0.50)
+    era_anchor = (split_xfip * 0.50 + talent['siera'] * 0.50)
+    # LOB% adjustment: pitchers who strand runners well have lower ER than xFIP predicts.
+    # Regress LOB% toward 72% league avg, then apply small ERA multiplier.
+    # LOB% > 72% → fewer ER (multiplier < 1), LOB% < 72% → more ER (multiplier > 1)
+    lob = talent.get('lob_pct')
+    if lob and lob > 0:
+        # Regress: 60% toward league avg 0.72 to avoid small-sample noise
+        reg_lob = lob * 0.40 + 0.72 * 0.60
+        lob_adj = clip(1.0 - (reg_lob - 0.72) * 0.8, 0.93, 1.07)
+        era_anchor *= lob_adj
     er_per_ip = era_anchor / 9.0 * opp_quality * (safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0)
     er_per_ip *= weather_hr_mult(weather)  # HR-driven ER scales with weather
 
@@ -526,15 +605,22 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # Elite arms (low ERA) are more consistent → tighter SD
     era_consistency = clip(era_anchor / LEAGUE_AVG_XFIP, 0.70, 1.50)
     stuff_sd = 0.18 + 0.06 * era_consistency  # elite ~0.22, mid ~0.24, bad ~0.27
-    # High stuff+ pitchers are more consistent start-to-start
-    stuff_plus = talent.get('stuff_plus', 100)
-    stuff_sd -= (stuff_plus - 100) / 100.0 * 0.05  # ±5% SD per 100 stuff+ deviation
-    stuff_sd = max(0.15, stuff_sd)  # floor
+    # Pitching+ (composite of stuff + location + command) is the best consistency predictor
+    # A pitcher with Pitching+ 120 is far more reliable start-to-start than Stuff+ 120 alone
+    pitching_plus = talent.get('pitching_plus', 100)
+    stuff_sd -= (pitching_plus - 100) / 100.0 * 0.06  # ±6% SD per 100 Pitching+ deviation
+    # Location+ further tightens walk variance (high location = fewer blowup games)
+    location_plus = talent.get('location_plus', 100)
+    stuff_sd -= (location_plus - 100) / 100.0 * 0.02  # ±2% additional from command
+    stuff_sd = max(0.14, stuff_sd)  # floor
     stuff_day = rng.normal(1.0, stuff_sd, size=n_sims).clip(0.40, 1.65)
 
     # Scale rates per sim: good stuff day → more Ks, fewer hits, deeper IP
     sim_k_rate  = np.clip(k_rate * stuff_day, 0.08, 0.50)
-    sim_bb_rate = np.clip(bb_rate * (2.0 - stuff_day), 0.02, 0.20)  # inverse: good stuff → fewer walks
+    # Walk rate: inverse of stuff day, but Location+ dampens the variance
+    # High Location+ pitchers don't blow up with walks even on bad stuff days
+    loc_dampen = clip(1.0 - (location_plus - 100) / 100.0 * 0.25, 0.70, 1.10)
+    sim_bb_rate = np.clip(bb_rate * (1.0 + (1.0 - stuff_day) * loc_dampen), 0.02, 0.20)
     sim_hit_rate = np.clip(hit_on_contact * (2.0 - stuff_day), 0.15, 0.42)
 
     # ── Simulate n_sims games ─────────────────────────────────────────────
@@ -923,21 +1009,98 @@ def fetch_data(target_date: str) -> dict:
     if sp_ids:
         rows = sb.table('pitcher_stats').select(
             'player_id,season,ip,g,gs,xfip,siera,k_pct,bb_pct,hr9,babip,'
-            'stuff_plus,location_plus,swstr_pct,full_name,stats_level'
+            'stuff_plus,location_plus,pitching_plus,swstr_pct,full_name,stats_level,'
+            'gb_pct,fb_pct,ld_pct,velo,lob_pct'
         ).in_('player_id', list(sp_ids)).in_('season', [SEASON, SEASON-1, SEASON-2]).execute().data or []
         for r in rows:
             pitcher_stats.setdefault(r['player_id'], {})[r['season']] = r
 
     # Batter splits (also include reverse-remapped IDs)
-    batter_splits = {}
+    # Load both seasons with season key, then blend PA-weighted
+    batter_splits_raw = {}  # {player_id: {split: {season: row}}}
     if all_stat_ids:
         for i in range(0, len(all_stat_ids), 150):
             chunk = all_stat_ids[i:i+150]
             rows = sb.table('batter_splits').select(
-                'player_id,split,pa,wrc_plus,woba,k_pct,bb_pct'
+                'player_id,season,split,pa,wrc_plus,woba,k_pct,bb_pct,iso'
             ).in_('player_id', chunk).in_('season', [SEASON, SEASON-1]).execute().data or []
             for r in rows:
-                batter_splits.setdefault(r['player_id'], {})[r['split']] = r
+                batter_splits_raw.setdefault(r['player_id'], {}).setdefault(r['split'], {})[r['season']] = r
+
+    # Blend splits: PA-weighted average across seasons (heavier = more reliable)
+    batter_splits = {}
+    SPLIT_STATS = ['wrc_plus', 'woba', 'k_pct', 'bb_pct', 'iso']
+    SPLIT_DEFAULTS = {'wrc_plus': 100, 'woba': 0.315, 'k_pct': 0.225, 'bb_pct': 0.082, 'iso': 0.165}
+    for pid, splits in batter_splits_raw.items():
+        for split_label, seasons in splits.items():
+            curr = seasons.get(SEASON)
+            prev = seasons.get(SEASON - 1)
+            curr_pa = safe(curr.get('pa'), 0) if curr else 0
+            prev_pa = safe(prev.get('pa'), 0) if prev else 0
+            total_pa = curr_pa + prev_pa
+            if total_pa < 5:
+                continue  # not enough data to use
+
+            # PA-weighted blend with Marcel-style season weighting (current 5x, prior 4x)
+            blended = {'pa': total_pa, 'split': split_label}
+            for stat in SPLIT_STATS:
+                c_val = safe(curr.get(stat)) if curr else None
+                p_val = safe(prev.get(stat)) if prev else None
+                if c_val is not None and p_val is not None:
+                    c_wt = curr_pa * 5
+                    p_wt = prev_pa * 4
+                    blended[stat] = (c_val * c_wt + p_val * p_wt) / (c_wt + p_wt)
+                elif c_val is not None:
+                    blended[stat] = c_val
+                elif p_val is not None:
+                    blended[stat] = p_val
+                # else: leave unset, platoon_adjust handles None
+
+            batter_splits.setdefault(pid, {})[split_label] = blended
+
+    print(f"  Batter splits: {sum(len(v) for v in batter_splits.values())} split rows "
+          f"({len(batter_splits)} players)")
+
+    # Pitcher splits (for lineup-weighted matchup adjustments)
+    pitcher_splits = {}  # {player_id: {split: blended_row}}
+    pitcher_splits_raw = {}
+    if sp_ids:
+        for i in range(0, len(list(sp_ids)), 150):
+            chunk = list(sp_ids)[i:i+150]
+            rows = sb.table('pitcher_splits').select(
+                'player_id,season,split,pa,k_pct,bb_pct,xfip,fip,woba,era'
+            ).in_('player_id', chunk).in_('season', [SEASON, SEASON-1]).execute().data or []
+            for r in rows:
+                pitcher_splits_raw.setdefault(r['player_id'], {}).setdefault(r['split'], {})[r['season']] = r
+
+    P_SPLIT_STATS = ['k_pct', 'bb_pct', 'xfip', 'fip', 'woba', 'era']
+    for pid, splits in pitcher_splits_raw.items():
+        for split_label, seasons in splits.items():
+            curr = seasons.get(SEASON)
+            prev = seasons.get(SEASON - 1)
+            curr_pa = safe(curr.get('pa'), 0) if curr else 0
+            prev_pa = safe(prev.get('pa'), 0) if prev else 0
+            total_pa = curr_pa + prev_pa
+            if total_pa < 10:
+                continue
+
+            blended = {'pa': total_pa}
+            for stat in P_SPLIT_STATS:
+                c_val = safe(curr.get(stat)) if curr else None
+                p_val = safe(prev.get(stat)) if prev else None
+                if c_val is not None and p_val is not None:
+                    c_wt = curr_pa * 5
+                    p_wt = prev_pa * 4
+                    blended[stat] = (c_val * c_wt + p_val * p_wt) / (c_wt + p_wt)
+                elif c_val is not None:
+                    blended[stat] = c_val
+                elif p_val is not None:
+                    blended[stat] = p_val
+
+            pitcher_splits.setdefault(pid, {})[split_label] = blended
+
+    print(f"  Pitcher splits: {sum(len(v) for v in pitcher_splits.values())} split rows "
+          f"({len(pitcher_splits)} pitchers)")
 
     # Odds
     odds = {}
@@ -1035,7 +1198,8 @@ def fetch_data(target_date: str) -> dict:
     return {
         'games': games, 'lineups': lineups,
         'batter_stats': batter_stats, 'pitcher_stats': pitcher_stats,
-        'batter_splits': batter_splits, 'odds': odds,
+        'batter_splits': batter_splits, 'pitcher_splits': pitcher_splits,
+        'odds': odds,
         'park_factors': park_factors, 'weather': weather,
         'pitcher_props': pitcher_props,
         'bullpen_quality': bullpen_quality,
@@ -1216,7 +1380,7 @@ def run():
         if opp_sp_id:
             p_stats = data['pitcher_stats'].get(opp_sp_id, {})
             if p_stats:
-                pitcher = marcel_pitcher(p_stats, SEASON)
+                pitcher = marcel_pitcher(p_stats, SEASON, target_date)
                 sp_proj_ip = pitcher.get('ip_per_gs', 5.5)
                 # Blend with Vegas props if available
                 props = data.get('pitcher_props', {}).get(opp_sp_id)
@@ -1256,7 +1420,7 @@ def run():
                     'ld_pct': 0.21,
                 }
             else:
-                talent = marcel_batter(stats_by_yr, SEASON)
+                talent = marcel_batter(stats_by_yr, SEASON, target_date)
 
             # Platoon adjustment
             split_row = data['batter_splits'].get(stats_pid, {}).get(opp_sp_hand)
@@ -1367,7 +1531,7 @@ def run():
             if not p_stats:
                 continue
 
-            talent = marcel_pitcher(p_stats, SEASON)
+            talent = marcel_pitcher(p_stats, SEASON, target_date)
             is_home = (role == 'home')
             sp_hand = game.get('home_sp_hand' if is_home else 'away_sp_hand')
             opp_team_id = game.get('away_team_id' if is_home else 'home_team_id')
@@ -1382,10 +1546,37 @@ def run():
             v_ip = safe(props.get('implied_ip')) if props else None
             v_ks = safe(props.get('implied_ks')) if props else None
 
+            # Opposing lineup handedness composition for pitcher splits
+            p_splits = data['pitcher_splits'].get(sp_id)
+            opp_hand_pct = None
+            if p_splits:
+                opp_lus = [lu for lu in data['lineups']
+                           if lu.get('team_id') == opp_team_id and lu.get('batting_order')]
+                if opp_lus:
+                    # Count RHH vs LHH in opposing lineup using batter_stats
+                    # Bats hand isn't in our data, so approximate from splits PA:
+                    # batters with more PA vs RHP are likely LHH (face RHP more often)
+                    # Default to 60% RHH (league average)
+                    rhh_count = 0
+                    total = 0
+                    for lu in opp_lus:
+                        bp = data['batter_splits'].get(lu['player_id'], {})
+                        r_pa = safe(bp.get('R', {}).get('pa'), 0)
+                        l_pa = safe(bp.get('L', {}).get('pa'), 0)
+                        if r_pa + l_pa > 20:
+                            # More PA vs RHP → likely LHH (or switch), more vs LHP → RHH
+                            # RHH face LHP less often, so higher L split PA = RHH
+                            rhh_count += l_pa / (r_pa + l_pa)  # fraction of PA vs LHP ≈ prob RHH
+                        else:
+                            rhh_count += 0.60  # league default
+                        total += 1
+                    opp_hand_pct = rhh_count / total if total > 0 else 0.60
+
             dk_dist = sim_pitcher_game(
                 talent, opp_qual, park_row, wx_row, odds_row,
                 is_home, n_sims, rng,
-                vegas_ip=v_ip, vegas_ks=v_ks
+                vegas_ip=v_ip, vegas_ks=v_ks,
+                pitcher_split_data=p_splits, opp_hand_pct=opp_hand_pct
             )
 
             mean   = float(np.mean(dk_dist))
@@ -1399,8 +1590,8 @@ def run():
             # Compute expected component values for transparency
             PA_PER_IP = 4.3
             VW = 0.55  # match VEGAS_WEIGHT in sim_pitcher_game
-            talent_ip = talent['ip_per_gs'] * clip(1.0 + (1.0 - opp_qual) * 0.30, 0.90, 1.10)
-            exp_ip = (v_ip * VW + talent_ip * (1.0 - VW)) if v_ip else talent_ip
+            talent_ip = talent['ip_per_gs']  # raw — no matchup adj (Vegas prices it)
+            exp_ip = (v_ip * VW + talent_ip * (1.0 - VW)) if v_ip else (talent_ip * 0.60 + 5.1 * 0.40)
             exp_pa = exp_ip * PA_PER_IP
             talent_ks = exp_pa * talent['k_pct'] * clip(1.0 + (1.0 - opp_qual) * 0.35, 0.85, 1.18)
             exp_ks = (v_ks * VW + talent_ks * (1.0 - VW)) if v_ks else talent_ks

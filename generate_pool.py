@@ -383,7 +383,7 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
     else:
         rng.shuffle(pos_order)
 
-    pvh_excluded_teams = set()  # teams whose hitters face a selected SP
+    # Don't reset pvh_excluded_teams — keep teams excluded by SP-first picks above
 
     for pos in pos_order:
         slots_needed = remaining[pos]
@@ -405,11 +405,8 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                             and (p['is_pitcher'] or team_hitter_count[p['team']] < MAX_HITTERS_PER_TEAM)
                             and (p['is_pitcher'] or p['team'] not in pvh_excluded_teams)]
                 if not fallback:
-                    # Last resort: ignore pvh + team cap to avoid null lineup
-                    fallback = [(i, s, p) for i, s, p in pos_players.get(pos, [])
-                                if p['player_id'] not in used_pids and p['salary'] <= sal_left]
-                    if not fallback:
-                        return None
+                    # Can't fill this position without violating PvH/team cap — reject lineup
+                    return None
                 pick = fallback[-1]  # cheapest
             else:
                 # Tighter selection for SP (quality matters more), wider for hitters
@@ -538,8 +535,8 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
     """Generate n_lineups unique lineups using greedy randomized builder."""
     if rng is None: rng = np.random.default_rng()
 
-    # PvH exclusion: on slates with 4+ games, don't pair hitters facing a lineup's SP
-    pvh_off = game_count >= 4
+    # PvH exclusion: never pair hitters facing a lineup's SP (all slate sizes)
+    pvh_off = True
     game_teams = {}
     if pvh_off:
         # Build (game_pk, team_abbr) → opposing_team_abbr from pool data
@@ -553,7 +550,7 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
             if len(teams_list) == 2:
                 game_teams[(gpk, teams_list[0])] = teams_list[1]
                 game_teams[(gpk, teams_list[1])] = teams_list[0]
-        print(f"    PvH exclusion: ON ({game_count} games)")
+        print(f"    PvH exclusion: ON ({game_count} games, {len(game_teams)//2} matchups)")
 
     # Get viable main teams (4+ hitters)
     team_hitters = defaultdict(list)
