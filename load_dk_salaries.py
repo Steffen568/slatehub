@@ -233,20 +233,20 @@ PLAYER_ID_REMAP = {
     503373  : 691777,   # Max Muncy (auto-fixed)
     608070  : 681459,   # Jose Ramirez (auto-fixed)
     657863  : 621566,   # Matt Olson (auto-fixed)
-    665489  : 115223,   # Vladimir Guerrero Jr. (auto-fixed)
-    669257  : 446920,   # Will Smith (auto-fixed)
+    115223  : 665489,   # Vladimir Guerrero Jr. (fixed direction)
+    446920  : 669257,   # Will Smith (fixed direction)
     672356  : 699087,   # Gabriel Arias (auto-fixed)
     676609  : 691606,   # Jose Caballero (auto-fixed)
     677594  : 451219,   # Julio Rodriguez (auto-fixed)
     828962  : 700951,   # Lane Thomas (auto-fixed)
     872787  : 660821,   # Jesus Sanchez (auto-fixed)
     1316799 : 691777,   # Max Muncy (auto-fixed)
-    1396147 : 673784,   # Cole Young (auto-fixed)
+    1396147 : 702284,   # Cole Young (auto-fixed, target updated)
     1452073 : 814526,   # Jacob Wilson (auto-fixed)
     876320  : 665161,   # Jeremy Pena (auto-fixed)
     1055003 : 669134,   # Luis Campusano (auto-fixed)
     657041  : 700951,   # Lane Thomas (auto-fixed)
-    702284  : 673784,   # Cole Young (auto-fixed)
+    673784  : 702284,   # Cole Young (fixed direction)
     805779  : 814526,   # Jacob Wilson (auto-fixed)
     573262  : 569209,   # Mike Yastrzemski (auto-fixed)
     641933  : 828468,   # Tyler O'Neill (auto-fixed)
@@ -255,7 +255,18 @@ PLAYER_ID_REMAP = {
     608348  : 803086,   # Carson Kelly (auto-fixed)
     543877  : 643582,   # Christian Vazquez (auto-fixed)
     666185  : 684686,   # Dylan Carlson (auto-fixed)
-    699912  : 800513,   # Jose Fernandez (auto-fixed)
+    800513  : 699912,   # Jose Fernandez (fixed direction)
+    829588  : 656849,   # David Peterson
+    1116218 : 669194,   # Ryne Nelson
+    657781  : 622663,   # Luis Severino
+    1284641 : 691587,   # Eury Perez
+    737507  : 641487,   # J.P. Crawford (auto-fixed)
+    1055195 : 669369,   # Bryce Johnson (auto-fixed)
+    571970  : 691777,   # Max Muncy (auto-fixed)
+    1186399 : 594695,   # Luis Matos (auto-fixed)
+    1299487 : 682877,   # Juan Brito (auto-fixed)
+    1115910 : 686681,   # Michael Massey (auto-fixed)
+    1122217 : 681190,   # Randy Vasquez (DK ASCII vs MLBAM Vásquez)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids
@@ -440,6 +451,15 @@ for dgid in all_dg_ids:
             flex_draftable_ids = None
             cpt_skipped = 0
 
+        # Build set of valid teams for this DG from its actual games.
+        # DK sometimes lists players from locked slates as cross-slate draftables
+        # even though their game isn't on this slate. Filter them out.
+        valid_teams = set()
+        for comp_row in seen_comps.values():
+            valid_teams.add(comp_row['away_team'])
+            valid_teams.add(comp_row['home_team'])
+        cross_slate_skipped = 0
+
         count = 0
         name_hit = 0
         dk_fallback = 0
@@ -457,6 +477,11 @@ for dgid in all_dg_ids:
 
             # Showdown: skip CPT entries — only keep the FLEX (lower salary) draftable per player
             if is_showdown and draftable_id not in flex_draftable_ids:
+                continue
+
+            # Skip cross-slate draftables: player's team has no game on this DG
+            if valid_teams and team and team not in valid_teams:
+                cross_slate_skipped += 1
                 continue
 
             position = csv_pos or api_pos
@@ -550,6 +575,8 @@ for dgid in all_dg_ids:
             all_slate_game_rows.append(game_row)
 
         extra = f' | cpt_skipped: {cpt_skipped}' if is_showdown else ''
+        if cross_slate_skipped:
+            extra += f' | cross_slate_skipped: {cross_slate_skipped}'
         print(f"  DG {dgid} [{contest_type}] ({slate_label}): {count} players, {len(seen_comps)} games | name_matched: {name_hit} | dk_id_fallback: {dk_fallback} | no_match: {no_match}{extra}")
         time.sleep(0.3)
 
