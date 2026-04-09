@@ -10977,8 +10977,9 @@ function lateSwapFindBest(lineupObj, pastLineups, capExcluded, stackAppearCount,
 
   const lockedPids = new Set(Object.values(part.lockedSlots).filter(Boolean).map(p => p.player_id));
 
-  // If nothing is locked, delegate to the regular optimizer
-  if (part.noneLocked) {
+  // If nothing is locked and NOT in swap-sim mode, delegate to regular optimizer
+  // In swap-sim mode, keep using the late swap path so randomization works consistently
+  if (part.noneLocked && !window._swapSimActive) {
     return optoFindBest(optoPickRule(lineupIdx, totalN), pastLineups, capExcluded, stackAppearCount, totalN);
   }
 
@@ -11236,6 +11237,7 @@ function generateSwapVariations() {
   if (!anyUnlocked) { showToast('All games started — nothing to swap'); return; }
 
   _lateSwapVariations = [];
+  window._swapSimActive = true;  // flag so lateSwapFindBest uses LP path even when noneLocked
   const simBtn = document.getElementById('lateswap-sim-btn');
   if (simBtn) { simBtn.disabled = true; simBtn.textContent = 'Working...'; }
   const resultsEl = document.getElementById('lateswap-sim-results');
@@ -11377,6 +11379,7 @@ function simSwapVariations() {
 }
 
 function resetSwapSimBtn() {
+  window._swapSimActive = false;
   const simBtn = document.getElementById('lateswap-sim-btn');
   if (simBtn) { simBtn.disabled = false; simBtn.textContent = 'Swap Sim'; }
 }
