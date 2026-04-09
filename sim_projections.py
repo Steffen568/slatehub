@@ -891,15 +891,18 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 # Choose rates based on whether starter is still in
                 rates = batter['rates_vs_sp'] if team_bf < sp_limit else batter['rates_vs_bp']
 
-                # Apply team factor to hit/HR probabilities
                 # Per-batter volatility: o_swing% (chase rate) widens outcomes
                 # High-chase hitters are boom/bust: sometimes they run into one, sometimes they chase everything
                 o_swing_vol = batter.get('o_swing', 0.30)
                 batter_vol_sd = 0.05 + (o_swing_vol - 0.30) * 0.3  # higher chase = wider SD
                 batter_day = rng.normal(1.0, max(0.03, batter_vol_sd))
-                bf = clip(tf * batter_day, 0.50, 1.55)  # combined team + individual factor
-                hit_p = clip(rates['hit'] * bf, 0.12, 0.45)
-                hr_p = clip(rates['hr'] * bf, 0.02, 0.35)
+                batter_day = clip(batter_day, 0.50, 1.55)
+                # Team factor affects HR power (game script/bullpen) but NOT base hit rate
+                # A hitter's contact ability doesn't change because his team is bad
+                # Hit rate: only individual batter volatility (not team environment)
+                hit_p = clip(rates['hit'] * batter_day, 0.12, 0.45)
+                # HR rate: team environment + individual (high-scoring games produce more HRs)
+                hr_p = clip(rates['hr'] * batter_day * (0.70 + 0.30 * tf), 0.02, 0.35)
 
                 # Roll PA
                 roll = rng.random()
