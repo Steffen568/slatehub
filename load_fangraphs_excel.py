@@ -101,11 +101,34 @@ for p in all_players:
         name_to_mlbam[p['name_normalized']] = p['mlbam_id']
 
 # Also build from pitcher_stats and batter_stats for players not in Chadwick
+# AND build name+team lookup to disambiguate common names (Luis Garcia, Eduardo Rodriguez, etc.)
+name_team_to_mlbam = {}  # (norm_name, team_abbr) → mlbam_id
+
+# FanGraphs team abbreviations → our DB team names (for matching)
+FG_TEAM_MAP = {
+    'ARI': 'Arizona Diamondbacks', 'ATL': 'Atlanta Braves', 'BAL': 'Baltimore Orioles',
+    'BOS': 'Boston Red Sox', 'CHC': 'Chicago Cubs', 'CHW': 'Chicago White Sox',
+    'CWS': 'Chicago White Sox', 'CIN': 'Cincinnati Reds', 'CLE': 'Cleveland Guardians',
+    'COL': 'Colorado Rockies', 'DET': 'Detroit Tigers', 'HOU': 'Houston Astros',
+    'KC': 'Kansas City Royals', 'KCR': 'Kansas City Royals',
+    'LAA': 'Los Angeles Angels', 'LAD': 'Los Angeles Dodgers',
+    'MIA': 'Miami Marlins', 'MIL': 'Milwaukee Brewers', 'MIN': 'Minnesota Twins',
+    'NYM': 'New York Mets', 'NYY': 'New York Yankees',
+    'OAK': 'Athletics', 'ATH': 'Athletics',
+    'PHI': 'Philadelphia Phillies', 'PIT': 'Pittsburgh Pirates',
+    'SD': 'San Diego Padres', 'SDP': 'San Diego Padres',
+    'SF': 'San Francisco Giants', 'SFG': 'San Francisco Giants',
+    'SEA': 'Seattle Mariners', 'STL': 'St. Louis Cardinals',
+    'TB': 'Tampa Bay Rays', 'TBR': 'Tampa Bay Rays',
+    'TEX': 'Texas Rangers', 'TOR': 'Toronto Blue Jays',
+    'WSH': 'Washington Nationals', 'WSN': 'Washington Nationals',
+}
+
 for tbl in ['pitcher_stats', 'batter_stats']:
     rows = []
     off = 0
     while True:
-        r = sb.table(tbl).select('player_id,full_name').eq('season', SEASON).range(off, off + 999).execute()
+        r = sb.table(tbl).select('player_id,full_name,team').eq('season', SEASON).range(off, off + 999).execute()
         if not r.data:
             break
         rows.extend(r.data)
@@ -114,14 +137,25 @@ for tbl in ['pitcher_stats', 'batter_stats']:
         off += 1000
     for r in rows:
         n = normalize(r.get('full_name', ''))
+        team = r.get('team', '')
         if n and n not in name_to_mlbam:
             name_to_mlbam[n] = r['player_id']
+        # Build name+team lookup (team from DB is full name like "New York Yankees")
+        if n and team:
+            name_team_to_mlbam[(n, team)] = r['player_id']
 
 print(f"  Name mappings: {len(name_to_mlbam):,}")
+print(f"  Name+team mappings: {len(name_team_to_mlbam):,}")
 
-def resolve_id(name):
-    """Resolve a player name to MLBAM ID."""
+def resolve_id(name, team_abbr=None):
+    """Resolve a player name to MLBAM ID. Uses team to disambiguate common names."""
     n = normalize(name)
+    # Try name+team first (handles Luis Garcia, Eduardo Rodriguez, etc.)
+    if team_abbr and n:
+        full_team = FG_TEAM_MAP.get(team_abbr.upper(), team_abbr)
+        key = (n, full_team)
+        if key in name_team_to_mlbam:
+            return name_team_to_mlbam[key]
     if n in name_to_mlbam:
         return name_to_mlbam[n]
     # Try last name, first initial match (handles "J. Smith" style)
@@ -169,7 +203,7 @@ for sheet_name, df in [('Dash', df_dash), ('BattedBall', df_bb),
         name = row.get('Name')
         if not name or not isinstance(name, str):
             continue
-        pid = resolve_id(name)
+        pid = resolve_id(name, row.get('Team'))
         if not pid:
             continue
         matched += 1
@@ -256,7 +290,7 @@ for sheet_name, df in [('HitterDash', df_hdash), ('HitterStatcas', df_hsc),
         name = row.get('Name')
         if not name or not isinstance(name, str):
             continue
-        pid = resolve_id(name)
+        pid = resolve_id(name, row.get('Team'))
         if not pid:
             continue
         matched += 1
@@ -331,7 +365,7 @@ for split_label, df in [('R', df_vrhp), ('L', df_vlhp)]:
         name = row.get('Name')
         if not name or not isinstance(name, str):
             continue
-        pid = resolve_id(name)
+        pid = resolve_id(name, row.get('Team'))
         if not pid:
             continue
 
@@ -403,7 +437,7 @@ for split_label, df in [('L', df_vlhh_std), ('R', df_vrhh_std)]:
         name = row.get('Name')
         if not name or not isinstance(name, str):
             continue
-        pid = resolve_id(name)
+        pid = resolve_id(name, row.get('Team'))
         if not pid:
             continue
         matched += 1
@@ -432,7 +466,7 @@ for split_label, df in [('L', df_vlhh_adv), ('R', df_vrhh_adv)]:
         name = row.get('Name')
         if not name or not isinstance(name, str):
             continue
-        pid = resolve_id(name)
+        pid = resolve_id(name, row.get('Team'))
         if not pid:
             continue
         matched += 1
