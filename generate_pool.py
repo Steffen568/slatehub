@@ -241,11 +241,12 @@ STACK_CONFIGS = [
 
 def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                          sub_teams=None, sub_sizes=None, rng=None,
-                         pvh_off=False, game_teams=None):
+                         pvh_off=False, game_teams=None, pvh_stack_only=False):
     """
     Build one DK Classic lineup using greedy randomized selection.
     Supports multiple sub-stacks and bring-backs.
     pvh_off: if True, hitters cannot face a pitcher in the same lineup.
+    pvh_stack_only: if True, PvH only blocks stacks (main/sub), not individual fills.
     game_teams: dict mapping (game_pk, team_abbr) → opposing_team_abbr.
     """
     if rng is None: rng = np.random.default_rng()
@@ -393,19 +394,21 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                           for rp in remaining if remaining[rp] > 0)
             budget = sal_left - reserve
 
+            # pvh_stack_only: PvH already enforced on stacks; individual fills ignore PvH
+            pvh_check = pvh_excluded_teams if not pvh_stack_only else set()
             candidates = [(i, s, p) for i, s, p in pos_players.get(pos, [])
                           if p['player_id'] not in used_pids and p['salary'] <= budget
                           and (p['is_pitcher'] or team_hitter_count[p['team']] < MAX_HITTERS_PER_TEAM)
-                          and (p['is_pitcher'] or p['team'] not in pvh_excluded_teams)]
+                          and (p['is_pitcher'] or p['team'] not in pvh_check)]
 
             if not candidates:
-                # Fallback: cheapest available (still respect team cap + pvh)
+                # Fallback: cheapest available (still respect team cap)
                 fallback = [(i, s, p) for i, s, p in pos_players.get(pos, [])
                             if p['player_id'] not in used_pids and p['salary'] <= sal_left
                             and (p['is_pitcher'] or team_hitter_count[p['team']] < MAX_HITTERS_PER_TEAM)
-                            and (p['is_pitcher'] or p['team'] not in pvh_excluded_teams)]
+                            and (p['is_pitcher'] or p['team'] not in pvh_check)]
                 if not fallback:
-                    # Can't fill this position without violating PvH/team cap — reject lineup
+                    # Can't fill this position — reject lineup
                     return None
                 pick = fallback[-1]  # cheapest
             else:
@@ -535,8 +538,12 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
     """Generate n_lineups unique lineups using greedy randomized builder."""
     if rng is None: rng = np.random.default_rng()
 
-    # PvH exclusion: never pair hitters facing a lineup's SP (all slate sizes)
+    # PvH exclusion: don't pair hitters facing a lineup's SP
+    # Full PvH (all positions): slates with 5+ games — enough teams to fill around exclusions
+    # Stack-only PvH: 3-4 game slates — only block the main/sub stack from facing the SP,
+    #   but allow individual hitter fills from any team (otherwise pool is too constrained)
     pvh_off = True
+    pvh_stack_only = game_count < 5  # on short slates, PvH only blocks stacks
     game_teams = {}
     if pvh_off:
         # Build (game_pk, team_abbr) → opposing_team_abbr from pool data
@@ -550,7 +557,8 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
             if len(teams_list) == 2:
                 game_teams[(gpk, teams_list[0])] = teams_list[1]
                 game_teams[(gpk, teams_list[1])] = teams_list[0]
-        print(f"    PvH exclusion: ON ({game_count} games, {len(game_teams)//2} matchups)")
+        mode = "stack-only" if pvh_stack_only else "full"
+        print(f"    PvH exclusion: ON ({mode}, {game_count} games, {len(game_teams)//2} matchups)")
 
     # Get viable main teams (4+ hitters)
     team_hitters = defaultdict(list)
@@ -682,7 +690,8 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         # Build lineup
         lu = build_lineup_greedy(build_pool, scores, main_team=main_team, main_size=main_size,
                                   sub_teams=sub_teams, sub_sizes=sub_sizes, rng=rng,
-                                  pvh_off=pvh_off, game_teams=game_teams)
+                                  pvh_off=pvh_off, game_teams=game_teams,
+                                  pvh_stack_only=pvh_stack_only)
         if lu is None:
             continue
 
@@ -761,7 +770,8 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
                 scores = sample_noisy_scores(pool, rng, mode='user')
                 lu = build_lineup_greedy(pool, scores, main_team=t, main_size=main_size,
                                           sub_teams=sub_teams_tu, sub_sizes=config['subs'], rng=rng,
-                                          pvh_off=pvh_off, game_teams=game_teams)
+                                          pvh_off=pvh_off, game_teams=game_teams,
+                                          pvh_stack_only=pvh_stack_only)
                 if lu is None:
                     continue
                 key = tuple(sorted(lu))
