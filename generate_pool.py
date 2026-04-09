@@ -241,7 +241,8 @@ STACK_CONFIGS = [
 
 def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                          sub_teams=None, sub_sizes=None, rng=None,
-                         pvh_off=False, game_teams=None, pvh_stack_only=False):
+                         pvh_off=False, game_teams=None, pvh_stack_only=False,
+                         salary_floor=None):
     """
     Build one DK Classic lineup using greedy randomized selection.
     Supports multiple sub-stacks and bring-backs.
@@ -249,6 +250,8 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
     pvh_stack_only: if True, PvH only blocks stacks (main/sub), not individual fills.
     game_teams: dict mapping (game_pk, team_abbr) → opposing_team_abbr.
     """
+    if salary_floor is None:
+        salary_floor = SALARY_FLOOR
     if rng is None: rng = np.random.default_rng()
 
     # Group by position (multi-pos: player appears in all eligible buckets)
@@ -437,7 +440,7 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
     if len(selected) != 10:
         return None
     total_sal = SALARY_CAP - sal_left
-    if total_sal < SALARY_FLOOR or total_sal > SALARY_CAP:
+    if total_sal < salary_floor or total_sal > SALARY_CAP:
         return None
 
     # Output in DK slot order: SP, SP, C, 1B, 2B, 3B, SS, OF, OF, OF
@@ -559,6 +562,13 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
                 game_teams[(gpk, teams_list[1])] = teams_list[0]
         mode = "stack-only" if pvh_stack_only else "full"
         print(f"    PvH exclusion: ON ({mode}, {game_count} games, {len(game_teams)//2} matchups)")
+
+    # Dynamic salary floor: on short slates with cheap players, lower the floor
+    # so the builder can actually produce lineups
+    avg_sal = np.mean([p['salary'] for p in pool]) if pool else 5000
+    dynamic_floor = max(44000, min(SALARY_FLOOR, int(avg_sal * 10 * 0.92)))
+    if dynamic_floor < SALARY_FLOOR:
+        print(f"    Salary floor: ${dynamic_floor:,} (lowered from ${SALARY_FLOOR:,}, avg player ${avg_sal:,.0f})")
 
     # Get viable main teams (4+ hitters)
     team_hitters = defaultdict(list)
@@ -691,7 +701,7 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         lu = build_lineup_greedy(build_pool, scores, main_team=main_team, main_size=main_size,
                                   sub_teams=sub_teams, sub_sizes=sub_sizes, rng=rng,
                                   pvh_off=pvh_off, game_teams=game_teams,
-                                  pvh_stack_only=pvh_stack_only)
+                                  pvh_stack_only=pvh_stack_only, salary_floor=dynamic_floor)
         if lu is None:
             continue
 
@@ -771,7 +781,7 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
                 lu = build_lineup_greedy(pool, scores, main_team=t, main_size=main_size,
                                           sub_teams=sub_teams_tu, sub_sizes=config['subs'], rng=rng,
                                           pvh_off=pvh_off, game_teams=game_teams,
-                                          pvh_stack_only=pvh_stack_only)
+                                          pvh_stack_only=pvh_stack_only, salary_floor=dynamic_floor)
                 if lu is None:
                     continue
                 key = tuple(sorted(lu))
