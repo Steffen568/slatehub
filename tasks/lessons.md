@@ -646,4 +646,8 @@ requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leader
 
 ### GPP leverage slider didn't penalize chalk pitchers
 **What happened:** The leverage score formula (`ceil / totalOwn`) treated pitcher ownership the same as hitter ownership. Chalk SPs with 25%+ ownership still topped leverage-sorted pools because their ceiling was high enough to offset.
-**Rule:** Pitcher ownership gets a dedicated penalty in leverage scoring. SPs above 15% combined ownership are penalized proportionally (up to 60% penalty at 55%+ ownership). Penalty scales with the leverage slider position.
+**Rule:** Use `pitcherContrarian` as a direct positive signal (35% weight) in leverage scoring. Low-owned SPs score 1.0, chalk SPs score ~0. This is a sorting signal, not a penalty multiplier.
+
+### lateSwapFindBest didn't filter started-game players from swap pool
+**What happened:** The eligible player list for late swap only excluded `lockedPids` (players locked in the lineup) and `capExcluded`, but not players from already-started games. A player from a started game could be swapped IN, which DK would reject.
+**Rule:** Always add `!isPlayerGameLocked(p)` filter to the eligible player list in lateSwapFindBest().

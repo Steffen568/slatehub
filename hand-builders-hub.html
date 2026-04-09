@@ -4277,11 +4277,15 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
         ↑ DK CSV <input type="file" accept=".csv" style="display:none" onchange="importDKTemplate(this.files[0])">
       </label>
       <button class="bld-btn classic-only" id="lateswap-all-btn" style="display:none;background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.35);color:#fbbf24;" onclick="lateSwapAllLineups()" title="Re-optimize unlocked slots in all saved lineups">Late Swap All</button>
+      <button class="bld-btn classic-only" id="lateswap-sim-btn" style="display:none;background:rgba(139,92,246,.1);border-color:rgba(139,92,246,.35);color:#a78bfa;" onclick="generateSwapVariations()" title="Generate swap variations and simulate against contest pool">Swap Sim</button>
+      <input type="number" id="lateswap-var-count" min="3" max="15" value="5" style="display:none;width:36px;height:24px;background:var(--card-bg);border:1px solid var(--border);border-radius:4px;color:var(--text);text-align:center;font-size:11px;" title="Variations per entry">
       <button class="bld-btn" id="lateswap-refresh-btn" style="display:none;background:rgba(99,179,237,.1);border-color:rgba(99,179,237,.35);color:#63b3ed;" onclick="refreshLateSwapStatus()" title="Re-check game lock times">Refresh Status</button>
       <button class="bld-btn danger" onclick="clearActiveBuild()">Clear Build</button>
     </div>
   </div>
   <div class="build-tabs-bar" id="build-tabs-bar"></div>
+  <!-- Late Swap Simulator Results -->
+  <div id="lateswap-sim-results" style="display:none;margin:8px 0;"></div>
   <div class="contest-dash" id="contest-dash">
     <div class="contest-dash-title">
       <span>Contest Assignments</span>
@@ -9580,9 +9584,13 @@ function finalizeContest(stats, simWinners, simTop1, numSims, contestDb, payoutT
     ? ` | Avg ROI: ${(_poolCandidates.reduce((s,c) => s + (c.contest.roi||0), 0) / n).toFixed(1)}%`
     : '';
   showToast(`Contest sim complete! ${numSims} sims${contestLabel}${roiMsg}`);
-  updateGppScores();
-  renderPoolCards();
-  renderPoolExposure();
+  if (window._swapSimCallback) {
+    window._swapSimCallback();
+  } else {
+    updateGppScores();
+    renderPoolCards();
+    renderPoolExposure();
+  }
 }
 
 // ── GPP SCORE ────────────────────────────────────────────────────────────────
@@ -10185,6 +10193,10 @@ function activateLateSwapUI() {
   if (lsExport) lsExport.style.display = '';
   const lsAllBtn = document.getElementById('lateswap-all-btn');
   if (lsAllBtn) lsAllBtn.style.display = '';
+  const lsSimBtn = document.getElementById('lateswap-sim-btn');
+  if (lsSimBtn) lsSimBtn.style.display = '';
+  const lsVarCount = document.getElementById('lateswap-var-count');
+  if (lsVarCount) lsVarCount.style.display = '';
   const lsRefreshBtn = document.getElementById('lateswap-refresh-btn');
   if (lsRefreshBtn) lsRefreshBtn.style.display = '';
   refreshLateSwapUI();
@@ -10971,8 +10983,8 @@ function lateSwapFindBest(lineupObj, pastLineups, capExcluded, stackAppearCount,
   }
 
   const allElig = [
-    ...allHitters.filter(h => !isExcluded(h) && !capExcluded.has(h.player_id) && (h.salary || 0) > 0),
-    ...allPitchers.filter(p => !isExcluded(p) && !capExcluded.has(p.player_id) && (p.salary || 0) > 0),
+    ...allHitters.filter(h => !isExcluded(h) && !capExcluded.has(h.player_id) && (h.salary || 0) > 0 && !isPlayerGameLocked(h)),
+    ...allPitchers.filter(p => !isExcluded(p) && !capExcluded.has(p.player_id) && (p.salary || 0) > 0 && !isPlayerGameLocked(p)),
   ];
 
   const DIVERSITY_WINDOW = 20;
@@ -11200,6 +11212,298 @@ function lateSwapAllLineups() {
   updateActiveBuild(reOptimized.slice(0, 150));
   renderSavedCards();
   showToast(`Late swap complete: ${swapped} swapped, ${skipped} unchanged`);
+}
+
+// ── LATE SWAP SIMULATOR ──────────────────────────────────────────────────────
+
+let _lateSwapVariations = [];  // [{entryIdx, entryId, lockedSlots, unlockedCount, variations:[{lineup, metrics, contest}], selectedIdx}]
+
+function generateSwapVariations() {
+  if (_contestMode === 'showdown') { showToast('Swap sim is Classic mode only'); return; }
+  if (!lateSwapMode) { showToast('Enter Late Swap mode first'); return; }
+  const saved = getActiveLineups();
+  if (!saved.length) { showToast('No saved lineups'); return; }
+  if (typeof solver === 'undefined') { showToast('LP solver not loaded'); return; }
+
+  const N_VARS = +(document.getElementById('lateswap-var-count')?.value || 5);
+  const totalEntries = saved.length;
+
+  // Check for unlocked slots
+  let anyUnlocked = false;
+  for (const s of saved) {
+    if (!partitionLineup(s.lineup || {}).allLocked) { anyUnlocked = true; break; }
+  }
+  if (!anyUnlocked) { showToast('All games started — nothing to swap'); return; }
+
+  _lateSwapVariations = [];
+  const simBtn = document.getElementById('lateswap-sim-btn');
+  if (simBtn) { simBtn.disabled = true; simBtn.textContent = 'Working...'; }
+  const resultsEl = document.getElementById('lateswap-sim-results');
+  if (resultsEl) { resultsEl.style.display = ''; resultsEl.innerHTML = '<div style="padding:12px;color:var(--muted);">Generating swap variations...</div>'; }
+
+  let entryIdx = 0;
+  const hitterSlotKeys = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
+
+  function runBatch() {
+    const batchEnd = Math.min(entryIdx + 2, totalEntries);  // 2 entries per batch for responsiveness
+    for (; entryIdx < batchEnd; entryIdx++) {
+      const entry = saved[entryIdx];
+      const part = partitionLineup(entry.lineup || {});
+      const entryId = entry.entryId || entry.name || `#${entryIdx + 1}`;
+
+      if (part.allLocked) {
+        _lateSwapVariations.push({
+          entryIdx, entryId, lockedSlots: part.lockedSlots,
+          unlockedCount: 0, variations: [{ lineup: entry.lineup, metrics: scorePoolLineup(entry.lineup), contest: null }],
+          selectedIdx: 0,
+        });
+        continue;
+      }
+
+      // Generate N_VARS diverse variations using randomized LP solves
+      const variations = [];
+      const seenKeys = new Set();
+      const pastSets = [];  // diversity tracking within this entry's variations
+      const maxAttempts = N_VARS * 4;
+
+      for (let attempt = 0; attempt < maxAttempts && variations.length < N_VARS; attempt++) {
+        // Force randomization for diversity
+        const origRandPct = optoSettings.randPct;
+        optoSettings.randPct = Math.max(15, origRandPct || 15) + attempt * 2;
+
+        const capExcluded = new Set();  // no hard exposure caps during generation (soft penalty via randPct)
+        const stackAppearCount = {};
+        const newLineup = lateSwapFindBest(entry.lineup, pastSets.map(ps => ({ lineup: ps })), capExcluded, stackAppearCount, N_VARS, attempt);
+
+        optoSettings.randPct = origRandPct;  // restore
+
+        if (!newLineup) continue;
+
+        // Dedup by player IDs
+        const ids = Object.values(newLineup).filter(p => p?.player_id).map(p => p.player_id).sort((a, b) => a - b);
+        const key = ids.join(',');
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+
+        // Stamp DK draftable IDs on swapped players
+        for (const sd of part.unlockedSlotDefs) {
+          const p = newLineup[sd.key];
+          if (p && !p._dkDraftableId) {
+            const dkId = dkDraftgroupMap[normName(p.name)] || dkDraftgroupMap[(p.name || '').toLowerCase()] || p.dk_id || '';
+            if (dkId) { p._dkDraftableId = dkId; p._dkCellName = p.name; }
+          }
+        }
+
+        const metrics = scorePoolLineup(newLineup);
+        variations.push({ lineup: newLineup, metrics, contest: null, dedupKey: key });
+
+        // Add to diversity past for subsequent variations
+        pastSets.push(newLineup);
+      }
+
+      // Sort by projection descending
+      variations.sort((a, b) => b.metrics.proj - a.metrics.proj);
+
+      _lateSwapVariations.push({
+        entryIdx, entryId, lockedSlots: part.lockedSlots,
+        unlockedCount: part.unlockedSlotDefs.length,
+        variations, selectedIdx: 0,
+      });
+    }
+
+    if (entryIdx < totalEntries) {
+      if (resultsEl) resultsEl.innerHTML = `<div style="padding:12px;color:var(--muted);">Generating... ${entryIdx}/${totalEntries} entries</div>`;
+      setTimeout(runBatch, 0);
+    } else {
+      // Generation complete — run contest sim
+      const totalVars = _lateSwapVariations.reduce((s, e) => s + e.variations.length, 0);
+      if (resultsEl) resultsEl.innerHTML = `<div style="padding:12px;color:var(--muted);">Simulating ${totalVars} variations...</div>`;
+      setTimeout(() => simSwapVariations(), 30);
+    }
+  }
+  setTimeout(runBatch, 30);
+}
+
+function simSwapVariations() {
+  // Flatten all variations into _poolCandidates for the existing contest sim
+  _poolCandidates = [];
+  const varMap = [];  // track which pool index maps to which entry/variation
+  for (const entry of _lateSwapVariations) {
+    for (let vi = 0; vi < entry.variations.length; vi++) {
+      const v = entry.variations[vi];
+      varMap.push({ entryIdx: entry.entryIdx, varIdx: vi });
+      _poolCandidates.push({ lineup: v.lineup, metrics: v.metrics, dedupKey: v.dedupKey });
+    }
+  }
+
+  if (!_poolCandidates.length) {
+    showToast('No variations generated');
+    resetSwapSimBtn();
+    return;
+  }
+
+  // Load contest pool if not already loaded
+  if (!_contestPool.length) {
+    showToast('No contest pool loaded — sim results will use self-competition');
+  }
+
+  // Run contest sim — it operates on _poolCandidates and enriches .contest
+  const origOnComplete = window._swapSimCallback;
+  window._swapSimCallback = () => {
+    // Map sim results back to per-entry variations
+    let poolIdx = 0;
+    for (const entry of _lateSwapVariations) {
+      for (let vi = 0; vi < entry.variations.length; vi++) {
+        entry.variations[vi].contest = _poolCandidates[poolIdx]?.contest || null;
+        poolIdx++;
+      }
+      // Auto-select best variation by GPP score (or ROI if sim ran)
+      if (entry.variations.length > 0) {
+        let bestIdx = 0;
+        let bestScore = -Infinity;
+        entry.variations.forEach((v, idx) => {
+          const score = v.contest?.roi ?? v.metrics.proj ?? 0;
+          if (score > bestScore) { bestScore = score; bestIdx = idx; }
+        });
+        entry.selectedIdx = bestIdx;
+      }
+    }
+    renderSwapResults();
+    resetSwapSimBtn();
+    window._swapSimCallback = null;
+  };
+
+  simulateContest();
+}
+
+function resetSwapSimBtn() {
+  const simBtn = document.getElementById('lateswap-sim-btn');
+  if (simBtn) { simBtn.disabled = false; simBtn.textContent = 'Swap Sim'; }
+}
+
+function renderSwapResults() {
+  const el = document.getElementById('lateswap-sim-results');
+  if (!el) return;
+  el.style.display = '';
+
+  if (!_lateSwapVariations.length) { el.innerHTML = '<div style="padding:12px;color:var(--muted);">No results</div>'; return; }
+
+  let html = '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;">'
+    + '<span style="font-weight:600;color:var(--text);">Swap Simulator Results</span>'
+    + '<button class="bld-btn" style="background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="applySwapSelections()">Apply Selections</button>'
+    + '</div>';
+
+  for (let ei = 0; ei < _lateSwapVariations.length; ei++) {
+    const entry = _lateSwapVariations[ei];
+    const lockCount = Object.keys(entry.lockedSlots).length;
+    html += `<div style="margin:6px 0;padding:8px;background:var(--card-bg);border:1px solid var(--border);border-radius:6px;">`;
+    html += `<div style="font-size:11px;color:var(--muted);margin-bottom:4px;">Entry ${entry.entryId} &mdash; ${lockCount} locked / ${entry.unlockedCount} swappable</div>`;
+
+    if (entry.unlockedCount === 0) {
+      html += '<div style="font-size:11px;color:var(--muted);padding:2px 0;">All locked</div>';
+    } else {
+      for (let vi = 0; vi < entry.variations.length; vi++) {
+        const v = entry.variations[vi];
+        const m = v.metrics || {};
+        const ct = v.contest || {};
+        const sel = vi === entry.selectedIdx;
+        const borderClr = sel ? '#a78bfa' : 'transparent';
+
+        // Stack description
+        const teamCounts = {};
+        LINEUP_SLOTS.filter(s => s.pos !== 'SP').forEach(s => {
+          const p = v.lineup[s.key];
+          if (p?.team) teamCounts[p.team] = (teamCounts[p.team] || 0) + 1;
+        });
+        const stacks = Object.entries(teamCounts).sort((a, b) => b[1] - a[1]);
+        const stackDesc = stacks.map(([t, c]) => `${t} ${c}`).join(' + ');
+
+        // Highlight swapped players
+        const swappedNames = [];
+        for (const sd of LINEUP_SLOTS) {
+          const p = v.lineup[sd.key];
+          if (p && !entry.lockedSlots[sd.key]) {
+            swappedNames.push(p.name?.split(' ').pop() || '?');
+          }
+        }
+
+        const winPct = ct.winPct != null ? ct.winPct.toFixed(2) + '%' : '—';
+        const top10 = ct.top10Pct != null ? ct.top10Pct.toFixed(1) + '%' : '—';
+        const roi = ct.roi != null ? (ct.roi >= 0 ? '+' : '') + ct.roi.toFixed(1) + '%' : '—';
+
+        html += `<label style="display:flex;align-items:center;gap:6px;padding:4px 6px;border:1px solid ${borderClr};border-radius:4px;cursor:pointer;margin:2px 0;font-size:11px;" `
+          + `onclick="_lateSwapVariations[${ei}].selectedIdx=${vi};renderSwapResults()">`;
+        html += `<input type="radio" name="swap-entry-${ei}" ${sel ? 'checked' : ''} style="margin:0;">`;
+        html += `<span style="color:var(--text);min-width:50px;">${m.proj?.toFixed(1) || '—'} pts</span>`;
+        html += `<span style="color:#fbbf24;min-width:60px;">Win ${winPct}</span>`;
+        html += `<span style="color:#63b3ed;min-width:60px;">T10 ${top10}</span>`;
+        html += `<span style="color:${ct.roi >= 0 ? '#4ade80' : '#f87171'};min-width:55px;">ROI ${roi}</span>`;
+        html += `<span style="color:var(--muted);flex:1;">[${stackDesc}]</span>`;
+        html += `<span style="color:var(--muted);font-size:10px;">${swappedNames.join(', ')}</span>`;
+        html += `</label>`;
+      }
+    }
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
+function applySwapSelections() {
+  if (!_lateSwapVariations.length) { showToast('No swap results to apply'); return; }
+
+  const saved = getActiveLineups();
+  const updated = [...saved];
+
+  // Validate exposure across all selected lineups
+  const appearCount = {};
+  const spIdSet = new Set(allPitchers.map(p => p.player_id));
+
+  for (const entry of _lateSwapVariations) {
+    const chosen = entry.variations[entry.selectedIdx];
+    if (!chosen) continue;
+    Object.values(chosen.lineup).forEach(p => {
+      if (p?.player_id) appearCount[p.player_id] = (appearCount[p.player_id] || 0) + 1;
+    });
+  }
+
+  // Check for exposure violations
+  const violations = [];
+  const totalN = _lateSwapVariations.length;
+  Object.entries(appearCount).forEach(([pid, cnt]) => {
+    const isSP = spIdSet.has(+pid);
+    const globalCap = isSP ? expPitcherMax : expHitterMax;
+    if (globalCap < 100) {
+      const max = Math.max(1, Math.ceil(totalN * globalCap / 100));
+      if (cnt > max) violations.push(`Player ${pid}: ${cnt}/${max} (${isSP ? 'pitcher' : 'hitter'} cap)`);
+    }
+    if (expTargets[pid]) {
+      const max = Math.max(1, Math.ceil(totalN * expTargets[pid] / 100));
+      if (cnt > max) violations.push(`Player ${pid}: ${cnt}/${max} (individual cap)`);
+    }
+  });
+
+  if (violations.length) {
+    console.warn('[SwapSim] Exposure violations:', violations);
+    showToast(`Warning: ${violations.length} exposure violation(s) — check console`);
+  }
+
+  // Apply selected lineups to active build
+  for (const entry of _lateSwapVariations) {
+    const chosen = entry.variations[entry.selectedIdx];
+    if (!chosen || entry.unlockedCount === 0) continue;
+    if (entry.entryIdx < updated.length) {
+      updated[entry.entryIdx] = { ...updated[entry.entryIdx], lineup: chosen.lineup };
+    }
+  }
+
+  updateActiveBuild(updated);
+  renderSavedCards();
+
+  const el = document.getElementById('lateswap-sim-results');
+  if (el) el.style.display = 'none';
+  _lateSwapVariations = [];
+  showToast('Swap selections applied');
 }
 
 // ── TEAM STACK PREFERENCES ────────────────────────────────────────────────────
@@ -11480,8 +11784,14 @@ function setContestMode(mode) {
     if (lsExport) lsExport.style.display = 'none';
     const lsAllBtn = document.getElementById('lateswap-all-btn');
     if (lsAllBtn) lsAllBtn.style.display = 'none';
+    const lsSimBtn = document.getElementById('lateswap-sim-btn');
+    if (lsSimBtn) lsSimBtn.style.display = 'none';
+    const lsVarCount = document.getElementById('lateswap-var-count');
+    if (lsVarCount) lsVarCount.style.display = 'none';
     const lsRefreshBtn = document.getElementById('lateswap-refresh-btn');
     if (lsRefreshBtn) lsRefreshBtn.style.display = 'none';
+    const lsSimResults = document.getElementById('lateswap-sim-results');
+    if (lsSimResults) lsSimResults.style.display = 'none';
     const infoEl = document.getElementById('lateswap-sal-info');
     if (infoEl) infoEl.className = 'lateswap-sal-breakdown';
   }
