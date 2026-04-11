@@ -4372,7 +4372,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     </select>
     <span id="gpp-slider-wrap" style="display:inline-flex;align-items:center;gap:3px;margin-left:4px;">
       <span style="font-size:8px;color:var(--muted);font-weight:700;">Sharp</span>
-      <input type="range" id="gpp-leverage-wt" min="0" max="100" value="40" style="width:60px;height:12px;" oninput="updateGppScores()" title="0=Pure Sharp (proj/boom) ← → 100=Pure Leverage (contrarian)">
+      <input type="range" id="gpp-leverage-wt" min="0" max="100" value="40" style="width:120px;height:16px;" oninput="debouncedGppUpdate()" title="0=Pure Sharp (proj/cash/Sharpe) ← → 100=Pure Leverage (win%/boom/variance)">
       <span style="font-size:8px;color:var(--muted);font-weight:700;">Lev</span>
     </span>
   </div>
@@ -9603,40 +9603,48 @@ function updateGppScores() {
   // Normalization maxes (avoid div-by-zero)
   const norm = (arr) => Math.max(...arr) || 1;
   const maxProj = norm(_poolCandidates.map(c => c.metrics?.proj || 0));
-  const maxCeil = norm(_poolCandidates.map(c => c.metrics?.ceil || 0));
-  const maxLev = norm(_poolCandidates.map(c => c.metrics?.leverage || 0));
-  const maxStackLev = norm(_poolCandidates.map(c => c.metrics?.stackLeverage || 0));
+  const maxCorr = norm(_poolCandidates.map(c => c.metrics?.corrScore || 0));
   const hasSim = !!_poolCandidates[0]?.contest;
-  const maxBoom = hasSim ? norm(_poolCandidates.map(c => c.contest?.boomPct || 0)) : 1;
+  const maxCash = hasSim ? norm(_poolCandidates.map(c => c.contest?.cashPct || 0)) : 1;
   const maxSharpe = hasSim ? norm(_poolCandidates.map(c => c.contest?.sharpe || 0)) : 1;
-  const maxWinUpside = hasSim ? norm(_poolCandidates.map(c => c.contest?.winUpside || 0)) : 1;
+  const maxWin = hasSim ? norm(_poolCandidates.map(c => c.contest?.winPct || 0)) : 1;
+  const maxBoom = hasSim ? norm(_poolCandidates.map(c => c.contest?.boomPct || 0)) : 1;
+  const maxSD = hasSim ? norm(_poolCandidates.map(c => c.contest?.simSD || 0)) : 1;
 
   for (const c of _poolCandidates) {
     const m = c.metrics || {};
     const ct = c.contest || {};
 
-    // Sharp: projection quality + boom + Sharpe
+    // Sharp: consistent value — projection + cash rate + risk-adjusted edge
     const sharpScore = hasSim
-      ? 0.40 * ((m.proj||0) / maxProj) + 0.35 * ((ct.boomPct||0) / maxBoom) + 0.25 * ((ct.sharpe||0) / maxSharpe)
+      ? 0.40 * ((m.proj||0) / maxProj) + 0.35 * ((ct.cashPct||0) / maxCash) + 0.25 * ((ct.sharpe||0) / maxSharpe)
       : (m.proj||0) / maxProj;
 
-    // Leverage: low pitcher ownership + stack leverage + ceiling/ownership
-    // pitcherContrarian: 1.0 for lowest-owned SPs, ~0 for chalkiest
-    const pitOwn = m.pitcherOwn || 0;
-    const maxPitOwn = norm(_poolCandidates.map(c => c.metrics?.pitcherOwn || 0));
-    const pitcherContrarian = maxPitOwn > 0 ? 1.0 - (pitOwn / maxPitOwn) : 0.5;
+    // Leverage: tournament shape — win rate + boom + variance (sim-driven, no ownership)
     const levScore = hasSim
-      ? 0.35 * pitcherContrarian + 0.25 * ((m.stackLeverage||0) / maxStackLev) + 0.20 * ((ct.winUpside||0) / maxWinUpside) + 0.20 * ((m.leverage||0) / maxLev)
-      : 0.40 * pitcherContrarian + 0.30 * ((m.stackLeverage||0) / maxStackLev) + 0.30 * ((m.leverage||0) / maxLev);
+      ? 0.40 * ((ct.winPct||0) / maxWin) + 0.30 * ((ct.boomPct||0) / maxBoom) + 0.30 * ((ct.simSD||0) / maxSD)
+      : 0.50 * ((m.corrScore||0) / maxCorr) + 0.50 * ((m.ceil||0) / (m.proj||1));
 
     c.gppScore = +(sharpWt * sharpScore + levWt * levScore).toFixed(4);
   }
 
   // Re-sort if GPP Score is active sort
   if (_poolSortCol === 'gppScore') {
+    _gppRenderPending = true;
+  }
+}
+let _gppDebounceTimer = null;
+let _gppRenderPending = false;
+function debouncedGppUpdate() {
+  // Recalculate scores immediately (cheap), but debounce the DOM render
+  updateGppScores();
+  if (!_gppRenderPending) return;
+  clearTimeout(_gppDebounceTimer);
+  _gppDebounceTimer = setTimeout(() => {
+    _gppRenderPending = false;
     renderPoolCards();
     renderPoolExposure();
-  }
+  }, 150);
 }
 
 // ── PORTFOLIO STRATEGIES ──────────────────────────────────────────────────────

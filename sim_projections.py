@@ -55,7 +55,10 @@ WIND_OUT_DIRS = {"S", "SSW", "SW", "WSW", "SSE", "SE"}
 WIND_IN_DIRS  = {"N", "NNW", "NW", "NNE", "NE", "WNW"}
 
 # Marcel weights: current season (if enough PA/IP), prior1, prior2
+# Pitcher current-year weight boosted to 10 to react faster to early-season data
 MARCEL_WEIGHTS = {0: 5, 1: 4, 2: 3}
+PITCHER_CURRENT_WEIGHT = 10
+PITCHER_IP_FLOOR = 40  # treat early-season IP as at least this for blend weight
 
 # Season-scaled minimums: ramp up as sample grows through the year
 # Opening Day ~Mar 27 → full season ~Sep 28 ≈ 185 days
@@ -93,6 +96,166 @@ def clip(val, lo, hi):
 
 def round2(val):
     return round(val, 2) if val is not None else None
+
+
+# ── Three-Tier Pitcher Model ─────────────────────────────────────────────────
+# Inspired by Run The Sims: blend Stuff (pitch quality), Pitch-Level (SwStr/CSW),
+# and Event-Level (K%/BB%/HR9) using reliability weighting that scales with sample size.
+# No hardcoded caps — each tier's weight = IP / (IP + stabilization_point).
+
+def compute_arsenal_composite(pitch_rows: list) -> dict:
+    """Usage-weighted composite from per-pitch-type arsenal data for one pitcher."""
+    if not pitch_rows:
+        return None
+    total_usage = sum(safe(r.get('usage_pct'), 0) for r in pitch_rows)
+    if total_usage <= 0:
+        return None
+
+    def wt_avg(col, default):
+        num, den = 0.0, 0.0
+        for r in pitch_rows:
+            u = safe(r.get('usage_pct'), 0)
+            v = safe(r.get(col))
+            if u > 0 and v is not None:
+                num += v * u
+                den += u
+        return num / den if den > 0 else default
+
+    # Fastball velo: only FF, SI, FC
+    fb_rows = [r for r in pitch_rows if r.get('pitch_type') in ('FF', 'SI', 'FC')]
+    fb_usage = sum(safe(r.get('usage_pct'), 0) for r in fb_rows) or 1.0
+    fb_velo = sum(safe(r.get('velo'), 93) * safe(r.get('usage_pct'), 0) for r in fb_rows) / fb_usage
+
+    # Arm angle: average across pitch types (consistent per pitcher)
+    arm_angles = [safe(r.get('arm_angle')) for r in pitch_rows if safe(r.get('arm_angle'))]
+    arm_angle = sum(arm_angles) / len(arm_angles) if arm_angles else None
+
+    return {
+        'stuff_plus': wt_avg('stuff_plus', 100.0),
+        'whiff_pct': wt_avg('whiff_pct', 0.25),
+        'arsenal_k_pct': wt_avg('k_pct', LEAGUE_AVG_K_PCT * 100) / 100.0,  # arsenal K% is 0-100
+        'arsenal_xwoba': wt_avg('xwoba', 0.315),
+        'fb_velo': fb_velo,
+        'arm_angle': arm_angle,
+    }
+
+
+def stuff_tier_k(arsenal: dict) -> float:
+    """Tier 1: Expected K% from pitch quality (Stuff+ and velo)."""
+    stuff = arsenal.get('stuff_plus', 100.0)
+    velo = arsenal.get('fb_velo', 93.0)
+    # Stuff+: each point above 100 ~ +0.15% K rate (Stuff+ vs K% correlation r~0.65)
+    base = LEAGUE_AVG_K_PCT * (1.0 + (stuff - 100) * 0.0015)
+    # Velo: each mph above 93 ~ +0.5% K rate
+    return clip(base * (1.0 + (velo - 93.0) * 0.005), 0.10, 0.45)
+
+
+def stuff_tier_bb(arsenal: dict) -> float:
+    """Tier 1: Expected BB% from pitch quality. Weak relationship — hitters chase more vs stuff."""
+    stuff = arsenal.get('stuff_plus', 100.0)
+    return clip(LEAGUE_AVG_BB_PCT * (1.0 - (stuff - 100) * 0.0005), 0.03, 0.16)
+
+
+def stuff_tier_hr9(arsenal: dict) -> float:
+    """Tier 1: Expected HR/9 from arsenal xwOBA (quality of contact allowed)."""
+    xw = arsenal.get('arsenal_xwoba', 0.315)
+    return clip(LEAGUE_AVG_HR9 * (xw / 0.315) ** 1.5, 0.4, 3.0)
+
+
+def pitch_level_tier_k(swstr_pct, csw_pct) -> float:
+    """Tier 2: Expected K% from swinging-strike and CSW rates.
+    SwStr% -> K%: Podhorzer formula (R^2=0.89): K% ~ 2.0 * SwStr% + 0.3%
+    CSW% -> K%: K% ~ 0.75 * CSW%"""
+    if swstr_pct and swstr_pct > 0:
+        swstr_k = swstr_pct * 2.0 + 0.003
+    else:
+        swstr_k = LEAGUE_AVG_K_PCT
+    if csw_pct and csw_pct > 0:
+        csw_k = csw_pct * 0.75
+        return clip(swstr_k * 0.65 + csw_k * 0.35, 0.10, 0.45)
+    return clip(swstr_k, 0.10, 0.45)
+
+
+# Stabilization points (IP) — how much data each tier needs to be 50% reliable
+STAB_STUFF = 30.0     # Stuff+ from pitch characteristics — stabilizes fastest
+STAB_PITCH = 50.0     # SwStr%/CSW% — moderate sample needed
+STAB_K_EVENT = 120.0  # K% from actual outcomes
+STAB_BB_EVENT = 150.0 # BB% is noisier
+STAB_HR_EVENT = 300.0 # HR/9 is very noisy — needs large sample
+
+
+def reliability(ip: float, stab_point: float) -> float:
+    """Reliability weight: 0 at 0 IP, 0.5 at stabilization point, approaches 1.0."""
+    return ip / (ip + stab_point)
+
+
+def reliability_blend_pitcher(marcel: dict, arsenal: dict, current_ip: float) -> dict:
+    """Three-tier reliability-weighted blend of pitcher projections.
+
+    Tier 1 (Stuff): pitch characteristics -> expected rates. Stabilizes fastest.
+    Tier 2 (Pitch-level): SwStr%, CSW% -> expected rates. Moderate stabilization.
+    Tier 3 (Event-level): K%, BB%, HR/9 from actual outcomes. Best with data.
+
+    Each tier's weight = reliability at current sample size.
+    At 0 IP: Stuff dominates. At 200+ IP: Event dominates.
+    """
+    result = dict(marcel)
+    if not arsenal:
+        return result  # no arsenal data -> Marcel only (graceful fallback)
+
+    # Tier reliabilities
+    r_stuff = reliability(current_ip, STAB_STUFF)
+    has_pitch_level = marcel.get('swstr_pct') is not None or marcel.get('csw_pct') is not None
+    r_pitch = reliability(current_ip, STAB_PITCH) if has_pitch_level else 0.0
+    r_k_event = reliability(current_ip, STAB_K_EVENT)
+    r_bb_event = reliability(current_ip, STAB_BB_EVENT)
+    r_hr_event = reliability(current_ip, STAB_HR_EVENT)
+
+    # Blend K%
+    s_k = stuff_tier_k(arsenal)
+    p_k = pitch_level_tier_k(marcel.get('swstr_pct'), marcel.get('csw_pct'))
+    e_k = marcel['k_pct']
+    total_k = r_stuff + r_pitch + r_k_event
+    if total_k > 0:
+        result['k_pct'] = clip(
+            (s_k * r_stuff + p_k * r_pitch + e_k * r_k_event) / total_k,
+            0.10, 0.40)
+
+    # Blend BB% (Tier 2 doesn't help much for BB — use stuff + event)
+    s_bb = stuff_tier_bb(arsenal)
+    total_bb = r_stuff + r_bb_event
+    if total_bb > 0:
+        result['bb_pct'] = clip(
+            (s_bb * r_stuff + marcel['bb_pct'] * r_bb_event) / total_bb,
+            0.04, 0.18)
+
+    # Blend HR/9
+    s_hr = stuff_tier_hr9(arsenal)
+    total_hr = r_stuff + r_hr_event
+    if total_hr > 0:
+        result['hr9'] = clip(
+            (s_hr * r_stuff + marcel['hr9'] * r_hr_event) / total_hr,
+            0.30, 3.00)
+
+    # Pass through arm angle for batter-vs-pitcher interaction
+    result['arm_angle'] = arsenal.get('arm_angle')
+    return result
+
+
+def arm_angle_hr_interaction(attack_angle, arm_angle) -> float:
+    """HR rate modifier from batter attack angle vs pitcher arm angle alignment.
+
+    Overhand pitchers (arm_angle ~55-70) throw with steep downward plane.
+    Uppercut batters (attack_angle > 12) match that plane -> more HR.
+    Sidearm pitchers (arm_angle ~20-40) throw flatter. Flat swingers match better.
+    """
+    if attack_angle is None or arm_angle is None:
+        return 1.0
+    aa_dev = attack_angle - 12.0   # batter deviation from avg attack angle
+    pa_dev = arm_angle - 45.0      # pitcher deviation from avg arm angle
+    # Positive alignment = both deviate same direction = HR boost
+    alignment = aa_dev * pa_dev * 0.0004
+    return clip(1.0 + alignment, 0.92, 1.10)
 
 
 # ── Marcel True Talent ────────────────────────────────────────────────────────
@@ -148,6 +311,7 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
     squared_up = None
     blast = None
     o_swing = None
+    attack_angle = None
     for yr in ([current_season] if use_current else []) + [current_season-1, current_season-2]:
         row = stats_by_season.get(yr)
         if not row:
@@ -160,10 +324,13 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
             blast = safe(row.get('blast_pct'))
         if o_swing is None and safe(row.get('o_swing_pct')):
             o_swing = safe(row.get('o_swing_pct'))
-    bat_speed = bat_speed or 72.0    # league avg ~72 mph
-    squared_up = squared_up or 0.18  # league avg ~18%
-    blast = blast or 0.08            # league avg ~8%
-    o_swing = o_swing or 0.30        # league avg ~30%
+        if attack_angle is None and safe(row.get('attack_angle')):
+            attack_angle = safe(row.get('attack_angle'))
+    bat_speed = bat_speed or 72.0        # league avg ~72 mph
+    squared_up = squared_up or 0.18      # league avg ~18%
+    blast = blast or 0.08                # league avg ~8%
+    o_swing = o_swing or 0.30            # league avg ~30%
+    attack_angle = attack_angle or 12.0  # league avg ~12 degrees
 
     # SB rate
     sb_num = 0.0
@@ -185,7 +352,8 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
         'hard_hit': hard_hit, 'avg_ev': avg_ev, 'ld_pct': ld_pct,
         'fb_pct': fb_pct, 'pull_pct': pull_pct, 'sb_per_pa': sb_per_pa,
         'bat_speed': bat_speed, 'squared_up': squared_up, 'blast': blast,
-        'o_swing': o_swing,
+        'o_swing': o_swing, 'attack_angle': attack_angle,
+        'swing_length': 7.2,  # placeholder — merged from bat_tracking after call
     }
 
 
@@ -197,7 +365,7 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
     use_current = curr_ip >= min_ip
 
     weights = [
-        (current_season,     5 if use_current else 0),
+        (current_season,     PITCHER_CURRENT_WEIGHT if use_current else 0),
         (current_season - 1, 4),
         (current_season - 2, 3),
     ]
@@ -226,8 +394,10 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
             ip  = safe(row.get('ip'), 0)
             if val is None or ip == 0:
                 continue
-            num += val * ip * wt
-            den += ip * wt
+            # Current season: use IP floor so early starts carry real weight
+            effective_ip = max(ip, PITCHER_IP_FLOOR) if yr == current_season else ip
+            num += val * effective_ip * wt
+            den += effective_ip * wt
         return num / den if den > reg_ip else league_avg
 
     k_reg = max(40, int(base_reg * 1.5))  # K% needs more regression, but scaled down too
@@ -244,6 +414,7 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
     pitching_plus = None
     location_plus = None
     swstr_pct = None
+    csw_pct = None
     velo = None
     lob_pct = None
     for yr in ([current_season] if use_current else []) + [current_season-1, current_season-2]:
@@ -258,6 +429,8 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
             location_plus = safe(row.get('location_plus'))
         if safe(row.get('swstr_pct')) and not swstr_pct:
             swstr_pct = safe(row.get('swstr_pct'))
+        if safe(row.get('csw_pct')) and not csw_pct:
+            csw_pct = safe(row.get('csw_pct'))
         if safe(row.get('velo')) and not velo:
             velo = safe(row.get('velo'))
         if safe(row.get('lob_pct')) and not lob_pct:
@@ -281,11 +454,25 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
             ip_per_gs = raw * 0.92 + 5.1 * 0.08
             break
 
+    # Opener/reliever detection: if pitcher is primarily a reliever (GS < 20% of G
+    # across recent seasons), they're likely an opener — cap IP projection low.
+    total_g, total_gs = 0, 0
+    for yr in seasons:
+        row = stats_by_season.get(yr)
+        if not row:
+            continue
+        total_g += safe(row.get('g'), 0)
+        total_gs += safe(row.get('gs'), 0)
+    if total_g >= 5 and total_gs / total_g < 0.20:
+        # Reliever profile being used as opener — project ~2 IP (1-3 innings)
+        ip_per_gs = clip(ip_per_gs, 1.5, 3.0)
+
     return {
         'k_pct': k_pct, 'bb_pct': bb_pct, 'hr9': hr9, 'babip': babip,
         'xfip': xfip, 'siera': siera, 'stuff_plus': stuff_plus,
         'pitching_plus': pitching_plus, 'location_plus': location_plus,
-        'swstr_pct': swstr_pct, 'gb_pct': gb_pct, 'ip_per_gs': ip_per_gs,
+        'swstr_pct': swstr_pct, 'csw_pct': csw_pct,
+        'gb_pct': gb_pct, 'ip_per_gs': ip_per_gs,
         'velo': velo, 'lob_pct': lob_pct,
     }
 
@@ -334,12 +521,14 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     # ── PA outcome probabilities ──────────────────────────────────────────
     # K rate: batter talent × pitcher skill ratio × stuff+ adjustment × park K factor
     pitcher_k_ratio = (pitcher['k_pct'] / LEAGUE_AVG_K_PCT) if pitcher else 1.0
-    # Stuff+ captures pitch quality beyond raw K% (movement, velo, deception)
+    # Stuff+ matchup interaction (reduced from 0.3 to 0.15 — three-tier blend handles baseline)
     if pitcher and pitcher.get('stuff_plus'):
-        stuff_adj = (pitcher['stuff_plus'] / 100.0) ** 0.3  # damped — stuff+ of 120 → ~6% K boost
+        stuff_adj = (pitcher['stuff_plus'] / 100.0) ** 0.15
         pitcher_k_ratio *= stuff_adj
     park_k = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
-    k_rate = clip(talent['k_pct'] * pitcher_k_ratio * park_k, 0.05, 0.50)
+    # Swing length: longer swings = more whiff-prone (league avg ~7.2 ft)
+    swing_k_adj = clip(1.0 + (talent.get('swing_length', 7.2) - 7.2) * 0.06, 0.94, 1.08)
+    k_rate = clip(talent['k_pct'] * pitcher_k_ratio * park_k * swing_k_adj, 0.05, 0.50)
 
     # BB rate: batter talent × inverse pitcher BB ratio × park BB factor
     pitcher_bb_ratio = (LEAGUE_AVG_BB_PCT / pitcher['bb_pct']) if pitcher and pitcher['bb_pct'] > 0.02 else 1.0
@@ -384,8 +573,18 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     wx_hr = weather_hr_mult(weather)
     pitcher_hr_ratio = (pitcher['hr9'] / LEAGUE_AVG_HR9) if pitcher else 1.0
 
-    hr_per_hit = clip((talent['iso'] / 3.5) * park_hr * fb_adj * wx_hr * pitcher_hr_ratio / hit_prob,
-                       0.03, 0.30)
+    # Park/weather sensitivity: low avg_ev batters hit more wall scrapers — more park-sensitive
+    park_sens = clip(1.0 + (88.0 - talent.get('avg_ev', 88.0)) * 0.015, 0.85, 1.20)
+    effective_park_hr = 1.0 + (park_hr - 1.0) * park_sens
+    effective_wx_hr = 1.0 + (wx_hr - 1.0) * park_sens
+
+    # Blast%: highest-quality contact tier (league avg ~8%)
+    blast_adj = clip(1.0 + (talent.get('blast', 0.08) - 0.08) * 2.5, 0.90, 1.12)
+    # Attack angle vs arm angle: swing plane alignment drives HR over/underperformance
+    aa_hr_adj = arm_angle_hr_interaction(talent.get('attack_angle'), pitcher.get('arm_angle') if pitcher else None)
+
+    hr_per_hit = clip((talent['iso'] / 3.5) * effective_park_hr * fb_adj * effective_wx_hr *
+                       pitcher_hr_ratio * blast_adj * aa_hr_adj / hit_prob, 0.03, 0.30)
     xb_per_hit = clip((talent['iso'] - 3 * talent['iso']/3.5) / hit_prob, 0.03, 0.20)
     triple_per_hit = 0.015
     single_per_hit = max(0.0, 1.0 - hr_per_hit - xb_per_hit - triple_per_hit)
@@ -557,14 +756,8 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # ── K rate: blend Vegas + talent ────────────────────────────────────────
     # Talent-based K rate (matchup + park adjusted)
     talent_k_rate = split_k * (1.0 + (1.0 - opp_quality) * 0.35) * park_k
-    # swstr_pct (swinging strike rate) is more predictive of future K% than K% itself
-    if talent.get('swstr_pct') and talent['swstr_pct'] > 0:
-        swstr_adj = (talent['swstr_pct'] / 0.11) ** 0.2  # league avg ~11%, damped
-        talent_k_rate *= clip(swstr_adj, 0.90, 1.12)
-    # Velo boost: each mph above 93 adds ~0.5% K rate (research-backed)
-    if talent.get('velo') and talent['velo'] > 0:
-        velo_adj = 1.0 + (talent['velo'] - 93.0) * 0.005
-        talent_k_rate *= clip(velo_adj, 0.96, 1.06)
+    # Note: SwStr% and velo adjustments removed — now captured upstream by
+    # reliability_blend_pitcher() (Tier 1 stuff model + Tier 2 pitch-level model)
     if vegas_ks and proj_ip > 0:
         # Derive Vegas-implied K rate from expected Ks / expected batters faced
         vegas_bf = proj_ip * PA_PER_IP
@@ -744,10 +937,11 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     """Compute PA outcome probabilities for a batter vs pitcher. Shared by game sim."""
     pitcher_k_ratio = (pitcher['k_pct'] / LEAGUE_AVG_K_PCT) if pitcher else 1.0
     if pitcher and pitcher.get('stuff_plus'):
-        stuff_adj = (pitcher['stuff_plus'] / 100.0) ** 0.3
+        stuff_adj = (pitcher['stuff_plus'] / 100.0) ** 0.15  # reduced — three-tier handles baseline
         pitcher_k_ratio *= stuff_adj
     park_k = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
-    k_rate = clip(talent['k_pct'] * pitcher_k_ratio * park_k, 0.05, 0.50)
+    swing_k_adj = clip(1.0 + (talent.get('swing_length', 7.2) - 7.2) * 0.06, 0.94, 1.08)
+    k_rate = clip(talent['k_pct'] * pitcher_k_ratio * park_k * swing_k_adj, 0.05, 0.50)
 
     pitcher_bb_ratio = (LEAGUE_AVG_BB_PCT / pitcher['bb_pct']) if pitcher and pitcher['bb_pct'] > 0.02 else 1.0
     park_bb = safe(park.get('bb_factor'), 100) / 100.0 if park else 1.0
@@ -756,7 +950,6 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     hbp_rate = 0.010
 
     # Hit probability — quality of contact drives BABIP outcomes
-    # avg_ev: harder average contact = more hits (each mph above 88 boosts BABIP)
     ev_adj = clip(1.0 + (talent.get('avg_ev', 88.0) - 88.0) * 0.008, 0.92, 1.10)
     qoc_mult = clip(1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3, 0.85, 1.25)
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
@@ -776,11 +969,19 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
     wx_hr = weather_hr_mult(weather)
     pitcher_hr_ratio = (pitcher['hr9'] / LEAGUE_AVG_HR9) if pitcher else 1.0
+    # Park/weather sensitivity: low avg_ev = wall scrapers = more park-sensitive
+    park_sens = clip(1.0 + (88.0 - talent.get('avg_ev', 88.0)) * 0.015, 0.85, 1.20)
+    effective_park_hr = 1.0 + (park_hr - 1.0) * park_sens
+    effective_wx_hr = 1.0 + (wx_hr - 1.0) * park_sens
     # Bat speed: raw power — each mph above 72 (avg) scales HR probability
     bat_spd_adj = clip(1.0 + (talent.get('bat_speed', 72.0) - 72.0) * 0.015, 0.88, 1.15)
     # Squared-up%: how often they barrel the ball — complements barrel%
     squp_adj = clip(1.0 + (talent.get('squared_up', 0.18) - 0.18) * 1.5, 0.90, 1.12)
-    hr_per_hit = clip((talent['iso'] / 3.5) * park_hr * fb_adj * wx_hr * pitcher_hr_ratio * bat_spd_adj * squp_adj / hit_prob, 0.03, 0.30)
+    # Blast%: highest-quality contact tier (league avg ~8%)
+    blast_adj = clip(1.0 + (talent.get('blast', 0.08) - 0.08) * 2.5, 0.90, 1.12)
+    # Attack angle vs arm angle alignment
+    aa_hr_adj = arm_angle_hr_interaction(talent.get('attack_angle'), pitcher.get('arm_angle') if pitcher else None)
+    hr_per_hit = clip((talent['iso'] / 3.5) * effective_park_hr * fb_adj * effective_wx_hr * pitcher_hr_ratio * bat_spd_adj * squp_adj * blast_adj * aa_hr_adj / hit_prob, 0.03, 0.30)
     # XB rate: avg_ev drives doubles (harder contact = more XBH)
     xb_per_hit = clip((talent['iso'] - 3 * talent['iso'] / 3.5) / hit_prob * ev_adj, 0.03, 0.20)
     triple_per_hit = 0.015
@@ -814,9 +1015,13 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
     wx_hr = weather_hr_mult(weather)
+    park_sens = clip(1.0 + (88.0 - talent.get('avg_ev', 88.0)) * 0.015, 0.85, 1.20)
+    effective_park_hr = 1.0 + (park_hr - 1.0) * park_sens
+    effective_wx_hr = 1.0 + (wx_hr - 1.0) * park_sens
     bat_spd_adj = clip(1.0 + (talent.get('bat_speed', 72.0) - 72.0) * 0.015, 0.88, 1.15)
     squp_adj = clip(1.0 + (talent.get('squared_up', 0.18) - 0.18) * 1.5, 0.90, 1.12)
-    hr_per_hit = clip((talent['iso'] / 3.5) * park_hr * fb_adj * wx_hr * (bp_hr9 / LEAGUE_AVG_HR9) * bat_spd_adj * squp_adj / hit_prob, 0.03, 0.30)
+    blast_adj = clip(1.0 + (talent.get('blast', 0.08) - 0.08) * 2.5, 0.90, 1.12)
+    hr_per_hit = clip((talent['iso'] / 3.5) * effective_park_hr * fb_adj * effective_wx_hr * (bp_hr9 / LEAGUE_AVG_HR9) * bat_spd_adj * squp_adj * blast_adj / hit_prob, 0.03, 0.30)
     xb_per_hit = clip((talent['iso'] - 3 * talent['iso'] / 3.5) / hit_prob * ev_adj, 0.03, 0.20)
 
     return {
@@ -1067,10 +1272,21 @@ def fetch_data(target_date: str) -> dict:
         rows = sb.table('batter_stats').select(
             'player_id,season,pa,woba,xwoba,k_pct,bb_pct,iso,avg,sb,babip,'
             'barrel_pct,hard_hit_pct,avg_ev,wrc_plus,full_name,team,fb_pct,pull_pct,'
-            'ld_pct,bat_speed,squared_up_pct,blast_pct,o_swing_pct,swstr_pct'
+            'ld_pct,bat_speed,squared_up_pct,blast_pct,o_swing_pct,swstr_pct,attack_angle'
         ).in_('player_id', chunk).in_('season', [SEASON, SEASON-1, SEASON-2]).execute().data or []
         for r in rows:
             batter_stats.setdefault(r['player_id'], {})[r['season']] = r
+
+    # Bat tracking (swing_length not in batter_stats — fetch from bat_tracking table)
+    bat_tracking = {}
+    for i in range(0, len(all_stat_ids), 500):
+        chunk = all_stat_ids[i:i+500]
+        rows = sb.table('bat_tracking').select(
+            'player_id,season,swing_length'
+        ).in_('player_id', chunk).in_('season', [SEASON, SEASON-1]).execute().data or []
+        for r in rows:
+            if r['player_id'] not in bat_tracking:  # prefer current season (fetched first)
+                bat_tracking[r['player_id']] = r
 
     # Pitcher stats (3 seasons)
     sp_ids = set()
@@ -1081,11 +1297,46 @@ def fetch_data(target_date: str) -> dict:
     if sp_ids:
         rows = sb.table('pitcher_stats').select(
             'player_id,season,ip,g,gs,xfip,siera,k_pct,bb_pct,hr9,babip,'
-            'stuff_plus,location_plus,pitching_plus,swstr_pct,full_name,stats_level,'
+            'stuff_plus,location_plus,pitching_plus,swstr_pct,csw_pct,full_name,stats_level,'
             'gb_pct,fb_pct,ld_pct,velo,lob_pct'
         ).in_('player_id', list(sp_ids)).in_('season', [SEASON, SEASON-1, SEASON-2]).execute().data or []
         for r in rows:
             pitcher_stats.setdefault(r['player_id'], {})[r['season']] = r
+
+    # SP salaries (detect $4000 relievers used as openers)
+    sp_salaries = {}
+    if sp_ids:
+        sal_rows = sb.table('dk_salaries').select(
+            'player_id,salary'
+        ).in_('player_id', list(sp_ids)).eq('season', SEASON).execute().data or []
+        for r in sal_rows:
+            # Keep highest salary per player (CPT vs FLEX dupes)
+            if r['player_id'] not in sp_salaries or (r.get('salary') or 0) > sp_salaries[r['player_id']]:
+                sp_salaries[r['player_id']] = r.get('salary') or 0
+
+    # Pitch arsenal (for three-tier pitcher model + arm angle)
+    arsenal_data = {}
+    if sp_ids:
+        arsenal_rows = []
+        sp_list = list(sp_ids)
+        for i in range(0, len(sp_list), 150):
+            chunk = sp_list[i:i+150]
+            rows = sb.table('pitch_arsenal').select(
+                'player_id,season,pitch_type,usage_pct,stuff_plus,velo,arm_angle,whiff_pct,k_pct,xwoba'
+            ).in_('player_id', chunk).in_('season', [SEASON, SEASON-1]).execute().data or []
+            arsenal_rows.extend(rows)
+        # Group by (player_id, season) and compute usage-weighted composites
+        from collections import defaultdict
+        grouped = defaultdict(list)
+        for r in arsenal_rows:
+            grouped[(r['player_id'], r['season'])].append(r)
+        for (pid, season), pitch_rows in grouped.items():
+            composite = compute_arsenal_composite(pitch_rows)
+            if composite:
+                # Prefer current season; fall back to prior
+                if pid not in arsenal_data or season == SEASON:
+                    arsenal_data[pid] = composite
+        print(f"  Pitch arsenal: {len(arsenal_data)} pitchers with composites")
 
     # Batter splits (also include reverse-remapped IDs)
     # Load both seasons with season key, then blend PA-weighted
@@ -1187,7 +1438,8 @@ def fetch_data(target_date: str) -> dict:
     park_factors = {}
     if venue_ids:
         rows = sb.table('park_factors').select(
-            'venue_id,basic_factor,hr_factor,k_factor,bb_factor'
+            'venue_id,basic_factor,hr_factor,k_factor,bb_factor,'
+            'lf_dist,rf_dist,lf_wall_height,rf_wall_height,altitude'
         ).in_('venue_id', venue_ids).execute().data or []
         park_factors = {r['venue_id']: r for r in rows}
 
@@ -1275,6 +1527,9 @@ def fetch_data(target_date: str) -> dict:
         'park_factors': park_factors, 'weather': weather,
         'pitcher_props': pitcher_props,
         'bullpen_quality': bullpen_quality,
+        'arsenal_data': arsenal_data,
+        'bat_tracking': bat_tracking,
+        'sp_salaries': sp_salaries,
         '_reverse_remap': reverse_remap,
     }
 
@@ -1453,11 +1708,19 @@ def run():
             p_stats = data['pitcher_stats'].get(opp_sp_id, {})
             if p_stats:
                 pitcher = marcel_pitcher(p_stats, SEASON, target_date)
+                # Three-tier reliability blend (Stuff/Pitch-Level/Event)
+                opp_current_ip = safe((p_stats.get(SEASON) or {}).get('ip'), 0)
+                opp_arsenal = data.get('arsenal_data', {}).get(opp_sp_id)
+                pitcher = reliability_blend_pitcher(pitcher, opp_arsenal, opp_current_ip)
                 sp_proj_ip = pitcher.get('ip_per_gs', 5.5)
                 # Blend with Vegas props if available
                 props = data.get('pitcher_props', {}).get(opp_sp_id)
                 if props and safe(props.get('implied_ip')):
                     sp_proj_ip = safe(props['implied_ip']) * 0.55 + sp_proj_ip * 0.45
+                # $4000 opener detection: reliever-priced SP defaults to 1 IP
+                # unless Vegas prop provides a real line
+                elif data.get('sp_salaries', {}).get(opp_sp_id, 99999) <= 4000:
+                    sp_proj_ip = 1.0
 
         # Environment
         park_row = data['park_factors'].get(game.get('venue_id'))
@@ -1490,10 +1753,15 @@ def run():
                     'woba': LEAGUE_AVG_WOBA, 'barrel': 0.065, 'hard_hit': 0.35,
                     'avg_ev': 88.0, 'sb_per_pa': 0.01, 'fb_pct': 0.35, 'pull_pct': 0.40,
                     'ld_pct': 0.21, 'bat_speed': 72.0, 'squared_up': 0.18,
-                    'blast': 0.08, 'o_swing': 0.30,
+                    'blast': 0.08, 'o_swing': 0.30, 'attack_angle': 12.0,
+                    'swing_length': 7.2,
                 }
             else:
                 talent = marcel_batter(stats_by_yr, SEASON, target_date)
+                # Merge swing_length from bat_tracking table (not in batter_stats)
+                bt = data.get('bat_tracking', {}).get(stats_pid)
+                if bt and safe(bt.get('swing_length')):
+                    talent['swing_length'] = safe(bt['swing_length'])
 
             # Platoon adjustment
             split_row = data['batter_splits'].get(stats_pid, {}).get(opp_sp_hand)
@@ -1605,6 +1873,10 @@ def run():
                 continue
 
             talent = marcel_pitcher(p_stats, SEASON, target_date)
+            # Three-tier reliability blend
+            sp_current_ip = safe((p_stats.get(SEASON) or {}).get('ip'), 0)
+            sp_arsenal = data.get('arsenal_data', {}).get(sp_id)
+            talent = reliability_blend_pitcher(talent, sp_arsenal, sp_current_ip)
             is_home = (role == 'home')
             sp_hand = game.get('home_sp_hand' if is_home else 'away_sp_hand')
             opp_team_id = game.get('away_team_id' if is_home else 'home_team_id')
@@ -1618,6 +1890,10 @@ def run():
             props = data.get('pitcher_props', {}).get(sp_id)
             v_ip = safe(props.get('implied_ip')) if props else None
             v_ks = safe(props.get('implied_ks')) if props else None
+            # $4000 opener detection: reliever-priced SP defaults to 1 IP
+            if not v_ip and data.get('sp_salaries', {}).get(sp_id, 99999) <= 4000:
+                v_ip = 1.0
+                v_ks = v_ks or 1.0
 
             # Opposing lineup handedness composition for pitcher splits
             p_splits = data['pitcher_splits'].get(sp_id)

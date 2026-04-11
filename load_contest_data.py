@@ -93,7 +93,7 @@ def run():
     args = sys.argv[1:]
     slate_filter = None
     min_fee = 0.25     # default: include $0.25+ contests
-    max_contests = 100  # payout API calls
+    max_contests = 200  # payout API calls
 
     i = 0
     while i < len(args):
@@ -168,8 +168,8 @@ def run():
     print(f"  Classic contests (fee >= ${min_fee}): {len(classic)}")
 
     # 3. Fetch payout details for top contests
-    to_fetch = classic[:max_contests]
-    print(f"  Fetching payout details for top {len(to_fetch)} contests...")
+    to_fetch = classic[:max_contests] if max_contests else classic
+    print(f"  Fetching payout details for {len(to_fetch)} contests...")
 
     records = []
     for idx, c in enumerate(to_fetch):
