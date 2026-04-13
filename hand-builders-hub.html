@@ -9858,22 +9858,20 @@ function updateGppScores() {
     ranked.forEach((c, i) => { c.pmsDriven = +((ranked.length - i) / ranked.length).toFixed(4); });
   }
 
-  // ── BLENDED: Multiplicative GPP × PMS/HES ──
-  // Each lineup's GPP score is scaled by its matchup quality. No sequential
-  // ranking, no forced caps — purely data-driven. A lineup needs BOTH good
-  // sim output AND good matchups to rank high. The slider controls how much
-  // PMS/HES swings the multiplier (0% = pure GPP, 60% = ±30% swing).
+  // ── BLENDED: Additive GPP + PMS/HES (independent axes) ──
+  // GPP and matchup quality contribute independently to the score.
+  // Unlike multiplication (which preserves GPP hierarchy), additive blending
+  // lets high-PMS teams compete even with moderate GPP — PMS has its own lift.
+  // Slider controls weight: 0% = pure GPP, 60% = PMS/HES is 60% of score.
   {
-    const strength = (+(document.getElementById('blend-matchup-wt')?.value ?? 30)) / 100;
+    const w = (+(document.getElementById('blend-matchup-wt')?.value ?? 30)) / 100;
+    const maxGpp = norm(_poolCandidates.map(c => c.gppScore || 0));
     for (const c of _poolCandidates) {
       const m = c.metrics || {};
-      // PMS multiplier: avgPms centered at 5, scaled by strength
-      // strength=0.30: PMS 10→1.15, PMS 7→1.06, PMS 5→1.0, PMS 3→0.94, PMS 1→0.88
-      // strength=0.60: PMS 10→1.30, PMS 7→1.12, PMS 5→1.0, PMS 3→0.88, PMS 1→0.70
-      const pmsM = 1.0 + ((m.avgPms || 5) - 5) * strength * 0.10;
-      // HES multiplier: weaker influence (environment vs individual matchup)
-      const hesM = 1.0 + ((m.avgHes || 5) - 5) * strength * 0.06;
-      c.blendedScore = +((c.gppScore || 0) * pmsM * hesM).toFixed(4);
+      const gppNorm = (c.gppScore || 0) / (maxGpp || 1);
+      // Matchup axis: 70% individual PMS + 30% environment HES, normalized 0-1
+      const matchupNorm = 0.70 * ((m.avgPms || 5) / 10) + 0.30 * ((m.avgHes || 5) / 10);
+      c.blendedScore = +((1 - w) * gppNorm + w * matchupNorm).toFixed(4);
     }
   }
 
