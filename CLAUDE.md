@@ -206,6 +206,19 @@ Three distinct root causes — don't confuse them:
 3. Re-run `diagnose_salary_mismatch.py` — expect 0 ID mismatches
 4. If stale rows with wrong IDs remain, use the auto-generated SQL from the diagnose output
 
+### PLAYER_ID_REMAP Direction — KEY = wrong ID, VALUE = correct MLBAM
+
+- The KEY must be the wrong resolved ID. The VALUE must be the correct MLBAM ID (matching `player_projections.player_id`).
+- Auto-fix in `agent_lineups_dk.py` can generate **backwards entries** — always verify after auto-fix.
+- Chained remaps don't work (single `.get()` call) — if A→B and B→C, update A→C directly.
+
+### Name Matching Must Strip Diacritics
+
+- DK uses ASCII names ("Eury Perez"), projections use Unicode ("Eury Pérez").
+- Frontend `normName()` uses `.normalize('NFD').replace(/[\u0300-\u036f]/g, '')`.
+- Python `normalize()` in `load_dk_salaries.py` uses `unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('ASCII')`.
+- Any new name normalization function must include accent stripping.
+
 ### Diagnostic Scripts Must Paginate
 
 - Any script loading a full table must use paginated `.range()` loop — never a bare `.select()` without `.range()` or explicit `.limit(5000)`.

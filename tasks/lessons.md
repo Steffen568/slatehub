@@ -651,3 +651,19 @@ requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leader
 ### lateSwapFindBest didn't filter started-game players from swap pool
 **What happened:** The eligible player list for late swap only excluded `lockedPids` (players locked in the lineup) and `capExcluded`, but not players from already-started games. A player from a started game could be swapped IN, which DK would reject.
 **Rule:** Always add `!isPlayerGameLocked(p)` filter to the eligible player list in lateSwapFindBest().
+
+### Auto-fixed DK ID mismatches: Christian Vazquez, Tyler O'Neill
+**What happened:** Pipeline auto-fixed 2 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Carlos Cortes, Carson Kelly, Cole Young, David Hamilton, Ivan Herrera, Jacob Wilson, Jose Caballero, Jose Fernandez, Jose Ramirez, Josh Smith, Julio Rodriguez, Luis Garcia Jr., Miguel Vargas, Mike Yastrzemski, Vladimir Guerrero Jr., Will Smith
+**What happened:** Pipeline auto-fixed 16 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Angel Martinez, Brandon Lowe, David Fry, Gary Sanchez, Ivan Herrera, Jacob Wilson, Jose Caballero, Jose Ramirez, Josh Smith, Juan Brito, Julio Rodriguez, Miguel Vargas, Vladimir Guerrero Jr., Will Smith
+**What happened:** Pipeline auto-fixed 14 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Angel Martinez, Brandon Lowe, Carson Kelly, David Fry, David Hamilton, Ivan Herrera, Jacob Wilson, Jose Caballero, Jose Ramirez, Josh Smith, Juan Brito, Julio Rodriguez, Luis Garcia Jr., Miguel Vargas, Mike Yastrzemski, Vladimir Guerrero Jr., Will Smith
+**What happened:** Pipeline auto-fixed 17 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.

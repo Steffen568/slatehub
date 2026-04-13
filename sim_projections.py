@@ -60,6 +60,14 @@ MARCEL_WEIGHTS = {0: 5, 1: 4, 2: 3}
 PITCHER_CURRENT_WEIGHT = 10
 PITCHER_IP_FLOOR = 40  # treat early-season IP as at least this for blend weight
 
+# Breakout detection: if current-season xFIP improves by this much over prior-year
+# Marcel baseline, boost current-season effective IP to capture the breakout earlier.
+# Without this, a pitcher who's clearly leveled up (Soriano 2026: 2.63 xFIP vs 3.54 prior)
+# stays anchored to last year's mediocre numbers until 80+ IP accumulates.
+BREAKOUT_XFIP_THRESHOLD = 0.50   # min xFIP improvement to trigger boost
+BREAKOUT_IP_MULTIPLIER  = 3.0    # base multiplier for current-season effective IP
+BREAKOUT_MAX_MULTIPLIER = 5.0    # cap for scaled multiplier
+
 # Season-scaled minimums: ramp up as sample grows through the year
 # Opening Day ~Mar 27 → full season ~Sep 28 ≈ 185 days
 def _season_min(full_season_min, target_date=None):
@@ -400,6 +408,62 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
             den += effective_ip * wt
         return num / den if den > reg_ip else league_avg
 
+    # ── Breakout detection ─────────────────────────────────────────────────
+    # Compare current-season xFIP to prior-years-only baseline. If the pitcher
+    # is showing a significant improvement backed by peripherals, boost the
+    # current-season effective IP so the breakout carries more weight.
+    is_breakout = False
+    if use_current and curr:
+        curr_xfip = safe(curr.get('xfip'))
+        if curr_xfip:
+            # Compute prior-only xFIP baseline (exclude current season)
+            prior_num = base_reg * LEAGUE_AVG_XFIP
+            prior_den = float(base_reg)
+            for yr, wt in weights:
+                if yr == current_season or wt == 0:
+                    continue
+                row = stats_by_season.get(yr)
+                if not row:
+                    continue
+                val = safe(row.get('xfip'))
+                ip  = safe(row.get('ip'), 0)
+                if val is None or ip == 0:
+                    continue
+                prior_num += val * ip * wt
+                prior_den += ip * wt
+            prior_xfip = prior_num / prior_den if prior_den > base_reg else LEAGUE_AVG_XFIP
+
+            xfip_improvement = prior_xfip - curr_xfip
+            if xfip_improvement >= BREAKOUT_XFIP_THRESHOLD:
+                # Scale multiplier by magnitude: +0.50 = 3x, +1.00 = 5x (capped)
+                scale = min(BREAKOUT_MAX_MULTIPLIER,
+                            BREAKOUT_IP_MULTIPLIER + (xfip_improvement - BREAKOUT_XFIP_THRESHOLD) * 4.0)
+                # Redefine weighted_stat with boosted current-season IP
+                boosted_floor = PITCHER_IP_FLOOR * scale
+                def weighted_stat(col, league_avg, reg_ip=None, _boosted=boosted_floor, _base=base_reg):
+                    if reg_ip is None:
+                        reg_ip = _base
+                    num = reg_ip * league_avg
+                    den = float(reg_ip)
+                    for yr, wt in weights:
+                        if wt == 0:
+                            continue
+                        row = stats_by_season.get(yr)
+                        if not row:
+                            continue
+                        val = safe(row.get(col))
+                        ip  = safe(row.get('ip'), 0)
+                        if val is None or ip == 0:
+                            continue
+                        effective_ip = max(ip, _boosted) if yr == current_season else ip
+                        num += val * effective_ip * wt
+                        den += effective_ip * wt
+                    return num / den if den > reg_ip else league_avg
+                is_breakout = True
+                print(f"    BREAKOUT detected: xFIP {curr_xfip:.2f} vs prior {prior_xfip:.2f} "
+                      f"(+{xfip_improvement:.2f}) — boosting current-season IP floor "
+                      f"from {PITCHER_IP_FLOOR} to {int(boosted_floor)}")
+
     k_reg = max(40, int(base_reg * 1.5))  # K% needs more regression, but scaled down too
     k_pct  = clip(weighted_stat('k_pct',  LEAGUE_AVG_K_PCT, reg_ip=k_reg), 0.10, 0.40)
     bb_pct = clip(weighted_stat('bb_pct', LEAGUE_AVG_BB_PCT),             0.04, 0.18)
@@ -474,6 +538,7 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
         'swstr_pct': swstr_pct, 'csw_pct': csw_pct,
         'gb_pct': gb_pct, 'ip_per_gs': ip_per_gs,
         'velo': velo, 'lob_pct': lob_pct,
+        'is_breakout': is_breakout,
     }
 
 
@@ -490,19 +555,28 @@ def weather_hr_mult(weather_row: dict) -> float:
     temp_effect = ((temp - 72) / 10) * 0.02
     wind_effect = 0.0
     if wind_spd and wind_spd > 5:
+        # Alan Nathan physics: ~2-3% HR increase per mph blowing out.
+        # Use sqrt scaling to capture diminishing returns at extreme speeds:
+        # 10 mph → +13%, 15 mph → +20%, 20 mph → +30%, 25 mph → +38%
+        effective_spd = wind_spd - 5  # subtract threshold
         if wind_dir in WIND_OUT_DIRS:
-            wind_effect = (wind_spd / 15.0) * 0.05
+            wind_effect = (effective_spd ** 0.7) * 0.04
         elif wind_dir in WIND_IN_DIRS:
-            wind_effect = -(wind_spd / 15.0) * 0.05
-    return clip(1.0 + temp_effect + wind_effect, 0.85, 1.20)
+            wind_effect = -(effective_spd ** 0.7) * 0.04
+    return clip(1.0 + temp_effect + wind_effect, 0.75, 1.45)
 
 
 def weather_hit_mult(weather_row: dict) -> float:
-    """General hit probability multiplier from weather (smaller effect than HR)."""
+    """General hit/scoring multiplier from weather for display purposes.
+    Blends temperature effect on contact with wind HR effect (dampened)."""
     if not weather_row or weather_row.get('is_outdoor') is False:
         return 1.0
     temp = safe(weather_row.get('temp_f'), 72)
-    return clip(1.0 + ((temp - 72) / 10) * 0.008, 0.96, 1.06)
+    temp_effect = ((temp - 72) / 10) * 0.008
+    # Include wind HR effect (dampened — HR is a subset of all scoring)
+    hr_mult = weather_hr_mult(weather_row)
+    wind_scoring = (hr_mult - 1.0) * 0.40  # ~40% of HR boost flows to total scoring
+    return clip(1.0 + temp_effect + wind_scoring, 0.90, 1.15)
 
 
 # ── Batter PA Simulation ─────────────────────────────────────────────────────
@@ -707,7 +781,10 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     Vegas IP and K lines are used as anchors when available.
     """
     PA_PER_IP = 4.3
-    VEGAS_WEIGHT = 0.55  # how much we trust Vegas vs our talent model
+    # Breakout pitchers: trust our talent model more — Vegas is slow to adjust
+    # props for pitchers who have clearly leveled up (e.g. Soriano 3.5K line
+    # despite 29.6% K rate). Reduce Vegas weight from 0.55 to 0.25.
+    VEGAS_WEIGHT = 0.25 if talent.get('is_breakout') else 0.55
 
     # Park + weather factors (our edge — granular env data Vegas doesn't fully price)
     park_k   = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
@@ -799,7 +876,13 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # and environment as the per-9 ER rate, then simulate variance around it.
     #
     # This grounds ER in real pitching metrics instead of a fragile base-runner sim.
-    era_anchor = (split_xfip * 0.50 + talent['siera'] * 0.50)
+    # Breakout pitchers with no current-season SIERA: lean on xFIP (75/25)
+    # since SIERA is entirely built from stale prior-year data that the
+    # breakout has likely made obsolete.
+    if talent.get('is_breakout'):
+        era_anchor = (split_xfip * 0.80 + talent['siera'] * 0.20)
+    else:
+        era_anchor = (split_xfip * 0.50 + talent['siera'] * 0.50)
     # LOB% adjustment: pitchers who strand runners well have lower ER than xFIP predicts.
     # Regress LOB% toward 72% league avg, then apply small ERA multiplier.
     # LOB% > 72% → fewer ER (multiplier < 1), LOB% < 72% → more ER (multiplier > 1)

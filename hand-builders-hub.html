@@ -4369,6 +4369,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <option value="winUpside">Win Upside</option>
       <option value="roi">ROI</option>
       <option value="cashPct">Cash%</option>
+      <option value="avgPms">PMS</option>
+      <option value="avgHes">HES</option>
     </select>
     <span id="gpp-slider-wrap" style="display:inline-flex;align-items:center;gap:3px;margin-left:4px;">
       <span style="font-size:8px;color:var(--muted);font-weight:700;">Sharp</span>
@@ -8163,11 +8165,31 @@ function scorePoolLineup(lineupObj) {
     }
   }
 
+  // PMS/HES game edge map: track which high-PMS games this lineup accesses
+  const gameEdgeMap = {};
+  let totalPms = 0, totalPmsN = 0, totalHes = 0, totalHesN = 0;
+  players.forEach(([k, p]) => {
+    if (p.pms != null) { totalPms += p.pms; totalPmsN++; }
+    if (p.hes != null) { totalHes += p.hes; totalHesN++; }
+    if (p.game_pk && p.pms != null) {
+      if (!gameEdgeMap[p.game_pk]) gameEdgeMap[p.game_pk] = { pmsSum: 0, pmsN: 0 };
+      gameEdgeMap[p.game_pk].pmsSum += p.pms;
+      gameEdgeMap[p.game_pk].pmsN++;
+    }
+  });
+  const avgPms = totalPmsN > 0 ? +(totalPms / totalPmsN).toFixed(1) : null;
+  const avgHes = totalHesN > 0 ? +(totalHes / totalHesN).toFixed(1) : null;
+  const edgeGames = new Set();
+  for (const [gpk, e] of Object.entries(gameEdgeMap)) {
+    if (e.pmsN > 0 && (e.pmsSum / e.pmsN) >= 5) edgeGames.add(+gpk);
+  }
+
   return {
     proj: +proj.toFixed(1), ceil: +ceil.toFixed(1), floor: +floor.toFixed(1),
     sigma: +sigma.toFixed(1), salary, games: gamePks.size,
     stack: mainStack, sub: subStack, bringBacks, pids,
-    totalOwn: +totalOwn.toFixed(1), leverage, corrScore, stackLeverage, pitcherOwn: +pitcherOwn.toFixed(1)
+    totalOwn: +totalOwn.toFixed(1), leverage, corrScore, stackLeverage, pitcherOwn: +pitcherOwn.toFixed(1),
+    avgPms, avgHes, edgeGames,
   };
 }
 
@@ -8175,10 +8197,15 @@ function selectDiverseFromPool(candidates, n) {
   if (candidates.length <= n) return candidates.map((c,i) => i);
   const selected = [0]; // start with highest proj
   const indices = new Set([0]);
+  // Track which high-edge games the portfolio already covers
+  const coveredEdgeGames = new Set();
+  for (const gpk of candidates[0].edgeGames || []) coveredEdgeGames.add(gpk);
+
   while (selected.length < n) {
     let bestIdx = -1, bestScore = -Infinity;
     for (let i = 0; i < candidates.length; i++) {
       if (indices.has(i)) continue;
+      // Player diversity (Jaccard distance)
       let minDist = Infinity;
       for (const si of selected) {
         let inter = 0;
@@ -8187,12 +8214,24 @@ function selectDiverseFromPool(candidates, n) {
         const dist = union > 0 ? 1 - inter/union : 0;
         if (dist < minDist) minDist = dist;
       }
-      const score = 0.35 * (candidates[i].proj / (candidates[0].proj||1)) + 0.65 * minDist;
+      // Edge diversity: fraction of new high-PMS games not yet in portfolio
+      let edgeDist = 0;
+      const eg = candidates[i].edgeGames;
+      if (eg?.size > 0) {
+        let newEdge = 0;
+        for (const gpk of eg) { if (!coveredEdgeGames.has(gpk)) newEdge++; }
+        edgeDist = newEdge / eg.size;
+      }
+      const score = 0.30 * (candidates[i].proj / (candidates[0].proj||1))
+                  + 0.50 * minDist
+                  + 0.20 * edgeDist;
       if (score > bestScore) { bestScore = score; bestIdx = i; }
     }
     if (bestIdx === -1) break;
     selected.push(bestIdx);
     indices.add(bestIdx);
+    // Update covered edge games
+    for (const gpk of candidates[bestIdx].edgeGames || []) coveredEdgeGames.add(gpk);
   }
   return selected;
 }
@@ -8252,7 +8291,7 @@ async function loadPoolFromDB() {
     const [salRows, projRows] = await Promise.all([
       batchIn('dk_salaries', 'player_id,name,position,salary,team,dk_slate', 'player_id', allPoolPids,
         q => q.eq('dk_slate', slate)),
-      batchIn('player_projections', 'player_id,full_name,team,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,is_pitcher,batting_order,proj_ip,proj_ks,proj_er,win_prob', 'player_id', allPoolPids,
+      batchIn('player_projections', 'player_id,full_name,team,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,is_pitcher,batting_order,proj_ip,proj_ks,proj_er,win_prob,game_pk', 'player_id', allPoolPids,
         q => q.eq('game_date', today)),
     ]);
 
@@ -8285,9 +8324,27 @@ async function loadPoolFromDB() {
         proj_ks: proj?.proj_ks ?? null,
         proj_er: proj?.proj_er ?? null,
         win_prob: proj?.win_prob ?? null,
+        game_pk: proj?.game_pk ?? null,
       };
     }
     console.warn(`[loadPoolFromDB] playerMap: ${Object.keys(playerMap).length} players from ${allPoolPids.length} unique IDs (sal=${salRows.length}, proj=${projRows.length})`);
+
+    // Enrich pool players with PMS/HES from main player data (allHitters/allPitchers)
+    const _mainPLookup = {};
+    allHitters.concat(allPitchers).forEach(p => { if (p.player_id) _mainPLookup[p.player_id] = p; });
+    let pmsHit = 0, pmsMiss = 0;
+    for (const pid of Object.keys(playerMap)) {
+      const main = _mainPLookup[+pid];
+      if (main) {
+        playerMap[pid].pms = main.pms ?? null;
+        playerMap[pid].hes = main.hes ?? null;
+        playerMap[pid].game_pk = main.game_pk ?? playerMap[pid].game_pk ?? null;
+        if (main.pms != null) pmsHit++; else pmsMiss++;
+      } else {
+        pmsMiss++;
+      }
+    }
+    console.warn(`[loadPoolFromDB] PMS enrichment: ${pmsHit} hit, ${pmsMiss} miss (allHitters=${allHitters.length}, allPitchers=${allPitchers.length})`);
 
     // Enrich user pool into _poolCandidates format
     const isSD = _contestMode === 'showdown';
@@ -8625,8 +8682,12 @@ function _deadCode_renderPortfolioCards() {
     // Static badges
     const ownClr = m.totalOwn <= 80 ? '#4ade80' : m.totalOwn <= 120 ? '#fbbf24' : '#f87171';
     const levClr = m.leverage >= 50 ? '#4ade80' : m.leverage >= 30 ? '#fbbf24' : 'var(--muted)';
+    const pmsClr = m.avgPms >= 7 ? '#4ade80' : m.avgPms >= 5 ? '#fbbf24' : 'var(--muted)';
+    const hesClr = m.avgHes >= 7 ? '#4ade80' : m.avgHes >= 5 ? '#fbbf24' : 'var(--muted)';
     const staticBadges = `<span style="font-size:8px;color:${ownClr};">${m.totalOwn}%own</span>`
-      + `<span style="font-size:8px;color:${levClr};">${m.leverage}lev</span>`;
+      + `<span style="font-size:8px;color:${levClr};">${m.leverage}lev</span>`
+      + (m.avgPms != null ? `<span style="font-size:8px;color:${pmsClr};">PMS${m.avgPms}</span>` : '')
+      + (m.avgHes != null ? `<span style="font-size:8px;color:${hesClr};">HES${m.avgHes}</span>` : '');
     const simBadges = ct
       ? `<span style="font-size:8px;color:${ct.boomPct >= 10 ? '#4ade80' : 'var(--muted)'};">${ct.boomPct}%boom</span>`
       : '';

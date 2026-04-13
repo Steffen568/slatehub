@@ -250,10 +250,10 @@ PLAYER_ID_REMAP = {
     805779  : 814526,   # Jacob Wilson (auto-fixed)
     573262  : 569209,   # Mike Yastrzemski (auto-fixed)
     641933  : 828468,   # Tyler O'Neill (auto-fixed)
-    664040  : 446184,   # Brandon Lowe (auto-fixed)
+    446184  : 664040,   # Brandon Lowe (fixed direction — 664040 is correct MLBAM)
     596142  : 566435,   # Gary Sanchez (auto-fixed)
     608348  : 803086,   # Carson Kelly (auto-fixed)
-    543877  : 643582,   # Christian Vazquez (auto-fixed)
+    # 543877 removed — was backwards (auto-fix error). 543877 is correct MLBAM for Christian Vazquez.
     666185  : 684686,   # Dylan Carlson (auto-fixed)
     800513  : 699912,   # Jose Fernandez (fixed direction)
     829588  : 656849,   # David Peterson
@@ -267,6 +267,7 @@ PLAYER_ID_REMAP = {
     1299487 : 682877,   # Juan Brito (auto-fixed)
     1115910 : 686681,   # Michael Massey (auto-fixed)
     1122217 : 681190,   # Randy Vasquez (DK ASCII vs MLBAM Vásquez)
+    666126  : 665532,   # Carlos Cortes (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids

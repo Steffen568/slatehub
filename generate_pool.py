@@ -56,6 +56,73 @@ def clip(val, lo, hi):
     return max(lo, min(hi, val)) if val is not None else lo
 
 
+# ── HES / SP Grade / PMS ────────────────────────────────────────────────────
+# Ported from frontend (hand-builders-hub.html) computeHES / computeSpGrade / computeSimplePMS
+
+def compute_hes(pf, wx):
+    """Hitter Environment Score (1-10). Park + weather."""
+    s = 5.0
+    if pf:
+        basic = safe(pf.get('basic_factor'), 100)
+        hr    = safe(pf.get('hr_factor'), 100)
+        wc    = safe(pf.get('woba_con'), 100)
+        xwc   = safe(pf.get('xwoba_con'), 100)
+        bb    = safe(pf.get('bb_factor'), 100)
+        k     = safe(pf.get('k_factor'), 100)
+        s += (xwc * 0.55 + wc * 0.45 - 100) / 18
+        s += (hr - 100) / 20
+        s += (bb - k) / 80
+        s += (basic - 100) / 50
+    if wx:
+        temp = safe(wx.get('temp_f'), 72)
+        wind = safe(wx.get('wind_speed'), 0)
+        wind_dir = (wx.get('wind_dir') or '').upper()
+        if temp < 45:   s -= 1.2
+        elif temp < 55: s -= 0.6
+        elif temp > 80: s += 0.3
+        out = 'OUT' in wind_dir or 'OUTWARD' in wind_dir
+        inw = 'IN' in wind_dir and not out
+        if wind > 10:
+            s += wind / 14 if out else (-wind / 14 if inw else 0)
+        if safe(wx.get('precip_pct'), 0) > 70:
+            s -= 0.5
+    return clip(s, 1, 10)
+
+def compute_sp_grade(ps):
+    """SP grade from pitcher stats. Returns grade letter or None."""
+    if not ps:
+        return None
+    score, w = 0.0, 0.0
+    def add(val, hi, mid, lo, wt, up):
+        nonlocal score, w
+        if val is None: return
+        n = float(val)
+        pts = (10 if n >= hi else 7 if n >= mid else 4 if n >= lo else 1) if up \
+              else (10 if n <= hi else 7 if n <= mid else 4 if n <= lo else 1)
+        score += pts * wt; w += wt
+    def to_d(v):
+        return None if v is None else (v / 100.0 if v > 1 else v)
+    add(safe(ps.get('xfip')),       2.80, 3.50, 4.50, 3, False)
+    add(safe(ps.get('siera')),      3.00, 3.80, 4.80, 2, False)
+    add(to_d(safe(ps.get('k_pct'))),  0.280, 0.220, 0.170, 2, True)
+    add(to_d(safe(ps.get('bb_pct'))), 0.060, 0.090, 0.120, 2, False)
+    add(to_d(safe(ps.get('swstr_pct'))), 0.135, 0.110, 0.085, 1, True)
+    add(safe(ps.get('stuff_plus')),  110, 100, 90, 1, True)
+    if w == 0: return None
+    a = score / w
+    for thresh, letter in [(9.2,'A+'),(8.0,'A'),(6.8,'B+'),(5.6,'B'),(4.4,'C+'),(3.2,'C'),(2.0,'D')]:
+        if a >= thresh: return letter
+    return 'F'
+
+def compute_pms(grade, hes):
+    """Pitcher Matchup Score (1-10). Higher = better for hitter."""
+    if not grade:
+        return 5.0
+    base = {'A+':1,'A':2,'B+':3,'B':4,'C+':6,'C':7,'D':8,'F':9}.get(grade, 5)
+    hes_adj = (hes - 5) * 0.2 if hes else 0
+    return clip(round(base + hes_adj), 1, 10)
+
+
 # ── Data Fetching ────────────────────────────────────────────────────────────
 
 def fetch_data(target_date, slate_filter=None):
@@ -136,10 +203,43 @@ def fetch_data(target_date, slate_filter=None):
         for r in own_rows:
             ownership[r['player_id']] = r.get('proj_ownership', 0)
 
+    # Pitcher stats for SP grade → PMS computation (current season first)
+    sp_ids = list(set(g.get('home_sp_id') for g in games if g.get('home_sp_id'))
+                | set(g.get('away_sp_id') for g in games if g.get('away_sp_id')))
+    pitcher_stats = {}
+    if sp_ids:
+        for i in range(0, len(sp_ids), 150):
+            batch = sp_ids[i:i+150]
+            rows = sb.table('pitcher_stats').select(
+                'player_id,season,xfip,siera,k_pct,bb_pct,swstr_pct,stuff_plus'
+            ).in_('player_id', batch).order('season', desc=True).execute().data or []
+            for r in rows:
+                if r['player_id'] not in pitcher_stats:
+                    pitcher_stats[r['player_id']] = r
+
+    # Park factors
+    venue_ids = list(set(g.get('venue_id') for g in games if g.get('venue_id')))
+    park_factors = {}
+    if venue_ids:
+        rows = sb.table('park_factors').select(
+            'venue_id,basic_factor,hr_factor,k_factor,bb_factor,woba_con,xwoba_con'
+        ).in_('venue_id', venue_ids).execute().data or []
+        park_factors = {r['venue_id']: r for r in rows}
+
+    # Weather
+    weather = {}
+    if game_pks:
+        rows = sb.table('weather').select(
+            'game_pk,temp_f,wind_speed,wind_dir,precip_pct,is_outdoor'
+        ).in_('game_pk', game_pks).execute().data or []
+        weather = {r['game_pk']: r for r in rows}
+
     return {
         'games': games, 'projs': projs, 'sal_map': sal_map,
         'sal_name_map': sal_name_map, 'lineup_map': lineup_map,
         'odds': odds, 'ownership': ownership,
+        'pitcher_stats': pitcher_stats, 'park_factors': park_factors,
+        'weather': weather,
     }
 
 
@@ -221,22 +321,103 @@ def build_player_pool(data):
         best['batting_order'] = bo
         deduped.append(best)
 
+    # ── Attach PMS / HES to each player ────────────────────────────────────
+    # Build game → opposing SP grade + HES lookup
+    game_hes_map = {}   # game_pk → HES score
+    game_sp_grade = {}  # team_id → opposing SP grade letter
+    for g in data['games']:
+        gpk = g['game_pk']
+        pf = data.get('park_factors', {}).get(g.get('venue_id'))
+        wx = data.get('weather', {}).get(gpk)
+        hes = compute_hes(pf, wx)
+        game_hes_map[gpk] = hes
+
+        home_sp = data.get('pitcher_stats', {}).get(g.get('home_sp_id'))
+        away_sp = data.get('pitcher_stats', {}).get(g.get('away_sp_id'))
+        # Away team faces home SP; home team faces away SP
+        game_sp_grade[g.get('away_team_id')] = compute_sp_grade(home_sp)
+        game_sp_grade[g.get('home_team_id')] = compute_sp_grade(away_sp)
+
+    # Map DK abbreviation → team_id via dk_salaries team + game_pk
+    # Each pool player has game_pk and team (DK abbr). Games have team_ids.
+    # Bridge: for each game, find which DK team abbr maps to home vs away team_id
+    # by checking dk_salaries: the SP player_id for home_sp must match a sal row
+    # with a specific team abbreviation.
+    gpk_abbr_to_id = {}  # (game_pk, dk_team_abbr) → team_id
+    for g in data['games']:
+        gpk = g['game_pk']
+        home_id, away_id = g.get('home_team_id'), g.get('away_team_id')
+        home_sp, away_sp = g.get('home_sp_id'), g.get('away_sp_id')
+        # Look up SP in salary map to find DK team abbr
+        home_sal = data['sal_map'].get(home_sp)
+        away_sal = data['sal_map'].get(away_sp)
+        if home_sal and home_sal.get('team'):
+            ht = TEAM_ABBR_MAP.get(home_sal['team'], home_sal['team'])
+            gpk_abbr_to_id[(gpk, ht)] = home_id
+        if away_sal and away_sal.get('team'):
+            at = TEAM_ABBR_MAP.get(away_sal['team'], away_sal['team'])
+            gpk_abbr_to_id[(gpk, at)] = away_id
+        # Also assign the other team by exclusion if one is known
+        known = set()
+        if (gpk, ht if home_sal else '') in gpk_abbr_to_id:
+            known.add(gpk_abbr_to_id.get((gpk, ht)))
+        if (gpk, at if away_sal else '') in gpk_abbr_to_id:
+            known.add(gpk_abbr_to_id.get((gpk, at)))
+
+    # Fallback: collect all DK team abbrs per game_pk from pool, assign by elimination
+    gpk_teams = defaultdict(set)
+    for p in deduped:
+        if p.get('game_pk'):
+            gpk_teams[p['game_pk']].add(p['team'])
+    for gpk, teams in gpk_teams.items():
+        g = next((g for g in data['games'] if g['game_pk'] == gpk), None)
+        if not g: continue
+        home_id, away_id = g.get('home_team_id'), g.get('away_team_id')
+        assigned = {v for (gp, _), v in gpk_abbr_to_id.items() if gp == gpk}
+        unassigned = [t for t in teams if (gpk, t) not in gpk_abbr_to_id]
+        for t in unassigned:
+            if home_id not in assigned:
+                gpk_abbr_to_id[(gpk, t)] = home_id
+                assigned.add(home_id)
+            elif away_id not in assigned:
+                gpk_abbr_to_id[(gpk, t)] = away_id
+                assigned.add(away_id)
+
+    for p in deduped:
+        gpk = p.get('game_pk')
+        hes = game_hes_map.get(gpk, 5.0)
+        p['hes'] = hes
+        tid = gpk_abbr_to_id.get((gpk, p['team']))
+        grade = game_sp_grade.get(tid)
+        p['pms'] = compute_pms(grade, hes)
+
+    # Log PMS/HES per team
+    team_pms = defaultdict(list)
+    for p in deduped:
+        if not p['is_pitcher']:
+            team_pms[p['team']].append(p.get('pms', 5))
+    pms_summary = sorted(
+        [(t, sum(v)/len(v)) for t, v in team_pms.items()],
+        key=lambda x: x[1], reverse=True
+    )
+    print(f"  PMS by team: {', '.join(f'{t}={avg:.1f}' for t, avg in pms_summary[:10])}")
+
     return deduped
 
 
 # ── Greedy Lineup Builder ────────────────────────────────────────────────────
 
 STACK_CONFIGS = [
-    {'name': '5-2',       'main': 5, 'subs': [2]},    # 30% — best winner config (backtest)
-    {'name': '5-2',       'main': 5, 'subs': [2]},
-    {'name': '5-2',       'main': 5, 'subs': [2]},
-    {'name': '5-3',       'main': 5, 'subs': [3]},    # 20%
+    {'name': '5-3',       'main': 5, 'subs': [3]},    # 20% — 5+3 is the GPP winner
     {'name': '5-3',       'main': 5, 'subs': [3]},
-    {'name': '5-naked',   'main': 5, 'subs': []},     # 20% — over-represented in winners
-    {'name': '5-naked',   'main': 5, 'subs': []},
-    {'name': '4-3',       'main': 4, 'subs': [3]},    # 30% — consistent performer
+    {'name': '5-2',       'main': 5, 'subs': [2]},    # 10%
+    {'name': '4-3',       'main': 4, 'subs': [3]},    # 30% — diversified correlation
     {'name': '4-3',       'main': 4, 'subs': [3]},
     {'name': '4-3',       'main': 4, 'subs': [3]},
+    {'name': '4-3-2',     'main': 4, 'subs': [3, 2]}, # 20% — multi-game correlation
+    {'name': '4-3-2',     'main': 4, 'subs': [3, 2]},
+    {'name': '3-3-2',     'main': 3, 'subs': [3, 2]}, # 10% — max diversification
+    {'name': '5-naked',   'main': 5, 'subs': []},     # 10% — naked 5-stack upside
 ]
 
 def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
@@ -527,6 +708,16 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
             else:
                 noise = H_W_GAME * zg + H_W_TEAM * zt + H_W_INDIV * zi
 
+            # PMS/HES edge boost: scale mean for high-edge matchups
+            # PMS 7+ (weak pitcher) = +8%, PMS 5 = neutral, PMS 3 = -4%
+            # HES 7+ (great env) = +5%, HES 5 = neutral, HES 3 = -3%
+            if not p['is_pitcher']:
+                pms = p.get('pms', 5)
+                hes = p.get('hes', 5)
+                edge_mult = 1.0 + (pms - 5) * 0.04 + (hes - 5) * 0.025
+                edge_mult = clip(edge_mult, 0.90, 1.15)
+                mean *= edge_mult
+
             scores[i] = max(0, mean + sd * noise)
 
     return scores
@@ -596,27 +787,45 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
     # Teams that can support 3-man sub stacks
     viable_3sub = [t for t, hs in team_hitters.items() if len(hs) >= 3]
 
-    # Leverage-based team weighting: ceiling / ownership
-    # High-ceiling + low-ownership teams get more lineups (GPP leverage)
+    # Team weighting: blend of leverage (ceiling/ownership) and game environment.
+    # Leverage alone over-indexes on low-owned teams regardless of game quality.
+    # Environment must be a strong independent factor so high-total games
+    # (e.g. Wrigley 12.5) aren't starved of exposure.
     team_leverage = {}
     for t in viable_teams:
         hitters = team_hitters[t]
         ceiling_sum = sum(h.get('ceiling', h['proj'] * 1.5) for h in hitters)
         own_sum = sum(h.get('ownership', 5.0) for h in hitters)
-        team_leverage[t] = ceiling_sum / max(own_sum, 5.0)
-    lev_arr = np.array([team_leverage.get(t, 1.0) ** 0.7 for t in viable_teams])
-    team_weights = lev_arr / lev_arr.sum()
+        lev = ceiling_sum / max(own_sum, 5.0)
+        gt = hitters[0].get('game_total', 8.5) if hitters else 8.5
+        env = (gt / 8.5) ** 2.5  # 12.5 → 2.83x, 9.0 → 1.18x, 7.0 → 0.58x
+        # PMS factor: teams facing weak pitchers get a matchup boost
+        pms_vals = [h.get('pms', 5) for h in hitters if h.get('pms')]
+        avg_pms = sum(pms_vals) / len(pms_vals) if pms_vals else 5.0
+        pms_mult = (avg_pms / 5.0) ** 1.5  # PMS 8 → 1.86x, PMS 5 → 1.0x, PMS 3 → 0.46x
+        team_leverage[t] = {'lev': lev, 'env': env * pms_mult, 'gt': gt}
+    # Normalize each component independently, then blend
+    levs = np.array([team_leverage[t]['lev'] for t in viable_teams])
+    envs = np.array([team_leverage[t]['env'] for t in viable_teams])
+    norm_lev = levs / levs.sum() if levs.sum() > 0 else np.ones(len(levs)) / len(levs)
+    norm_env = envs / envs.sum() if envs.sum() > 0 else np.ones(len(envs)) / len(envs)
+    blended = norm_lev * 0.50 + norm_env * 0.50
+    team_weights = blended / blended.sum()
     if mode == 'user':
         min_weight = max(0.025, 1.0 / len(viable_teams))
         team_weights = np.maximum(team_weights, min_weight)
         team_weights /= team_weights.sum()
     # Also compute for viable_5
-    lev_5_arr = np.array([team_leverage.get(t, 1.0) ** 0.7 for t in viable_5]) if viable_5 else None
-    team_5_weights = lev_5_arr / lev_5_arr.sum() if lev_5_arr is not None and len(lev_5_arr) else None
+    if viable_5:
+        v5_idx = [viable_teams.index(t) for t in viable_5 if t in viable_teams]
+        lev_5_arr = blended[v5_idx] if v5_idx else None
+        team_5_weights = lev_5_arr / lev_5_arr.sum() if lev_5_arr is not None and len(lev_5_arr) else None
+    else:
+        team_5_weights = None
 
-    # Log leverage scores
-    lev_sorted = sorted(team_leverage.items(), key=lambda x: x[1], reverse=True)
-    print(f"    Team leverage (ceiling/own): {', '.join(f'{t}={v:.1f}' for t, v in lev_sorted[:8])}")
+    # Log team weights
+    tw_sorted = sorted(zip(viable_teams, team_weights), key=lambda x: x[1], reverse=True)
+    print(f"    Team weights (lev+env): {', '.join(f'{t}={w*100:.1f}%' for t, w in tw_sorted[:10])}")
 
     lineups = []
     seen = set()
@@ -624,9 +833,22 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
     max_attempts = n_lineups * 4
     config_idx = 0
 
-    # User pool: cap any single team at 15% of lineups
+    # User pool: cap any single team at 15% of lineups (20% for high-total games)
     team_stack_counts = defaultdict(int)
-    team_cap = int(n_lineups * 0.15) if mode == 'user' else None
+    team_game_totals = {}
+    for p in pool:
+        t = p.get('team')
+        if t and t not in team_game_totals:
+            team_game_totals[t] = p.get('game_total', 8.5)
+    base_cap_pct = 0.15
+    team_cap_map = {}
+    if mode == 'user':
+        for t in viable_teams:
+            gt = team_game_totals.get(t, 8.5)
+            # High-total games (10+) get up to 20% cap
+            cap_pct = base_cap_pct + clip((gt - 9.0) * 0.015, 0, 0.05)
+            team_cap_map[t] = int(n_lineups * cap_pct)
+    team_cap = int(n_lineups * base_cap_pct) if mode == 'user' else None
 
     # Per-player exposure tracking
     player_appear = defaultdict(int)
@@ -641,8 +863,9 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         else:
             main_team = rng.choice(viable_teams, p=team_weights)
 
-        # Skip teams that hit the cap (user pool only)
-        if team_cap and team_stack_counts[main_team] >= team_cap:
+        # Skip teams that hit the cap (user pool only, per-team cap for high-total games)
+        effective_cap = team_cap_map.get(main_team, team_cap) if team_cap_map else team_cap
+        if effective_cap and team_stack_counts[main_team] >= effective_cap:
             attempts += 1
             continue
 
@@ -665,7 +888,10 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         for ss in sub_sizes:
             cands = [t for t in sub_candidates if t not in used_sub and len(team_hitters.get(t, [])) >= ss]
             if cands:
-                st = rng.choice(cands)
+                # Weight sub-stack selection toward high-environment teams
+                sub_wts = np.array([team_leverage.get(t, {}).get('env', 1.0) for t in cands])
+                sub_wts = sub_wts / sub_wts.sum()
+                st = rng.choice(cands, p=sub_wts)
                 sub_teams.append(st)
                 used_sub.add(st)
             else:
