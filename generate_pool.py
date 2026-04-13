@@ -57,7 +57,7 @@ def clip(val, lo, hi):
 
 
 # ── HES / SP Grade / PMS ────────────────────────────────────────────────────
-# Ported from frontend (hand-builders-hub.html) computeHES / computeSpGrade / computeSimplePMS
+# Ported from frontend: computeHES / computeSpGrade / computePMS (v2 — 8-component individual)
 
 def compute_hes(pf, wx):
     """Hitter Environment Score (1-10). Park + weather."""
@@ -114,13 +114,110 @@ def compute_sp_grade(ps):
         if a >= thresh: return letter
     return 'F'
 
-def compute_pms(grade, hes):
-    """Pitcher Matchup Score (1-10). Higher = better for hitter."""
-    if not grade:
+def compute_pms(pd, p_splits, bt, b_stats, bat_hand, b_splits=None, vaa=None, l7xwoba=None):
+    """PMS v2 — 8-component research-weighted Pitcher Matchup Score (1-10).
+    pd: pitcher_stats row. p_splits: { 'L': row, 'R': row }. bt: bat_tracking row.
+    b_stats: batter_stats row. bat_hand: 'L'/'R'/'S'. b_splits: { 'L': row, 'R': row }.
+    vaa: pitcher VAA (negative degrees). l7xwoba: L7 avg xwOBA.
+    """
+    if not pd:
         return 5.0
-    base = {'A+':1,'A':2,'B+':3,'B':4,'C+':6,'C':7,'D':8,'F':9}.get(grade, 5)
-    hes_adj = (hes - 5) * 0.2 if hes else 0
-    return clip(round(base + hes_adj), 1, 10)
+
+    def to_d(v):
+        return None if v is None else (v / 100.0 if v > 1 else v)
+    def to_r(v):
+        return None if v is None else (v if v > 1 else v * 100)
+
+    # Resolve pitcher split for this batter's hand
+    p_split = None
+    eff_hand = bat_hand
+    if bat_hand == 'S' and p_splits:
+        xw_l = safe(p_splits.get('L', {}).get('xwoba') or p_splits.get('L', {}).get('woba'), 0)
+        xw_r = safe(p_splits.get('R', {}).get('xwoba') or p_splits.get('R', {}).get('woba'), 0)
+        p_split = p_splits.get('L') if xw_l >= xw_r else p_splits.get('R')
+        eff_hand = 'L' if xw_l >= xw_r else 'R'
+    elif bat_hand and p_splits:
+        p_split = p_splits.get(bat_hand)
+
+    # Resolve batter split
+    b_split = None
+    if b_splits and eff_hand:
+        b_split = b_splits.get(eff_hand)
+
+    pts, max_pts = 0, 0
+
+    # 1. Platoon Vulnerability (3 pts)
+    pxw = safe(p_split.get('xwoba') if p_split else None, None) or safe(p_split.get('woba') if p_split else None, None)
+    if pxw is not None:
+        p = 3 if pxw >= 0.350 else 2 if pxw >= 0.320 else 1 if pxw >= 0.300 else 0
+        pts += p; max_pts += 3
+
+    # 2. Pitcher Stuff Quality (2 pts)
+    pp = safe(pd.get('pitching_plus'), None)
+    sp = safe(pd.get('stuff_plus'), None)
+    xf = safe(pd.get('xfip'), None)
+    if pp is not None or sp is not None or xf is not None:
+        if pp is not None:
+            p = 2 if pp <= 80 else 1 if pp <= 95 else 0
+        elif sp is not None:
+            p = 2 if sp <= 80 else 1 if sp <= 95 else 0
+        else:
+            p = 2 if xf >= 4.50 else 1 if xf >= 4.00 else 0
+        pts += p; max_pts += 2
+
+    # 3. Barrel Opportunity (2 pts)
+    p_brl = to_r(safe(pd.get('barrel_pct'), None))
+    h_brl = to_r(safe(b_stats.get('barrel_pct'), None)) if b_stats else None
+    h_hh = to_r(safe(b_stats.get('hard_hit_pct'), None)) if b_stats else None
+    if p_brl is not None and (h_brl is not None or h_hh is not None):
+        p = 0
+        if p_brl >= 9 and h_brl is not None and h_brl >= 9: p = 2
+        elif p_brl >= 9 or (h_brl is not None and h_brl >= 9): p = 1
+        elif p_brl >= 7 and h_hh is not None and h_hh >= 38: p = 1
+        pts += p; max_pts += 2
+
+    # 4. Swing Plane Alignment (2 pts)
+    atk = safe(bt.get('attack_angle'), None) if bt else None
+    vaa_val = vaa
+    if atk is not None and vaa_val is not None:
+        gap = abs(atk - abs(vaa_val))
+        p = 2 if gap <= 3 else 1 if gap <= 7 else 0
+        pts += p; max_pts += 2
+
+    # 5. K Environment (2 pts)
+    k_raw = safe(p_split.get('k_pct') if p_split else None, None) or safe(pd.get('k_pct'), None)
+    sw_raw = safe(pd.get('swstr_pct'), None)
+    if k_raw is not None:
+        k = to_d(k_raw)
+        p = 2 if k <= 0.18 else 1 if k <= 0.22 else 0
+        if p < 2 and sw_raw is not None and to_d(sw_raw) <= 0.09:
+            p = min(p + 1, 2)
+        pts += p; max_pts += 2
+
+    # 6. Contact Quality (2 pts)
+    sq_up = safe(bt.get('squared_up_pct'), None) if bt else None
+    bxw = safe(b_split.get('xwoba') if b_split else None, None) or safe(b_split.get('woba') if b_split else None, None) or (safe(b_stats.get('xwoba'), None) if b_stats else None)
+    p_hh = to_r(safe(p_split.get('hard_hit_pct') if p_split else None, None)) or to_r(safe(pd.get('hard_hit_pct'), None))
+    if bxw is not None or sq_up is not None:
+        strong_bat = (bxw is not None and bxw >= 0.370) or (sq_up is not None and sq_up >= 13)
+        strong_pit = p_hh is not None and p_hh >= 38
+        p = 2 if strong_bat and strong_pit else 1 if strong_bat or strong_pit else 0
+        pts += p; max_pts += 2
+
+    # 7. Discipline Matchup (1 pt)
+    o_swing = to_d(safe(b_stats.get('o_swing_pct'), None)) if b_stats else None
+    p_bb = to_d(safe(p_split.get('bb_pct') if p_split else None, None) or safe(pd.get('bb_pct'), None))
+    if o_swing is not None and p_bb is not None:
+        p = 1 if o_swing <= 0.28 and p_bb >= 0.09 else 0
+        pts += p; max_pts += 1
+
+    # 8. Recent Form (1 pt)
+    if l7xwoba is not None:
+        p = 1 if l7xwoba >= 0.400 else 0
+        pts += p; max_pts += 1
+
+    score = round((pts / max_pts) * 10) if max_pts > 0 else 5
+    return clip(score, 1, 10)
 
 
 # ── Data Fetching ────────────────────────────────────────────────────────────
@@ -203,7 +300,7 @@ def fetch_data(target_date, slate_filter=None):
         for r in own_rows:
             ownership[r['player_id']] = r.get('proj_ownership', 0)
 
-    # Pitcher stats for SP grade → PMS computation (current season first)
+    # Pitcher stats for SP grade + PMS computation (current season first)
     sp_ids = list(set(g.get('home_sp_id') for g in games if g.get('home_sp_id'))
                 | set(g.get('away_sp_id') for g in games if g.get('away_sp_id')))
     pitcher_stats = {}
@@ -211,11 +308,112 @@ def fetch_data(target_date, slate_filter=None):
         for i in range(0, len(sp_ids), 150):
             batch = sp_ids[i:i+150]
             rows = sb.table('pitcher_stats').select(
-                'player_id,season,xfip,siera,k_pct,bb_pct,swstr_pct,stuff_plus'
+                'player_id,season,xfip,siera,k_pct,bb_pct,swstr_pct,stuff_plus,pitching_plus,barrel_pct,hard_hit_pct'
             ).in_('player_id', batch).order('season', desc=True).execute().data or []
             for r in rows:
                 if r['player_id'] not in pitcher_stats:
                     pitcher_stats[r['player_id']] = r
+
+    # Pitcher splits (xwOBA, K%, BB%, hard_hit% by hand) for individual PMS
+    pitcher_splits = {}  # sp_id → { 'L': row, 'R': row }
+    if sp_ids:
+        for i in range(0, len(sp_ids), 150):
+            batch = sp_ids[i:i+150]
+            rows = sb.table('pitcher_splits').select(
+                'player_id,split,xwoba,woba,k_pct,bb_pct,hard_hit_pct,hr9,season'
+            ).in_('player_id', batch).order('season', desc=True).execute().data or []
+            for r in rows:
+                pid = r['player_id']
+                s = (r.get('split') or '').upper()
+                if s not in ('L', 'R'): continue
+                if pid not in pitcher_splits: pitcher_splits[pid] = {}
+                if s not in pitcher_splits[pid]: pitcher_splits[pid][s] = r
+
+    # Pitch arsenal — fastball release_height for VAA
+    pitcher_vaa = {}  # sp_id → VAA (negative degrees)
+    if sp_ids:
+        for i in range(0, len(sp_ids), 150):
+            batch = sp_ids[i:i+150]
+            rows = sb.table('pitch_arsenal').select(
+                'player_id,pitch_type,release_height,extension,season'
+            ).in_('player_id', batch).in_('pitch_type', ['FF', 'SI']).order('season', desc=True).execute().data or []
+            for r in rows:
+                pid = r['player_id']
+                if pid in pitcher_vaa: continue
+                rh = safe(r.get('release_height'), 0)
+                ext = safe(r.get('extension'), 5.5)
+                if rh > 0:
+                    dist = 60.5 - ext
+                    pitcher_vaa[pid] = -math.atan((rh - 2.5) / dist) * (180 / math.pi)
+
+    # All hitter player_ids for batter data fetches
+    all_hitter_ids = list(set(p['player_id'] for p in projs if not p.get('is_pitcher')))
+
+    # Batter stats (barrel%, hard_hit%, xwOBA, o_swing%, etc.)
+    batter_stats = {}
+    if all_hitter_ids:
+        for i in range(0, len(all_hitter_ids), 150):
+            batch = all_hitter_ids[i:i+150]
+            rows = sb.table('batter_stats').select(
+                'player_id,barrel_pct,hard_hit_pct,xwoba,o_swing_pct,swstr_pct,k_pct,season'
+            ).in_('player_id', batch).order('season', desc=True).execute().data or []
+            for r in rows:
+                if r['player_id'] not in batter_stats:
+                    batter_stats[r['player_id']] = r
+
+    # Batter splits (xwOBA by pitcher hand)
+    batter_splits = {}  # pid → { 'L': row, 'R': row }
+    if all_hitter_ids:
+        for i in range(0, len(all_hitter_ids), 150):
+            batch = all_hitter_ids[i:i+150]
+            rows = sb.table('batter_splits').select(
+                'player_id,split,xwoba,woba,k_pct,bb_pct,iso,season'
+            ).in_('player_id', batch).order('season', desc=True).execute().data or []
+            for r in rows:
+                pid = r['player_id']
+                s = (r.get('split') or '').upper()
+                if s not in ('L', 'R'): continue
+                if pid not in batter_splits: batter_splits[pid] = {}
+                if s not in batter_splits[pid]: batter_splits[pid][s] = r
+
+    # Bat tracking (attack_angle, squared_up_pct, bat_speed)
+    bat_tracking = {}
+    if all_hitter_ids:
+        for i in range(0, len(all_hitter_ids), 150):
+            batch = all_hitter_ids[i:i+150]
+            rows = sb.table('bat_tracking').select(
+                'player_id,attack_angle,squared_up_pct,bat_speed,season'
+            ).in_('player_id', batch).order('season', desc=True).execute().data or []
+            for r in rows:
+                if r['player_id'] not in bat_tracking:
+                    bat_tracking[r['player_id']] = r
+
+    # Rosters — bat hand (L/R/S)
+    bats_map = {}
+    if all_hitter_ids:
+        for i in range(0, len(all_hitter_ids), 150):
+            batch = all_hitter_ids[i:i+150]
+            rows = sb.table('rosters').select(
+                'player_id,bats'
+            ).in_('player_id', batch).execute().data or []
+            for r in rows:
+                if r.get('bats'): bats_map[r['player_id']] = r['bats']
+
+    # Batter game logs (L7 xwOBA)
+    l7_map = {}
+    if all_hitter_ids:
+        for i in range(0, len(all_hitter_ids), 150):
+            batch = all_hitter_ids[i:i+150]
+            rows = sb.table('batter_game_logs').select(
+                'player_id,game_date,xwoba'
+            ).in_('player_id', batch).order('game_date', desc=True).limit(5000).execute().data or []
+            grouped = defaultdict(list)
+            for r in rows:
+                grouped[r['player_id']].append(r)
+            for pid, games in grouped.items():
+                recent = [g for g in games[:7] if g.get('xwoba') is not None]
+                if len(recent) >= 2:
+                    l7_map[pid] = sum(safe(g['xwoba'], 0) for g in recent) / len(recent)
 
     # Park factors
     venue_ids = list(set(g.get('venue_id') for g in games if g.get('venue_id')))
@@ -240,6 +438,9 @@ def fetch_data(target_date, slate_filter=None):
         'odds': odds, 'ownership': ownership,
         'pitcher_stats': pitcher_stats, 'park_factors': park_factors,
         'weather': weather,
+        'pitcher_splits': pitcher_splits, 'pitcher_vaa': pitcher_vaa,
+        'batter_stats': batter_stats, 'batter_splits': batter_splits,
+        'bat_tracking': bat_tracking, 'bats_map': bats_map, 'l7_map': l7_map,
     }
 
 
@@ -322,9 +523,9 @@ def build_player_pool(data):
         deduped.append(best)
 
     # ── Attach PMS / HES to each player ────────────────────────────────────
-    # Build game → opposing SP grade + HES lookup
+    # Build game → HES + opposing SP ID lookup
     game_hes_map = {}   # game_pk → HES score
-    game_sp_grade = {}  # team_id → opposing SP grade letter
+    game_opp_sp = {}    # team_id → opposing SP player_id
     for g in data['games']:
         gpk = g['game_pk']
         pf = data.get('park_factors', {}).get(g.get('venue_id'))
@@ -332,23 +533,18 @@ def build_player_pool(data):
         hes = compute_hes(pf, wx)
         game_hes_map[gpk] = hes
 
-        home_sp = data.get('pitcher_stats', {}).get(g.get('home_sp_id'))
-        away_sp = data.get('pitcher_stats', {}).get(g.get('away_sp_id'))
         # Away team faces home SP; home team faces away SP
-        game_sp_grade[g.get('away_team_id')] = compute_sp_grade(home_sp)
-        game_sp_grade[g.get('home_team_id')] = compute_sp_grade(away_sp)
+        if g.get('home_sp_id'):
+            game_opp_sp[g.get('away_team_id')] = g['home_sp_id']
+        if g.get('away_sp_id'):
+            game_opp_sp[g.get('home_team_id')] = g['away_sp_id']
 
     # Map DK abbreviation → team_id via dk_salaries team + game_pk
-    # Each pool player has game_pk and team (DK abbr). Games have team_ids.
-    # Bridge: for each game, find which DK team abbr maps to home vs away team_id
-    # by checking dk_salaries: the SP player_id for home_sp must match a sal row
-    # with a specific team abbreviation.
     gpk_abbr_to_id = {}  # (game_pk, dk_team_abbr) → team_id
     for g in data['games']:
         gpk = g['game_pk']
         home_id, away_id = g.get('home_team_id'), g.get('away_team_id')
         home_sp, away_sp = g.get('home_sp_id'), g.get('away_sp_id')
-        # Look up SP in salary map to find DK team abbr
         home_sal = data['sal_map'].get(home_sp)
         away_sal = data['sal_map'].get(away_sp)
         if home_sal and home_sal.get('team'):
@@ -357,12 +553,6 @@ def build_player_pool(data):
         if away_sal and away_sal.get('team'):
             at = TEAM_ABBR_MAP.get(away_sal['team'], away_sal['team'])
             gpk_abbr_to_id[(gpk, at)] = away_id
-        # Also assign the other team by exclusion if one is known
-        known = set()
-        if (gpk, ht if home_sal else '') in gpk_abbr_to_id:
-            known.add(gpk_abbr_to_id.get((gpk, ht)))
-        if (gpk, at if away_sal else '') in gpk_abbr_to_id:
-            known.add(gpk_abbr_to_id.get((gpk, at)))
 
     # Fallback: collect all DK team abbrs per game_pk from pool, assign by elimination
     gpk_teams = defaultdict(set)
@@ -383,24 +573,44 @@ def build_player_pool(data):
                 gpk_abbr_to_id[(gpk, t)] = away_id
                 assigned.add(away_id)
 
+    # Individual PMS per hitter using all available data
     for p in deduped:
         gpk = p.get('game_pk')
         hes = game_hes_map.get(gpk, 5.0)
         p['hes'] = hes
-        tid = gpk_abbr_to_id.get((gpk, p['team']))
-        grade = game_sp_grade.get(tid)
-        p['pms'] = compute_pms(grade, hes)
 
-    # Log PMS/HES per team
+        if p['is_pitcher']:
+            p['pms'] = 5.0
+            continue
+
+        tid = gpk_abbr_to_id.get((gpk, p['team']))
+        opp_sp_id = game_opp_sp.get(tid)
+        if not opp_sp_id:
+            p['pms'] = 5.0
+            continue
+
+        opp_pd = data['pitcher_stats'].get(opp_sp_id)
+        opp_splits = data['pitcher_splits'].get(opp_sp_id)
+        opp_vaa = data['pitcher_vaa'].get(opp_sp_id)
+        bt = data['bat_tracking'].get(p['player_id'])
+        b_stats = data['batter_stats'].get(p['player_id'])
+        b_splits = data['batter_splits'].get(p['player_id'])
+        bat_hand = data['bats_map'].get(p['player_id'])
+        l7form = data['l7_map'].get(p['player_id'])
+
+        p['pms'] = compute_pms(opp_pd, opp_splits, bt, b_stats, bat_hand,
+                               b_splits, opp_vaa, l7form)
+
+    # Log individual PMS per team (shows spread, not just avg)
     team_pms = defaultdict(list)
     for p in deduped:
         if not p['is_pitcher']:
             team_pms[p['team']].append(p.get('pms', 5))
     pms_summary = sorted(
-        [(t, sum(v)/len(v)) for t, v in team_pms.items()],
+        [(t, sum(v)/len(v), min(v), max(v)) for t, v in team_pms.items()],
         key=lambda x: x[1], reverse=True
     )
-    print(f"  PMS by team: {', '.join(f'{t}={avg:.1f}' for t, avg in pms_summary[:10])}")
+    print(f"  PMS by team (avg/min-max): {', '.join(f'{t}={avg:.1f}({lo}-{hi})' for t, avg, lo, hi in pms_summary[:10])}")
 
     return deduped
 

@@ -6917,8 +6917,8 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
   updatePitcherStat('sc-kbb',   (pd.k_pct && pd.bb_pct) ? ((pd.k_pct - pd.bb_pct)*100).toFixed(1)+'%' : '--');
   updatePitcherStat('sc-swstr', pd.swstr_pct  ? (pd.swstr_pct*100).toFixed(1)+'%' : '--');
   updatePitcherStat('sc-csw',   pd.csw_pct    ? (pd.csw_pct*100).toFixed(1)+'%'   : '--');
-  updatePitcherStat('sc-hardhit', pd.hard_hit_pct ? parseFloat(pd.hard_hit_pct).toFixed(1)+'%' : '--');
-  updatePitcherStat('sc-barrel', pd.barrel_pct ? parseFloat(pd.barrel_pct).toFixed(1)+'%' : '--');
+  updatePitcherStat('sc-hardhit', pd.hard_hit_pct ? (parseFloat(pd.hard_hit_pct) < 1 ? (parseFloat(pd.hard_hit_pct)*100).toFixed(1) : parseFloat(pd.hard_hit_pct).toFixed(1))+'%' : '--');
+  updatePitcherStat('sc-barrel', pd.barrel_pct ? (parseFloat(pd.barrel_pct) < 1 ? (parseFloat(pd.barrel_pct)*100).toFixed(1) : parseFloat(pd.barrel_pct).toFixed(1))+'%' : '--');
   updatePitcherStat('sc-babip', pd.babip      ? parseFloat(pd.babip).toFixed(3)   : '--');
   updatePitcherStat('sc-lob',   pd.lob_pct    ? (pd.lob_pct*100).toFixed(1)+'%'  : '--');
   updatePitcherStat('sc-whip',  pd.whip != null ? parseFloat(pd.whip).toFixed(2)  : '--');
@@ -7443,21 +7443,28 @@ async function loadBullpen(teamId, gameDate) {
     return;
   }
 
-  // Get unique reliever IDs
-  const allRelieverIds = [...new Set(apps.map(a => a.player_id))];
+  // Get unique reliever IDs from appearances
+  const appRelieverIds = [...new Set(apps.map(a => a.player_id))];
 
-  // Filter to 40-man roster only
+  // Fetch ALL rostered pitchers for this team (catches relievers with no recent appearances)
   const { data: rosterData } = await sb
     .from('rosters')
-    .select('player_id')
-    .in('player_id', allRelieverIds)
+    .select('player_id,player_name,position_type')
     .eq('team_id', teamId)
-    .eq('on_40_man', true);
+    .eq('on_40_man', true)
+    .eq('position_type', 'Pitcher');
 
   const rosterSet = new Set((rosterData || []).map(r => r.player_id));
-  // Filter appearances and IDs to 40-man only — no fallback
+  // Filter appearances to 40-man only
   apps = apps.filter(a => rosterSet.has(a.player_id));
-  const filteredIds = [...new Set(apps.map(a => a.player_id))];
+
+  // Merge: relievers from appearances + all rostered pitchers who aren't today's starters
+  const todayStarters = new Set();
+  (allGames || []).forEach(g => { if (g.home_sp_id) todayStarters.add(g.home_sp_id); if (g.away_sp_id) todayStarters.add(g.away_sp_id); });
+  const rosterRelievers = (rosterData || [])
+    .filter(r => !todayStarters.has(r.player_id))
+    .map(r => r.player_id);
+  const filteredIds = [...new Set([...appRelieverIds.filter(id => rosterSet.has(id)), ...rosterRelievers])];
   if (filteredIds.length === 0) {
     container.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:20px;text-align:center;">No bullpen data for active roster</div>';
     return;
@@ -7522,7 +7529,11 @@ async function loadBullpen(teamId, gameDate) {
     }
   });
 
-  // Build per-reliever usage summary — 40-man roster only
+  // Build roster name lookup for relievers with no appearances
+  const rosterNameMap = {};
+  (rosterData || []).forEach(r => { rosterNameMap[r.player_id] = r.player_name || (statsMap[r.player_id] || {}).full_name || 'Unknown'; });
+
+  // Build per-reliever usage summary — includes all rostered relievers
   function buildRelievers(teamId) {
     const teamApps = apps.filter(a => a.team_id === teamId && filteredIds.includes(a.player_id));
     const byPlayer = {};
@@ -7538,6 +7549,20 @@ async function loadBullpen(teamId, gameDate) {
         };
       }
       byPlayer[app.player_id].appearances.push(app);
+    });
+
+    // Add rostered relievers with no recent appearances (fresh callups, IL returns, rested arms)
+    filteredIds.forEach(pid => {
+      if (!byPlayer[pid] && rosterSet.has(pid) && !todayStarters.has(pid)) {
+        const st = statsMap[pid];
+        byPlayer[pid] = {
+          player_id  : pid,
+          player_name: rosterNameMap[pid] || (st && st.full_name) || 'Unknown',
+          team_id    : teamId,
+          team_name  : '',
+          appearances: [],
+        };
+      }
     });
 
     // Sort: CL → SU → MR, then by grade score descending within each role
@@ -8916,66 +8941,126 @@ function updateLineupStatusForTeam(data, teamId) {
 //   4. Barrel opportunity — both hitter barrel% and pitcher barrel% allowed
 //   5. K environment — pitcher K% vs this batter's hand
 
-function computePMS(pd, pSplits, bt, bStats, batHand) {
-  let pts = 0, factors = 0;
+// PMS v2 — 8-component research-weighted Pitcher Matchup Score (1-10)
+// Weights reflect year-to-year predictive stability:
+//   Platoon splits (3) > Stuff/Barrel/Plane/K/Contact (2 each) > Discipline/Form (1 each)
+// Total max = 15. Score = (earned / available) * 10.
+// Extra params (bSplits, vaa, l7xwoba) are optional — score adapts to available data.
+function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba) {
+  const components = [];
   const toD = v => (v == null ? null : v > 1 ? v / 100 : v);
   const toR = v => (v == null ? null : v > 1 ? v : v * 100);
 
-  // 1. Platoon wOBA
-  // pSplits.L = pitcher vs LHH, pSplits.R = pitcher vs RHH
-  // Switch hitters: use whichever split is worse for the pitcher
+  // Resolve pitcher split for this batter's hand
+  // Switch hitters: use whichever side is worse for the pitcher (higher xwOBA)
   let pSplit = null;
+  let effectiveHand = batHand; // the side the batter will hit from
   if (batHand === 'S') {
-    const wL = parseFloat(pSplits?.L?.woba) || 0;
-    const wR = parseFloat(pSplits?.R?.woba) || 0;
-    pSplit = wL >= wR ? pSplits?.L : pSplits?.R;
+    const xwL = parseFloat(pSplits?.L?.xwoba || pSplits?.L?.woba) || 0;
+    const xwR = parseFloat(pSplits?.R?.xwoba || pSplits?.R?.woba) || 0;
+    pSplit = xwL >= xwR ? pSplits?.L : pSplits?.R;
+    effectiveHand = xwL >= xwR ? 'L' : 'R';
   } else if (batHand) {
     pSplit = pSplits?.[batHand];
   }
-  if (pSplit?.woba != null) {
-    const w = parseFloat(pSplit.woba);
-    if (w >= 0.340) pts += 2;
-    else if (w >= 0.315) pts += 1;
-    factors++;
+
+  // Resolve batter split for the opposing pitcher's hand
+  let bSplit = null;
+  if (bSplits) {
+    // bSplits keyed by pitcher hand the batter faces (L or R)
+    // For switch hitters, use the side they'll bat from (effectiveHand maps to pitcher hand)
+    const pitHand = effectiveHand === 'L' ? 'L' : effectiveHand === 'R' ? 'R' : null;
+    if (pitHand) bSplit = bSplits[pitHand];
   }
 
-  // 2. Pitcher xFIP
-  if (pd?.xfip != null) {
-    const x = parseFloat(pd.xfip);
-    if (x >= 4.50) pts += 2;
-    else if (x >= 4.00) pts += 1;
-    factors++;
+  // 1. Platoon Vulnerability (3 pts) — most stable split, most predictive
+  // Prefer xwOBA (removes BABIP luck), fall back to wOBA
+  const pxw = parseFloat(pSplit?.xwoba) || parseFloat(pSplit?.woba) || null;
+  if (pxw != null) {
+    const p = pxw >= 0.350 ? 3 : pxw >= 0.320 ? 2 : pxw >= 0.300 ? 1 : 0;
+    components.push({ name: 'Platoon Vulnerability', pts: p, max: 3, pxw });
   }
 
-  // 3. Swing plane alignment (attack_angle vs |VAA|)
-  const atk = bt?.attack_angle ?? null;
-  const vaa = currentPitcherVAA;        // negative, e.g. −4.8°
-  if (atk != null && vaa != null) {
-    const absGap = Math.abs(atk - Math.abs(vaa));
-    if (absGap <= 3)      pts += 2;
-    else if (absGap <= 7) pts += 1;
-    factors++;
+  // 2. Pitcher Stuff Quality (2 pts) — Stuff+ 0.73 y/y stability
+  // Pitching+ combines stuff + command. Fall back to Stuff+, then xFIP.
+  const pp = parseFloat(pd?.pitching_plus) || null;
+  const sp = parseFloat(pd?.stuff_plus) || null;
+  const xf = parseFloat(pd?.xfip) || null;
+  if (pp != null || sp != null || xf != null) {
+    let p = 0;
+    if (pp != null) {
+      p = pp <= 80 ? 2 : pp <= 95 ? 1 : 0;
+    } else if (sp != null) {
+      p = sp <= 80 ? 2 : sp <= 95 ? 1 : 0;
+    } else {
+      p = xf >= 4.50 ? 2 : xf >= 4.00 ? 1 : 0;
+    }
+    components.push({ name: 'Pitcher Stuff Quality', pts: p, max: 2, pp, sp, xf });
   }
 
-  // 4. Barrel opportunity (both profiles needed)
+  // 3. Barrel Opportunity (2 pts) — stabilizes in ~50 BIP, best power predictor
   const pBrl = toR(pd?.barrel_pct);
   const hBrl = toR(bStats?.barrel_pct);
-  if (pBrl != null && hBrl != null) {
-    if (pBrl >= 9 && hBrl >= 9)       pts += 2;
-    else if (pBrl >= 9 || hBrl >= 9)  pts += 1;
-    factors++;
+  const hHH = toR(bStats?.hard_hit_pct);
+  if (pBrl != null && (hBrl != null || hHH != null)) {
+    let p = 0;
+    if (pBrl >= 9 && hBrl >= 9) p = 2;
+    else if (pBrl >= 9 || hBrl >= 9) p = 1;
+    else if (pBrl >= 7 && hHH >= 38) p = 1; // hard hit fallback
+    components.push({ name: 'Barrel Opportunity', pts: p, max: 2, pBrl, hBrl, hHH });
   }
 
-  // 5. K environment (pitcher K% vs this hand, fall back to overall)
+  // 4. Swing Plane Alignment (2 pts) — mechanically grounded
+  const atk = bt?.attack_angle ?? null;
+  const vaaVal = vaa ?? currentPitcherVAA ?? null;
+  if (atk != null && vaaVal != null) {
+    const absGap = Math.abs(atk - Math.abs(vaaVal));
+    const p = absGap <= 3 ? 2 : absGap <= 7 ? 1 : 0;
+    components.push({ name: 'Swing Plane Alignment', pts: p, max: 2, atk, vaa: vaaVal, gap: absGap });
+  }
+
+  // 5. K Environment (2 pts) — K% stabilizes after ~150 BF
   const kRaw = pSplit?.k_pct ?? pd?.k_pct;
+  const swRaw = pd?.swstr_pct;
   if (kRaw != null) {
     const k = toD(kRaw);
-    if (k <= 0.18)      pts += 2;
-    else if (k <= 0.24) pts += 1;
-    factors++;
+    let p = k <= 0.18 ? 2 : k <= 0.22 ? 1 : 0;
+    // Bonus: very low swinging strike rate means pitcher can't miss bats
+    if (p < 2 && swRaw != null && toD(swRaw) <= 0.09) p = Math.min(p + 1, 2);
+    components.push({ name: 'K Environment', pts: p, max: 2, k, sw: toD(swRaw) });
   }
 
-  const score = factors > 0 ? Math.round((pts / (factors * 2)) * 10) : 5;
+  // 6. Contact Quality (2 pts) — batter contact skill vs pitcher hard-contact allowed
+  const sqUp = parseFloat(bt?.squared_up_pct) || null;
+  const bxw = parseFloat(bSplit?.xwoba || bSplit?.woba) || parseFloat(bStats?.xwoba) || null;
+  const pHH = toR(pSplit?.hard_hit_pct) ?? toR(pd?.hard_hit_pct);
+  if (bxw != null || sqUp != null) {
+    const strongBatter = (bxw != null && bxw >= 0.370) || (sqUp != null && sqUp >= 13);
+    const strongPitcher = pHH != null && pHH >= 38; // pitcher gives up hard contact
+    let p = 0;
+    if (strongBatter && strongPitcher) p = 2;
+    else if (strongBatter || strongPitcher) p = 1;
+    components.push({ name: 'Contact Quality', pts: p, max: 2, sqUp, bxw, pHH });
+  }
+
+  // 7. Discipline Matchup (1 pt) — low-chase hitter vs wild pitcher
+  const oSwing = toD(bStats?.o_swing_pct);
+  const pBB = toD(pSplit?.bb_pct ?? pd?.bb_pct);
+  if (oSwing != null && pBB != null) {
+    const p = (oSwing <= 0.28 && pBB >= 0.09) ? 1 : 0;
+    components.push({ name: 'Discipline Matchup', pts: p, max: 1, oSwing, pBB });
+  }
+
+  // 8. Recent Form (1 pt) — L7 xwOBA as tiebreaker
+  if (l7xwoba != null) {
+    const p = l7xwoba >= 0.400 ? 1 : 0;
+    components.push({ name: 'Recent Form', pts: p, max: 1, l7xwoba });
+  }
+
+  // Score: earned / available * 10
+  const totalPts = components.reduce((s, c) => s + c.pts, 0);
+  const maxPts = components.reduce((s, c) => s + c.max, 0);
+  const score = maxPts > 0 ? Math.round((totalPts / maxPts) * 10) : 5;
 
   let grade, cls;
   if      (score >= 8) { grade = 'Advantage';  cls = 'mb-advantage';    }
@@ -8984,7 +9069,7 @@ function computePMS(pd, pSplits, bt, bStats, batHand) {
   else if (score >= 2) { grade = 'Tough';      cls = 'mb-tough';        }
   else                 { grade = 'Very Tough'; cls = 'mb-pitcher-edge'; }
 
-  return { score, grade, cls, pSplit };
+  return { score, grade, cls, pSplit, components, totalPts, maxPts };
 }
 
 // Returns the hand of the pitcher currently facing the shown lineup
@@ -9026,9 +9111,15 @@ function renderAllPMS() {
 
     const bt      = cachedBatTracking[pid]   || cachedBatTracking[String(pid)]   || null;
     const bStats  = _cachedBatterStats[pid]  || _cachedBatterStats[String(pid)]  || null;
+    const bSplits = _cachedBatterSplits[pid] || _cachedBatterSplits[String(pid)] || null;
     const batHand = rowEl.querySelector('.br-hand')?.textContent?.trim() || null;
+    // L7 xwOBA from game logs
+    const form = cachedFormData[pid] || cachedFormData[String(pid)] || null;
+    const l7xwoba = form?.games?.length >= 3
+      ? form.games.slice(0, 7).reduce((s, g) => s + (g.xwoba || 0), 0) / Math.min(form.games.length, 7)
+      : null;
 
-    const { score, grade, cls, pSplit } = computePMS(pd, _activeSplits, bt, bStats, batHand);
+    const { score, grade, cls, pSplit } = computePMS(pd, _activeSplits, bt, bStats, batHand, bSplits, null, l7xwoba);
 
     // Update main row badge
     const badge = rowEl.querySelector('.br-matchup .matchup-badge');
@@ -10358,7 +10449,7 @@ function renderProjTab(rowId) {
   });
 }
 
-// Renders the 5-component PMS breakdown for a single batter row
+// Renders the 8-component PMS v2 breakdown for a single batter row
 function renderPMSBreakdown(rowId) {
   const pane  = document.getElementById(rowId + '-pms');
   if (!pane) return;
@@ -10376,104 +10467,110 @@ function renderPMSBreakdown(rowId) {
   const batHand = rowEl.querySelector('.br-hand')?.textContent?.trim() || null;
   const bt      = pid ? (cachedBatTracking[pid] || cachedBatTracking[String(pid)] || null) : null;
   const bStats  = pid ? (_cachedBatterStats[pid]  || _cachedBatterStats[String(pid)]  || null) : null;
+  const bSplits = pid ? (_cachedBatterSplits[pid] || _cachedBatterSplits[String(pid)] || null) : null;
+  const form    = pid ? (cachedFormData[pid] || cachedFormData[String(pid)] || null) : null;
+  const l7xwoba = form?.games?.length >= 3
+    ? form.games.slice(0, 7).reduce((s, g) => s + (g.xwoba || 0), 0) / Math.min(form.games.length, 7)
+    : null;
 
   const toD = v => (v == null ? null : v > 1 ? v / 100 : v);
   const toR = v => (v == null ? null : v > 1 ? v : v * 100);
 
-  let pSplit = null;
-  if (batHand === 'S') {
-    const wL = parseFloat(pSplits?.L?.woba) || 0;
-    const wR = parseFloat(pSplits?.R?.woba) || 0;
-    pSplit = wL >= wR ? pSplits?.L : pSplits?.R;
-  } else if (batHand) {
-    pSplit = pSplits?.[batHand];
-  }
+  // computePMS now returns { score, grade, cls, pSplit, components, totalPts, maxPts }
+  const result = computePMS(pd, pSplits, bt, bStats, batHand, bSplits, null, l7xwoba);
+  const { score, grade, cls: gradeCls, pSplit, components: comps, totalPts, maxPts } = result;
 
-  const components = [];
+  // Build display descriptors for each component
+  const displayComps = comps.map(c => {
+    let value = '', desc = '';
+    switch (c.name) {
+      case 'Platoon Vulnerability': {
+        const lbl = batHand === 'S' ? 'best split' : batHand === 'L' ? 'vs LHH' : batHand === 'R' ? 'vs RHH' : 'vs split';
+        value = `Pitcher xwOBA ${c.pxw?.toFixed(3) || '—'} ${lbl}`;
+        desc = c.pts >= 2 ? 'Pitcher is highly vulnerable to this handedness — strong platoon edge'
+             : c.pts === 1 ? 'Moderate platoon advantage — slight hitter edge on this side'
+             : 'Pitcher handles this hand well — no platoon advantage';
+        break;
+      }
+      case 'Pitcher Stuff Quality': {
+        const metric = c.pp != null ? `Pitching+ ${c.pp}` : c.sp != null ? `Stuff+ ${c.sp}` : `xFIP ${c.xf?.toFixed(2)}`;
+        value = `${metric} (100 = avg)`;
+        desc = c.pts === 2 ? 'Below-average stuff — hitters can sit on pitches and drive mistakes'
+             : c.pts === 1 ? 'Slightly below average — exploitable but not a clear mismatch'
+             : 'Quality stuff — this pitcher limits hard contact structurally';
+        break;
+      }
+      case 'Barrel Opportunity': {
+        value = `Pitcher allows ${c.pBrl?.toFixed(1) || '—'}% barrels · Batter barrels ${c.hBrl?.toFixed(1) || '—'}%${c.hHH != null ? ` · HardHit ${c.hHH.toFixed(1)}%` : ''}`;
+        desc = c.pts === 2 ? 'Both profiles align — real power ceiling in this matchup'
+             : c.pts === 1 ? 'One side of the barrel profile is favorable'
+             : 'Low barrel rate on both ends — power upside is limited';
+        break;
+      }
+      case 'Swing Plane Alignment': {
+        value = `Attack ${c.atk}° · VAA ${c.vaa?.toFixed(1)}° · Gap ${c.gap?.toFixed(1)}°`;
+        desc = c.pts === 2 ? `${c.gap?.toFixed(1)}° gap — swing is on-plane with this delivery, maximizing the hard-contact window`
+             : c.pts === 1 ? `${c.gap?.toFixed(1)}° gap — slight mismatch, solid contact possible but the window is narrower`
+             : `${c.gap?.toFixed(1)}° gap — significant plane mismatch, structurally limits hard contact`;
+        break;
+      }
+      case 'K Environment': {
+        const kPct = c.k != null ? (c.k * 100).toFixed(1) : '—';
+        const swPct = c.sw != null ? (c.sw * 100).toFixed(1) : null;
+        value = `K% ${kPct}%${swPct ? ` · SwStr% ${swPct}%` : ''} (avg ~22% K)`;
+        desc = c.pts === 2 ? `Low K rate — batter consistently puts the ball in play`
+             : c.pts === 1 ? 'Moderate K rate — strikeout risk is manageable'
+             : `High K rate — strikeout is a real threat in this matchup`;
+        break;
+      }
+      case 'Contact Quality': {
+        const parts = [];
+        if (c.sqUp != null) parts.push(`SqUp ${c.sqUp.toFixed(1)}%`);
+        if (c.bxw != null) parts.push(`Batter xwOBA ${c.bxw.toFixed(3)}`);
+        if (c.pHH != null) parts.push(`Pitcher HardHit% ${c.pHH.toFixed(1)}%`);
+        value = parts.join(' · ') || 'Insufficient data';
+        desc = c.pts === 2 ? 'Elite contact hitter meets pitcher who gives up hard contact — high-quality collision'
+             : c.pts === 1 ? 'One side of the contact profile is strong'
+             : 'Neither profile suggests consistent hard contact in this matchup';
+        break;
+      }
+      case 'Discipline Matchup': {
+        const osPct = c.oSwing != null ? (c.oSwing * 100).toFixed(1) : '—';
+        const bbPct = c.pBB != null ? (c.pBB * 100).toFixed(1) : '—';
+        value = `Batter O-Swing ${osPct}% · Pitcher BB% ${bbPct}%`;
+        desc = c.pts === 1 ? 'Disciplined hitter vs wild pitcher — free bases likely'
+             : 'No clear discipline edge in this matchup';
+        break;
+      }
+      case 'Recent Form': {
+        value = `L7 xwOBA ${c.l7xwoba?.toFixed(3) || '—'}`;
+        desc = c.pts === 1 ? 'Hitter is locked in recently — form is a positive tiebreaker'
+             : 'Recent form is neutral or below threshold';
+        break;
+      }
+    }
+    return { ...c, value, desc };
+  });
 
-  // 1. Platoon wOBA
-  if (pSplit?.woba != null) {
-    const w   = parseFloat(pSplit.woba);
-    const pts = w >= 0.340 ? 2 : w >= 0.315 ? 1 : 0;
-    const lbl = batHand === 'L' ? 'vs LHH' : batHand === 'R' ? 'vs RHH' : 'vs split';
-    components.push({ name:'Platoon Advantage', pts, max:2,
-      value:`Pitcher allowed wOBA ${w.toFixed(3)} ${lbl}`,
-      desc: pts===2 ? 'Pitcher allows above-avg wOBA to this hand — exploit the platoon split'
-          : pts===1 ? 'Moderate wOBA allowed — slight hitter edge on this side'
-          :           'Pitcher dominates this handedness — no platoon advantage here' });
-  }
-
-  // 2. xFIP
-  if (pd.xfip != null) {
-    const x   = parseFloat(pd.xfip);
-    const pts = x >= 4.50 ? 2 : x >= 4.00 ? 1 : 0;
-    components.push({ name:'Pitcher Quality (xFIP)', pts, max:2,
-      value:`xFIP ${x.toFixed(2)} (avg ~4.20)`,
-      desc: pts===2 ? `xFIP ${x.toFixed(2)} — hitter-favorable, pitcher runs allow above average`
-          : pts===1 ? `xFIP ${x.toFixed(2)} — slightly above average, moderate vulnerability`
-          :           `xFIP ${x.toFixed(2)} — elite quality, limits expected run scoring` });
-  }
-
-  // 3. Swing plane alignment
-  const atk = bt?.attack_angle ?? null;
-  const vaa = currentPitcherVAA;
-  if (atk != null && vaa != null) {
-    const gap = Math.abs(atk - Math.abs(vaa));
-    const pts = gap <= 3 ? 2 : gap <= 7 ? 1 : 0;
-    components.push({ name:'Swing Plane Alignment', pts, max:2,
-      value:`Attack ${atk}° · Pitch VAA ${vaa.toFixed(1)}° · Gap ${gap.toFixed(1)}°`,
-      desc: pts===2 ? `${gap.toFixed(1)}° gap — swing is on-plane with this pitcher's delivery. The bat travels through the ball's path rather than crossing it, maximizing the hard-contact window.`
-          : pts===1 ? `${gap.toFixed(1)}° gap — slight mismatch between swing angle and pitch descent. Solid contact is still possible but the window is narrower; execution matters more here.`
-          :           `${gap.toFixed(1)}° gap — significant plane mismatch. The swing and pitch are crossing angles rather than running parallel, which structurally limits hard contact in this matchup.` });
-  }
-
-  // 4. Barrel opportunity
-  const pBrl = toR(pd.barrel_pct);
-  const hBrl = toR(bStats?.barrel_pct);
-  if (pBrl != null && hBrl != null) {
-    const pts = (pBrl >= 9 && hBrl >= 9) ? 2 : (pBrl >= 9 || hBrl >= 9) ? 1 : 0;
-    components.push({ name:'Barrel Opportunity', pts, max:2,
-      value:`Pitcher allows ${pBrl.toFixed(1)}% barrels · Batter barrels ${hBrl.toFixed(1)}%`,
-      desc: pts===2 ? 'Both profiles line up — real power ceiling in this matchup'
-          : pts===1 ? 'One side of the barrel profile is favorable — limited but possible'
-          :           'Low barrel rate on both ends — power upside is minimal' });
-  }
-
-  // 5. K environment
-  const kRaw = pSplit?.k_pct ?? pd.k_pct;
-  if (kRaw != null) {
-    const k   = toD(kRaw);
-    const pts = k <= 0.18 ? 2 : k <= 0.24 ? 1 : 0;
-    const src = pSplit?.k_pct != null ? `(${batHand==='L'?'vs LHH':'vs RHH'} split)` : '(overall)';
-    components.push({ name:'K Environment', pts, max:2,
-      value:`K% ${(k*100).toFixed(1)}% ${src} (avg ~22%)`,
-      desc: pts===2 ? `Only ${(k*100).toFixed(1)}% K rate — batter can consistently put the ball in play`
-          : pts===1 ? `Moderate K rate — strikeout risk is manageable`
-          :           `High K rate of ${(k*100).toFixed(1)}% — strikeout is a real outcome here` });
-  }
-
-  const totalPts = components.reduce((s,c) => s + c.pts, 0);
-  const maxPts   = components.reduce((s,c) => s + c.max,  0);
-  const { score, grade, cls } = computePMS(pd, pSplits, bt, bStats, batHand);
-
-  const dotColor = pts => pts===2 ? '#4ade80' : pts===1 ? '#fbbf24' : '#f87171';
+  // Dynamic dot color: green if scored > half max, yellow if scored > 0, red if 0
+  const dotClr = (pts, max) => pts >= Math.ceil(max / 2 + 0.1) ? '#4ade80' : pts > 0 ? '#fbbf24' : '#f87171';
   const pips = (pts, max) => Array.from({length:max}, (_,i) =>
     `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${i<pts?'#4ade80':'var(--border2)'};margin-right:2px;"></span>`
   ).join('');
 
   let html = '';
-  if (components.length === 0) {
+  if (displayComps.length === 0) {
     html = '<div style="color:var(--muted);font-size:11px;padding:12px;text-align:center;">Insufficient data for breakdown</div>';
   } else {
-    html = components.map(c => `
+    html = displayComps.map(c => `
       <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);">
-        <div style="width:8px;height:8px;border-radius:50%;background:${dotColor(c.pts)};flex-shrink:0;margin-top:3px;"></div>
+        <div style="width:8px;height:8px;border-radius:50%;background:${dotClr(c.pts, c.max)};flex-shrink:0;margin-top:3px;"></div>
         <div style="flex:1;min-width:0;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
             <span style="font-size:11px;font-weight:700;color:var(--text1);">${c.name}</span>
             <div style="display:flex;align-items:center;gap:5px;">
               ${pips(c.pts, c.max)}
-              <span style="font-size:10px;font-weight:700;color:${dotColor(c.pts)};">${c.pts}/${c.max}</span>
+              <span style="font-size:10px;font-weight:700;color:${dotClr(c.pts, c.max)};">${c.pts}/${c.max}</span>
             </div>
           </div>
           <div style="font-size:10px;color:var(--muted);margin-bottom:2px;">${c.value}</div>

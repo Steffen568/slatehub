@@ -3900,7 +3900,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
 .lc-chip-slots{display:flex;flex-direction:column;gap:0;padding:0 8px 8px;}
 /* Pitcher rows: pos | team | name | sal | proj | own% | xFIP | K% | Win% */
 .lc-slot-pitcher,.lc-shdr-pitcher{display:grid;grid-template-columns:24px 28px 1fr 46px 34px 40px 36px 40px 34px;gap:3px;align-items:center;padding:2px 0;}
-.lc-slot-pitcher.sim-row,.lc-slot-hitter.sim-row{grid-template-columns:24px 28px 1fr 18px 46px 38px;}
+.lc-slot-pitcher.sim-row,.lc-slot-hitter.sim-row{grid-template-columns:24px 28px 1fr 18px 46px 38px 28px;}
 /* Hitter rows: pos | team | name | BO | sal | proj | own% | wRC+ | wOBA | PMS */
 .lc-slot-hitter,.lc-shdr-hitter{display:grid;grid-template-columns:24px 28px 1fr 18px 46px 34px 40px 32px 40px 30px;gap:3px;align-items:center;padding:2px 0;}
 .lc-slot-pitcher{border-bottom:1px solid rgba(255,255,255,.05);}
@@ -5299,11 +5299,56 @@ async function loadPlayerPool(date, slate) {
 
   // 4. Batter stats — batched to avoid URL length limits
   const bRaw = allPlayerIds.length
-    ? await batchIn('batter_stats','player_id,full_name,wrc_plus,woba,iso,season','player_id',allPlayerIds,
+    ? await batchIn('batter_stats','player_id,full_name,wrc_plus,woba,iso,barrel_pct,hard_hit_pct,xwoba,o_swing_pct,swstr_pct,k_pct,avg_ev,season','player_id',allPlayerIds,
         q => q.order('season',{ascending:false}))
     : [];
   const bStatMap = {};
   bRaw.forEach(r => { if (!bStatMap[r.player_id]) bStatMap[r.player_id] = r; });
+
+  // 4b. Batter splits (xwOBA/wOBA by pitcher hand) — for PMS platoon + contact quality
+  const bSplitRaw = allPlayerIds.length
+    ? await batchIn('batter_splits','player_id,split,xwoba,woba,k_pct,bb_pct,iso,wrc_plus,season','player_id',allPlayerIds,
+        q => q.order('season',{ascending:false}))
+    : [];
+  const bSplitMap = {}; // pid → { L: row, R: row }
+  bSplitRaw.forEach(r => {
+    if (!bSplitMap[r.player_id]) bSplitMap[r.player_id] = {};
+    const s = r.split?.toUpperCase();
+    if ((s === 'L' || s === 'R') && !bSplitMap[r.player_id][s]) bSplitMap[r.player_id][s] = r;
+  });
+
+  // 4c. Bat tracking (attack angle, squared-up%, bat speed) — for PMS swing plane + contact quality
+  const btRaw = allPlayerIds.length
+    ? await batchIn('bat_tracking','player_id,attack_angle,squared_up_pct,bat_speed,swing_path_tilt,season','player_id',allPlayerIds,
+        q => q.order('season',{ascending:false}))
+    : [];
+  const batTrackMap = {};
+  btRaw.forEach(r => { if (!batTrackMap[r.player_id]) batTrackMap[r.player_id] = r; });
+
+  // 4d. Rosters — bat hand (L/R/S) for PMS split resolution
+  const rosterRaw = allPlayerIds.length
+    ? await batchIn('rosters','player_id,bats','player_id',allPlayerIds)
+    : [];
+  const batsMap = {};
+  rosterRaw.forEach(r => { if (r.bats) batsMap[r.player_id] = r.bats; });
+
+  // 4e. Batter game logs (L7 form) — recent xwOBA for PMS tiebreaker
+  const glRaw = allPlayerIds.length
+    ? await batchIn('batter_game_logs','player_id,game_date,xwoba','player_id',allPlayerIds,
+        q => q.order('game_date',{ascending:false}).limit(5000))
+    : [];
+  const l7Map = {}; // pid → L7 avg xwOBA
+  const glGrouped = {};
+  glRaw.forEach(r => {
+    if (!glGrouped[r.player_id]) glGrouped[r.player_id] = [];
+    glGrouped[r.player_id].push(r);
+  });
+  Object.entries(glGrouped).forEach(([pid, games]) => {
+    if (games.length >= 3) {
+      const recent = games.slice(0, 7).filter(g => g.xwoba != null);
+      if (recent.length >= 2) l7Map[pid] = recent.reduce((s, g) => s + parseFloat(g.xwoba), 0) / recent.length;
+    }
+  });
 
   // 5. Projections — full stat line for hitters + pitcher stats
   //    Also fetch all pitcher projections for the date (is_pitcher=true) to get the authoritative
@@ -5401,14 +5446,43 @@ async function loadPlayerPool(date, slate) {
   _weather = {};
   wxRaw.forEach(r => { _weather[r.game_pk] = r; });
 
-  // 8. SP stats for game starters (for hitter SP grade)
+  // 8. SP stats for game starters (for hitter SP grade + PMS)
   const spIds = [...new Set(_games.flatMap(g=>[g.home_sp_id,g.away_sp_id]).filter(Boolean))];
   const spRaw = spIds.length
-    ? await batchIn('pitcher_stats','player_id,full_name,xfip,siera,k_pct,bb_pct,swstr_pct,stuff_plus,location_plus,pitching_plus,era','player_id',spIds,
+    ? await batchIn('pitcher_stats','player_id,full_name,xfip,siera,k_pct,bb_pct,swstr_pct,stuff_plus,location_plus,pitching_plus,era,barrel_pct,hard_hit_pct','player_id',spIds,
         q => q.order('season',{ascending:false}))
     : [];
   const spStatMap = {};
   spRaw.forEach(r => { if (!spStatMap[r.player_id]) spStatMap[r.player_id] = r; });
+
+  // 8b. Pitcher splits (xwOBA, K%, BB%, hard_hit% by hand) — for PMS platoon + K environment
+  const pSplitRaw = spIds.length
+    ? await batchIn('pitcher_splits','player_id,split,xwoba,woba,k_pct,bb_pct,hard_hit_pct,hr9,season','player_id',spIds,
+        q => q.order('season',{ascending:false}))
+    : [];
+  const pSplitMap = {}; // spId → { L: row, R: row }
+  pSplitRaw.forEach(r => {
+    if (!pSplitMap[r.player_id]) pSplitMap[r.player_id] = {};
+    const s = r.split?.toUpperCase();
+    if ((s === 'L' || s === 'R') && !pSplitMap[r.player_id][s]) pSplitMap[r.player_id][s] = r;
+  });
+
+  // 8c. Pitch arsenal — fastball release_height for VAA calculation
+  const arsenalRaw = spIds.length
+    ? await batchIn('pitch_arsenal','player_id,pitch_type,release_height,velo,extension','player_id',spIds,
+        q => q.in('pitch_type',['FF','SI']).order('season',{ascending:false}))
+    : [];
+  const vaaMap = {}; // spId → VAA (negative degrees)
+  arsenalRaw.forEach(r => {
+    if (vaaMap[r.player_id] != null) return; // keep first (most recent season)
+    const rh = parseFloat(r.release_height);
+    const ext = parseFloat(r.extension) || 5.5;
+    if (rh > 0) {
+      // VAA = angle from release point to zone center (~2.5ft), over ~55ft distance
+      const dist = 60.5 - ext;
+      vaaMap[r.player_id] = -Math.atan((rh - 2.5) / dist) * (180 / Math.PI);
+    }
+  });
 
   // Name-based fallback: spStatMap uses MLB API ids (from games table) which match pitcher_stats.
   // dk_salaries may use different ids, so we also index by lowercase full_name for fallback lookup.
@@ -5418,7 +5492,7 @@ async function loadPlayerPool(date, slate) {
   // 9. Pitcher stats — keyed by MLB API player_id (same IDs as player_projections + pitcher_stats)
   const mlbSpIds = pitcherProjRaw.map(r => r.player_id).filter(Boolean);
   const pRaw = mlbSpIds.length
-    ? await batchIn('pitcher_stats','player_id,xfip,siera,k_pct,bb_pct,swstr_pct,stuff_plus,location_plus,pitching_plus,era','player_id',mlbSpIds,
+    ? await batchIn('pitcher_stats','player_id,xfip,siera,k_pct,bb_pct,swstr_pct,stuff_plus,location_plus,pitching_plus,era,barrel_pct,hard_hit_pct','player_id',mlbSpIds,
         q => q.order('season',{ascending:false}))
     : [];
   const pitcherStatMap = {};
@@ -5441,7 +5515,7 @@ async function loadPlayerPool(date, slate) {
   });
 
   // ── Context maps ───────────────────────────────────────────────────────────
-  const gameSpMap  = {};  // team_id → { name, grade }
+  const gameSpMap  = {};  // team_id → { name, grade, spId }
   const gameHesMap = {};  // game_pk → { score, grade }
 
   _games.forEach(g => {
@@ -5452,16 +5526,19 @@ async function loadPlayerPool(date, slate) {
     const awaySp = spStatMap[g.away_sp_id];
 
     // Always set SP name from games table; grade is bonus if stats exist
+    // spId tracks the opposing pitcher's ID for PMS data lookups
     if (g.home_sp_name || g.home_sp_id) {
       gameSpMap[g.away_team_id] = {
         name:  g.home_sp_name || homeSp?.full_name || '—',
         grade: homeSp ? computeSpGrade(homeSp) : null,
+        spId:  g.home_sp_id || null,
       };
     }
     if (g.away_sp_name || g.away_sp_id) {
       gameSpMap[g.home_team_id] = {
         name:  g.away_sp_name || awaySp?.full_name || '—',
         grade: awaySp ? computeSpGrade(awaySp) : null,
+        spId:  g.away_sp_id || null,
       };
     }
   });
@@ -5486,6 +5563,20 @@ async function loadPlayerPool(date, slate) {
     const gamePk  = teamId ? teamGameMap[teamId] : null;
     const spInfo  = teamId ? gameSpMap[teamId]   : null;
     const hesInfo = gamePk ? gameHesMap[gamePk]  : null;
+
+    // Individual PMS: resolve opposing SP data for this hitter
+    const oppSpId   = spInfo?.spId ?? null;
+    const oppPd     = oppSpId ? (spStatMap[oppSpId] || null) : null;
+    const oppSplits = oppSpId ? (pSplitMap[oppSpId] || null) : null;
+    const oppVaa    = oppSpId ? (vaaMap[oppSpId] ?? null) : null;
+    const bt        = batTrackMap[s.player_id] || null;
+    const bSplit    = bSplitMap[s.player_id] || null;
+    const batHand   = batsMap[s.player_id] || null;
+    const l7form    = l7Map[s.player_id] ?? null;
+
+    const pmsResult = oppPd
+      ? computePMS(oppPd, oppSplits, bt, bs, batHand, bSplit, oppVaa, l7form)
+      : null;
 
     allHitters.push({
       player_id:        s.player_id,
@@ -5518,7 +5609,7 @@ async function loadPlayerPool(date, slate) {
       sp_name:          spInfo?.name  ?? null,
       sp_grade:         spInfo?.grade ?? null,
       hes:              hesInfo?.score ?? null,
-      pms:              computeSimplePMS(spInfo, hesInfo?.score),
+      pms:              pmsResult?.score ?? null,
     });
   });
 
@@ -8996,6 +9087,8 @@ function renderPoolCards() {
         const mult = sl.isCpt ? 1.5 : 1.0;
         const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
         const pc = sl.isCpt ? {bg:'#a78bfa',tx:'#fff'} : posColor(p.position || 'OF');
+        const pv = p.pms;
+        const pmsClr = pv >= 8 ? '#4ade80' : pv >= 6 ? '#fbbf24' : pv >= 4 ? 'var(--muted)' : pv != null ? '#f87171' : 'var(--muted)';
         return `<div class="lc-slot-hitter sim-row">
           <span class="lc-slot-pos" style="background:${pc.bg};color:${pc.tx};">${label}</span>
           <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
@@ -9003,6 +9096,7 @@ function renderPoolCards() {
           <span class="lc-slot-bo">${p.batting_order??'—'}</span>
           <span class="lc-slot-sal">${fmtSal((p.salary||0)*mult)}</span>
           <span class="lc-slot-proj">${fmtProj((p.proj_dk_pts||0)*mult)}</span>
+          <span class="lc-slot-pms" style="color:${pmsClr};font-size:9px;font-weight:600;">${pv != null ? pv : ''}</span>
         </div>`;
       }).join('');
       hitRows = sdRows;
@@ -9022,6 +9116,7 @@ function renderPoolCards() {
           <span></span>
           <span class="lc-slot-sal">${fmtSal(p.salary)}</span>
           <span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span>
+          <span></span>
         </div>`;
       }).join('');
 
@@ -9031,6 +9126,8 @@ function renderPoolCards() {
         const tc = abbrColor(p.team || '');
         const pc = posColor(sl.pos);
         const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
+        const pv = p.pms;
+        const pmsClr = pv >= 8 ? '#4ade80' : pv >= 6 ? '#fbbf24' : pv >= 4 ? 'var(--muted)' : pv != null ? '#f87171' : 'var(--muted)';
         return `<div class="lc-slot-hitter sim-row">
           <span class="lc-slot-pos" style="background:${pc.bg};color:${pc.tx};">${sl.pos}</span>
           <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
@@ -9038,6 +9135,7 @@ function renderPoolCards() {
           <span class="lc-slot-bo">${p.batting_order??'—'}</span>
           <span class="lc-slot-sal">${fmtSal(p.salary)}</span>
           <span class="lc-slot-proj">${fmtProj(p.proj_dk_pts)}</span>
+          <span class="lc-slot-pms" style="color:${pmsClr};font-size:9px;font-weight:600;">${pv != null ? pv : ''}</span>
         </div>`;
       }).join('');
     }
@@ -11894,15 +11992,123 @@ function computeSpGrade(pd) {
          a>=2.0?{letter:'D',cls:'g-D'}:{letter:'F',cls:'g-D'};
 }
 
-// PMS = Pitcher Matchup Score (1–10). Higher = better matchup for hitter.
-// Inverts SP grade: elite pitcher (A+) → low PMS, bad pitcher (F) → high PMS.
-// Adjusted by HES (park/weather environment).
-function computeSimplePMS(spInfo, hesScore) {
-  if (!spInfo?.grade) return null;
-  const gradeBase = {'A+':1,'A':2,'B+':3,'B':4,'B-':5,'C+':6,'C':7,'C-':7,'D':8,'F':9};
-  const base = gradeBase[spInfo.grade.letter] ?? 5;
-  const hesAdj = hesScore != null ? (hesScore - 5) * 0.2 : 0;
-  return Math.min(10, Math.max(1, Math.round(base + hesAdj)));
+// PMS v2 — 8-component research-weighted Pitcher Matchup Score (1-10)
+// Weights reflect year-to-year predictive stability:
+//   Platoon splits (3) > Stuff/Barrel/Plane/K/Contact (2 each) > Discipline/Form (1 each)
+// Total max = 15. Score = (earned / available) * 10.
+function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba) {
+  const components = [];
+  const toD = v => (v == null ? null : v > 1 ? v / 100 : v);
+  const toR = v => (v == null ? null : v > 1 ? v : v * 100);
+
+  // Resolve pitcher split for this batter's hand
+  let pSplit = null;
+  let effectiveHand = batHand;
+  if (batHand === 'S') {
+    const xwL = parseFloat(pSplits?.L?.xwoba || pSplits?.L?.woba) || 0;
+    const xwR = parseFloat(pSplits?.R?.xwoba || pSplits?.R?.woba) || 0;
+    pSplit = xwL >= xwR ? pSplits?.L : pSplits?.R;
+    effectiveHand = xwL >= xwR ? 'L' : 'R';
+  } else if (batHand) {
+    pSplit = pSplits?.[batHand];
+  }
+
+  // Resolve batter split
+  let bSplit = null;
+  if (bSplits) {
+    const pitHand = effectiveHand === 'L' ? 'L' : effectiveHand === 'R' ? 'R' : null;
+    if (pitHand) bSplit = bSplits[pitHand];
+  }
+
+  // 1. Platoon Vulnerability (3 pts)
+  const pxw = parseFloat(pSplit?.xwoba) || parseFloat(pSplit?.woba) || null;
+  if (pxw != null) {
+    const p = pxw >= 0.350 ? 3 : pxw >= 0.320 ? 2 : pxw >= 0.300 ? 1 : 0;
+    components.push({ name: 'Platoon Vulnerability', pts: p, max: 3, pxw });
+  }
+
+  // 2. Pitcher Stuff Quality (2 pts)
+  const pp = parseFloat(pd?.pitching_plus) || null;
+  const sp = parseFloat(pd?.stuff_plus) || null;
+  const xf = parseFloat(pd?.xfip) || null;
+  if (pp != null || sp != null || xf != null) {
+    let p = 0;
+    if (pp != null) p = pp <= 80 ? 2 : pp <= 95 ? 1 : 0;
+    else if (sp != null) p = sp <= 80 ? 2 : sp <= 95 ? 1 : 0;
+    else p = xf >= 4.50 ? 2 : xf >= 4.00 ? 1 : 0;
+    components.push({ name: 'Pitcher Stuff Quality', pts: p, max: 2, pp, sp, xf });
+  }
+
+  // 3. Barrel Opportunity (2 pts)
+  const pBrl = toR(pd?.barrel_pct);
+  const hBrl = toR(bStats?.barrel_pct);
+  const hHH = toR(bStats?.hard_hit_pct);
+  if (pBrl != null && (hBrl != null || hHH != null)) {
+    let p = 0;
+    if (pBrl >= 9 && hBrl >= 9) p = 2;
+    else if (pBrl >= 9 || hBrl >= 9) p = 1;
+    else if (pBrl >= 7 && hHH >= 38) p = 1;
+    components.push({ name: 'Barrel Opportunity', pts: p, max: 2, pBrl, hBrl, hHH });
+  }
+
+  // 4. Swing Plane Alignment (2 pts)
+  const atk = bt?.attack_angle ?? null;
+  const vaaVal = vaa ?? null;
+  if (atk != null && vaaVal != null) {
+    const absGap = Math.abs(atk - Math.abs(vaaVal));
+    const p = absGap <= 3 ? 2 : absGap <= 7 ? 1 : 0;
+    components.push({ name: 'Swing Plane Alignment', pts: p, max: 2, atk, vaa: vaaVal, gap: absGap });
+  }
+
+  // 5. K Environment (2 pts)
+  const kRaw = pSplit?.k_pct ?? pd?.k_pct;
+  const swRaw = pd?.swstr_pct;
+  if (kRaw != null) {
+    const k = toD(kRaw);
+    let p = k <= 0.18 ? 2 : k <= 0.22 ? 1 : 0;
+    if (p < 2 && swRaw != null && toD(swRaw) <= 0.09) p = Math.min(p + 1, 2);
+    components.push({ name: 'K Environment', pts: p, max: 2, k, sw: toD(swRaw) });
+  }
+
+  // 6. Contact Quality (2 pts)
+  const sqUp = parseFloat(bt?.squared_up_pct) || null;
+  const bxw = parseFloat(bSplit?.xwoba || bSplit?.woba) || parseFloat(bStats?.xwoba) || null;
+  const pHH = toR(pSplit?.hard_hit_pct) ?? toR(pd?.hard_hit_pct);
+  if (bxw != null || sqUp != null) {
+    const strongBatter = (bxw != null && bxw >= 0.370) || (sqUp != null && sqUp >= 13);
+    const strongPitcher = pHH != null && pHH >= 38;
+    let p = 0;
+    if (strongBatter && strongPitcher) p = 2;
+    else if (strongBatter || strongPitcher) p = 1;
+    components.push({ name: 'Contact Quality', pts: p, max: 2, sqUp, bxw, pHH });
+  }
+
+  // 7. Discipline Matchup (1 pt)
+  const oSwing = toD(bStats?.o_swing_pct);
+  const pBB = toD(pSplit?.bb_pct ?? pd?.bb_pct);
+  if (oSwing != null && pBB != null) {
+    const p = (oSwing <= 0.28 && pBB >= 0.09) ? 1 : 0;
+    components.push({ name: 'Discipline Matchup', pts: p, max: 1, oSwing, pBB });
+  }
+
+  // 8. Recent Form (1 pt)
+  if (l7xwoba != null) {
+    const p = l7xwoba >= 0.400 ? 1 : 0;
+    components.push({ name: 'Recent Form', pts: p, max: 1, l7xwoba });
+  }
+
+  const totalPts = components.reduce((s, c) => s + c.pts, 0);
+  const maxPts = components.reduce((s, c) => s + c.max, 0);
+  const score = maxPts > 0 ? Math.round((totalPts / maxPts) * 10) : 5;
+
+  let grade, cls;
+  if      (score >= 8) { grade = 'Advantage';  cls = 'mb-advantage';    }
+  else if (score >= 6) { grade = 'Favorable';  cls = 'mb-favorable';    }
+  else if (score >= 4) { grade = 'Neutral';    cls = 'mb-neutral';      }
+  else if (score >= 2) { grade = 'Tough';      cls = 'mb-tough';        }
+  else                 { grade = 'Very Tough'; cls = 'mb-pitcher-edge'; }
+
+  return { score, grade, cls, pSplit, components, totalPts, maxPts };
 }
 
 // ── SHOWDOWN MODE ─────────────────────────────────────────────────────────────
