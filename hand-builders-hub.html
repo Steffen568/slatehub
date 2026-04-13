@@ -9871,7 +9871,7 @@ function updateGppScores() {
     const maxHes = norm(_poolCandidates.map(c => c.metrics?.avgHes || 0));
 
     // Seed sort: rank by pure quality * matchup blend (non-sequential, for initial ordering)
-    const seedSorted = [..._poolCandidates].sort((a, b) => {
+    const allSorted = [..._poolCandidates].sort((a, b) => {
       const aQ = (a.gppScore || 0) / (maxGpp || 1);
       const bQ = (b.gppScore || 0) / (maxGpp || 1);
       const aM = ((a.metrics?.avgPms || 0) / (maxPms || 1) + (a.metrics?.avgHes || 0) / (maxHes || 1)) / 2;
@@ -9879,72 +9879,79 @@ function updateGppScores() {
       return (qualityWt * bQ + matchupWt * bM) - (qualityWt * aQ + matchupWt * aM);
     });
 
-    // Extract main stack team + sub stack team from each lineup's metrics
-    const getTeams = (c) => {
+    // Greedy ranking on top 5000 candidates only (tail never makes it into entries)
+    const GREEDY_CAP = 5000;
+    const seedSorted = allSorted.slice(0, GREEDY_CAP);
+    const tail = allSorted.slice(GREEDY_CAP);
+
+    // Pre-cache teams + normalized scores per candidate (avoid recomputing per iteration)
+    const cached = seedSorted.map(c => {
+      const m = c.metrics || {};
       const teams = [];
-      const stack = c.metrics?.stack; // e.g. "NYY×4"
+      const stack = m.stack; // e.g. "NYY×4"
       if (stack) teams.push(stack.split('×')[0]);
-      const sub = c.metrics?.sub;     // e.g. "BOS×3"
+      const sub = m.sub;     // e.g. "BOS×3"
       if (sub) teams.push(sub.split('×')[0]);
-      return teams;
-    };
+      return {
+        c,
+        qualNorm: (c.gppScore || 0) / (maxGpp || 1),
+        matchNorm: ((m.avgPms || 0) / (maxPms || 1) + (m.avgHes || 0) / (maxHes || 1)) / 2,
+        teams,
+        pids: m.pids || new Set(),
+      };
+    });
 
-    // Sequential greedy ranking with diminishing TEAM returns
-    const teamCounts = new Map(); // team → count of lineups stacking this team
-    const playerCounts = new Map(); // player_id → count of lineups using this player
+    // Sequential greedy ranking with diminishing TEAM + PLAYER returns
+    const teamCounts = new Map();
+    const playerCounts = new Map();
     const blendRanked = [];
+    const used = new Uint8Array(cached.length); // 0/1 flag array
 
-    if (seedSorted.length) {
-      blendRanked.push(seedSorted[0]);
-      for (const t of getTeams(seedSorted[0])) teamCounts.set(t, 1);
-      for (const pid of seedSorted[0].metrics?.pids || []) playerCounts.set(pid, 1);
+    if (cached.length) {
+      // Seed with first (highest seed score)
+      used[0] = 1;
+      blendRanked.push(cached[0].c);
+      for (const t of cached[0].teams) teamCounts.set(t, 1);
+      for (const pid of cached[0].pids) playerCounts.set(pid, 1);
 
-      const remaining = seedSorted.slice(1);
-      while (blendRanked.length < seedSorted.length && remaining.length) {
+      for (let round = 1; round < cached.length; round++) {
         let bestIdx = -1, bestScore = -Infinity;
-        for (let i = 0; i < remaining.length; i++) {
-          const c = remaining[i];
-          const m = c.metrics || {};
+        for (let i = 0; i < cached.length; i++) {
+          if (used[i]) continue;
+          const d = cached[i];
 
-          // Quality: normalized GPP score (carries all sim data through)
-          const qualNorm = (c.gppScore || 0) / (maxGpp || 1);
-
-          // Matchup quality: PMS + HES blend
-          const matchNorm = ((m.avgPms || 0) / (maxPms || 1) + (m.avgHes || 0) / (maxHes || 1)) / 2;
-
-          // Diminishing returns per TEAM STACK: avg 1/(1+count) across lineup's teams
-          const teams = getTeams(c);
+          // Diminishing returns per TEAM STACK
           let teamMarginal = 1.0;
-          if (teams.length > 0) {
+          if (d.teams.length > 0) {
             let sum = 0;
-            for (const t of teams) sum += 1 / (1 + (teamCounts.get(t) || 0));
-            teamMarginal = sum / teams.length;
+            for (const t of d.teams) sum += 1 / (1 + (teamCounts.get(t) || 0));
+            teamMarginal = sum / d.teams.length;
           }
 
-          // Diminishing returns per PLAYER: avg 1/(1+count) across hitters
-          // This prevents individual player concentration even within diverse teams
-          const pids = m.pids;
+          // Diminishing returns per PLAYER
           let playerMarginal = 1.0;
-          if (pids?.size > 0) {
+          if (d.pids.size > 0) {
             let sum = 0;
-            for (const pid of pids) sum += 1 / (1 + (playerCounts.get(pid) || 0));
-            playerMarginal = sum / pids.size;
+            for (const pid of d.pids) sum += 1 / (1 + (playerCounts.get(pid) || 0));
+            playerMarginal = sum / d.pids.size;
           }
 
-          // Combined marginal: team diversity (60%) + player diversity (40%)
           const marginal = 0.6 * teamMarginal + 0.4 * playerMarginal;
-
-          const score = qualityWt * qualNorm + matchupWt * matchNorm * marginal;
+          const score = qualityWt * d.qualNorm + matchupWt * d.matchNorm * marginal;
           if (score > bestScore) { bestScore = score; bestIdx = i; }
         }
         if (bestIdx === -1) break;
-        const pick = remaining.splice(bestIdx, 1)[0];
-        blendRanked.push(pick);
-        for (const t of getTeams(pick)) teamCounts.set(t, (teamCounts.get(t) || 0) + 1);
-        for (const pid of pick.metrics?.pids || []) playerCounts.set(pid, (playerCounts.get(pid) || 0) + 1);
+        used[bestIdx] = 1;
+        blendRanked.push(cached[bestIdx].c);
+        for (const t of cached[bestIdx].teams) teamCounts.set(t, (teamCounts.get(t) || 0) + 1);
+        for (const pid of cached[bestIdx].pids) playerCounts.set(pid, (playerCounts.get(pid) || 0) + 1);
       }
     }
-    blendRanked.forEach((c, i) => { c.blendedScore = +((blendRanked.length - i) / blendRanked.length).toFixed(4); });
+
+    // Greedy-ranked top get descending scores, tail gets seed-order scores below the greedy set
+    const n = blendRanked.length + tail.length;
+    blendRanked.forEach((c, i) => { c.blendedScore = +((n - i) / n).toFixed(4); });
+    tail.forEach((c, i) => { c.blendedScore = +((tail.length - i) / n).toFixed(4); });
   }
 
   // Re-sort if active sort needs recalc
