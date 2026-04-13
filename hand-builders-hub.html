@@ -9245,7 +9245,7 @@ function renderPoolExposure() {
       seen.add(p.player_id);
       const posLabel = isSD ? (slot.isCpt ? 'CPT' : 'FLEX') : (slot.pos || '?');
       if (!playerCounts[p.player_id]) {
-        playerCounts[p.player_id] = { id: p.player_id, name: p.name || '?', team: p.team || '', pos: posLabel, count: 0 };
+        playerCounts[p.player_id] = { id: p.player_id, name: p.name || '?', team: p.team || '', pos: posLabel, count: 0, bo: p.batting_order ?? null, pms: p.pms ?? null };
       }
       playerCounts[p.player_id].count++;
     }
@@ -9272,7 +9272,7 @@ function renderPoolExposure() {
         const rowStyle = overMax ? 'background:rgba(248,113,113,.08);' : underMin ? 'background:rgba(251,191,36,.08);' : '';
         return `<tr style="${rowStyle}">
           <td><span class="exp-pos">${r.pos}</span></td>
-          <td><div class="exp-name-cell"><span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${r.team||''}</span>${r.name||'?'}</div></td>
+          <td><div class="exp-name-cell"><span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${r.team||''}</span>${r.name||'?'}${r.bo!=null?`<span style="font-size:8px;font-weight:700;color:${r.bo<=4?'#4ade80':r.bo<=6?'#fbbf24':'var(--muted)'};margin-left:3px;">#${r.bo}</span>`:''}${r.pms!=null?`<span style="font-size:8px;font-weight:700;padding:0 3px;border-radius:2px;margin-left:2px;background:${r.pms>=8?'rgba(74,222,128,.15)':r.pms>=6?'rgba(251,191,36,.12)':'transparent'};color:${r.pms>=8?'#4ade80':r.pms>=6?'#fbbf24':r.pms>=4?'var(--muted)':'#f87171'};">${r.pms}</span>`:''}</div></td>
           <td><div class="exp-bar-wrap-wide"><div class="exp-bar-fill" style="width:${pct}%;background:${barClr};"></div></div></td>
           <td style="text-align:right;font-weight:700;color:${barClr};">${pct}%<br><span style="font-size:8px;color:var(--muted);font-weight:400;">${r.count}/${total}</span></td>
           <td><input type="number" class="exp-cap-input" min="0" max="100" placeholder="—" value="${tgt.min!=null?tgt.min:''}" oninput="setPoolExpTarget(${r.id},'min',this.value)" style="width:36px;" title="Min exposure %"></td>
