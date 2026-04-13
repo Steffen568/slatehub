@@ -4371,6 +4371,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <option value="cashPct">Cash%</option>
       <option value="avgPms">PMS</option>
       <option value="avgHes">HES</option>
+      <option value="pmsDriven">PMS Driven</option>
     </select>
     <span id="gpp-slider-wrap" style="display:inline-flex;align-items:center;gap:3px;margin-left:4px;">
       <span style="font-size:8px;color:var(--muted);font-weight:700;">Sharp</span>
@@ -8653,7 +8654,7 @@ function _deadCode_renderPortfolioCards() {
   if (f.minBoom && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.boomPct || 0) >= f.minBoom);
 
   const sc = _poolSortCol, dir = _poolSortDir;
-  const getVal = (c) => { if (sc === 'gppScore') return c.gppScore||0; if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
+  const getVal = (c) => { if (sc === 'gppScore') return c.gppScore||0; if (sc === 'pmsDriven') return c.pmsDriven||0; if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
   const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
   if (lowerIsBetter) {
     filtered.sort((a,b) => (getVal(a) - getVal(b)) * dir || b.metrics.proj - a.metrics.proj);
@@ -8940,6 +8941,7 @@ function renderPoolCards() {
   const dir = _poolSortDir;
   const getVal = (c) => {
     if (sc === 'gppScore') return c.gppScore || 0;
+    if (sc === 'pmsDriven') return c.pmsDriven || 0;
     if (c.contest && sc in c.contest) return c.contest[sc] || 0;
     if (sc in (c.metrics || {})) return c.metrics[sc] || 0;
     return c.metrics?.proj || 0;
@@ -9693,8 +9695,56 @@ function updateGppScores() {
     c.gppScore = +(sharpWt * sharpScore + levWt * levScore).toFixed(4);
   }
 
+  // PMS Driven: sequential edge-diversity ranking
+  // Each lineup is scored by how much new high-PMS game coverage it adds
+  // relative to the lineups ranked above it. This naturally diversifies
+  // the display across different matchup environments.
+  if (_poolSortCol === 'pmsDriven' || true) {  // always compute so it's ready
+    const maxPms = norm(_poolCandidates.map(c => c.metrics?.avgPms || 0));
+    const sorted = [..._poolCandidates].sort((a, b) =>
+      (b.metrics?.avgPms || 0) - (a.metrics?.avgPms || 0) || (b.metrics?.proj || 0) - (a.metrics?.proj || 0));
+    const covered = new Set();
+    const ranked = [];
+    // Seed with highest avgPms lineup
+    if (sorted.length) {
+      ranked.push(sorted[0]);
+      for (const gpk of sorted[0].metrics?.edgeGames || []) covered.add(gpk);
+      const remaining = sorted.slice(1);
+      while (ranked.length < sorted.length && remaining.length) {
+        let bestIdx = -1, bestScore = -Infinity;
+        for (let i = 0; i < remaining.length; i++) {
+          const c = remaining[i];
+          const m = c.metrics || {};
+          // PMS quality: how good is this lineup's matchup
+          const pmsNorm = (m.avgPms || 0) / (maxPms || 1);
+          // Edge novelty: fraction of new high-PMS games
+          let novelty = 0;
+          const eg = m.edgeGames;
+          if (eg?.size > 0) {
+            let newE = 0;
+            for (const gpk of eg) { if (!covered.has(gpk)) newE++; }
+            novelty = newE / eg.size;
+          }
+          // Projection quality
+          const projNorm = (m.proj || 0) / (maxProj || 1);
+          const score = 0.40 * pmsNorm + 0.30 * novelty + 0.30 * projNorm;
+          if (score > bestScore) { bestScore = score; bestIdx = i; }
+        }
+        if (bestIdx === -1) break;
+        const pick = remaining.splice(bestIdx, 1)[0];
+        ranked.push(pick);
+        for (const gpk of pick.metrics?.edgeGames || []) covered.add(gpk);
+      }
+    }
+    // Assign pmsDriven score as inverse rank (highest rank = highest score)
+    ranked.forEach((c, i) => { c.pmsDriven = +((ranked.length - i) / ranked.length).toFixed(4); });
+  }
+
   // Re-sort if GPP Score is active sort
   if (_poolSortCol === 'gppScore') {
+    _gppRenderPending = true;
+  }
+  if (_poolSortCol === 'pmsDriven') {
     _gppRenderPending = true;
   }
 }
