@@ -9043,9 +9043,13 @@ function renderPoolCards() {
     // Static GPP badges (always visible)
     const ownClr = m.totalOwn <= 80 ? '#4ade80' : m.totalOwn <= 120 ? '#fbbf24' : '#f87171';
     const levClr = m.leverage >= 50 ? '#4ade80' : m.leverage >= 30 ? '#fbbf24' : 'var(--muted)';
+    const pmsClr2 = m.avgPms >= 7 ? '#4ade80' : m.avgPms >= 5 ? '#fbbf24' : 'var(--muted)';
+    const hesClr2 = m.avgHes >= 7 ? '#4ade80' : m.avgHes >= 5 ? '#fbbf24' : 'var(--muted)';
     const staticBadges = `<span style="font-size:8px;color:${ownClr};" title="Total lineup ownership">${m.totalOwn}%own</span>`
       + `<span style="font-size:8px;color:${levClr};" title="Leverage: ceiling / ownership">${m.leverage}lev</span>`
-      + (m.corrScore >= 3 ? `<span style="font-size:8px;color:#a78bfa;" title="Correlation score">${m.corrScore}corr</span>` : '');
+      + (m.corrScore >= 3 ? `<span style="font-size:8px;color:#a78bfa;" title="Correlation score">${m.corrScore}corr</span>` : '')
+      + (m.avgPms != null ? `<span style="font-size:8px;color:${pmsClr2};" title="Avg Pitcher Matchup Score">${m.avgPms}pms</span>` : '')
+      + (m.avgHes != null ? `<span style="font-size:8px;color:${hesClr2};" title="Avg Hitter Environment Score">${m.avgHes}hes</span>` : '');
     // Sim badges (if sim has run)
     const simBadges = ct
       ? `<span style="font-size:8px;color:${ct.boomPct >= 10 ? '#4ade80' : 'var(--muted)'};" title="Boom% (top 5% of sims)">${ct.boomPct}%boom</span>`
