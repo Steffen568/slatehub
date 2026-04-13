@@ -4556,6 +4556,15 @@ const NAME_TO_ABBR = {
 
 function teamColor(name)    { return TEAM_COLORS[name] || { bg:'#252d38', tx:'#8899b0' }; }
 function abbrColor(abbr)    { return ABBR_COLORS[(abbr||'').toUpperCase()] || { bg:'#252d38', tx:'#8899b0' }; }
+// PMS color scale: 1-3 red, 4 orange, 5 neutral, 6 light green, 7+ dark green
+function pmsColor(v) {
+  if (v == null) return { tx:'var(--muted)', bg:'transparent' };
+  if (v >= 7) return { tx:'#4ade80', bg:'rgba(74,222,128,.15)' };
+  if (v >= 6) return { tx:'#86efac', bg:'rgba(134,239,172,.10)' };
+  if (v >= 5) return { tx:'#94a3b8', bg:'transparent' };
+  if (v >= 4) return { tx:'#fb923c', bg:'rgba(251,146,60,.10)' };
+  return { tx:'#f87171', bg:'rgba(248,113,113,.12)' };
+}
 function teamAbbr(fullName) { return NAME_TO_ABBR[fullName] || (fullName||'').slice(0,3).toUpperCase(); }
 
 // Normalize player name for cross-source matching (DK vs MLB API name differences)
@@ -6525,7 +6534,7 @@ function renderHitterRow(p, inL, expPct, visCols) {
     value: (()=>{ const pr=projOverrides[p.player_id]??p.proj_dk_pts; const v=(p.salary&&pr!=null)?pr/p.salary*1000:null; const c=v==null?'pt-muted':v>=4?'cf-hi':v>=3?'cf-mid':'cf-lo'; return `<td class="pt-val ${c}">${v!=null?v.toFixed(1):'—'}</td>`; })(),
     hes:   `<td class="${p.hes == null ? 'pt-muted' : p.hes >= 7 ? 'pt-hes-hi' : p.hes >= 5.5 ? 'pt-hes-mid' : 'pt-hes-lo'}">${p.hes != null ? p.hes.toFixed(1) : '—'}</td>`,
     wrc:   (()=>{ const v=p.wrc_plus; const c=v==null?'pt-muted':v>=120?'cf-hi':v>=95?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?Math.round(v):'—'}</td>`; })(),
-    pms:   (()=>{ const v=p.pms; const bg=v==null?'transparent':v>=8?'rgba(74,222,128,.15)':v>=6?'rgba(251,191,36,.12)':v>=4?'transparent':'rgba(248,113,113,.12)'; const tx=v==null?'var(--muted)':v>=8?'#4ade80':v>=6?'#fbbf24':v>=4?'var(--muted)':'#f87171'; return `<td class="pt-stat" style="color:${tx};"><span style="background:${bg};padding:1px 5px;border-radius:3px;font-weight:700;">${v??'—'}</span></td>`; })(),
+    pms:   (()=>{ const v=p.pms; const pc=pmsColor(v); return `<td class="pt-stat" style="color:${pc.tx};"><span style="background:${pc.bg};padding:1px 5px;border-radius:3px;font-weight:700;">${v??'—'}</span></td>`; })(),
     woba:  (()=>{ const v=p.woba; const c=v==null?'pt-muted':v>=.360?'cf-hi':v>=.310?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(3):'—'}</td>`; })(),
     iso:   (()=>{ const v=p.iso;  const c=v==null?'pt-muted':v>=.200?'cf-hi':v>=.140?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(3):'—'}</td>`; })(),
     phr:   (()=>{ const v=p.proj_hr; const c=v==null?'pt-muted':v>=.25?'cf-hi':v>=.12?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(2):'—'}</td>`; })(),
@@ -6907,7 +6916,7 @@ function renderLineupCard(s, i) {
       <span class="lc-slot-own">${fmtOwn(p.proj_ownership)}</span>
       <span class="lc-slot-wrc">${p.wrc_plus != null ? Math.round(+p.wrc_plus) : '—'}</span>
       <span class="lc-slot-woba">${fmtWoba(p.woba)}</span>
-      <span class="lc-slot-pms" style="color:${p.pms >= 8 ? '#4ade80' : p.pms >= 6 ? '#fbbf24' : p.pms >= 4 ? 'var(--muted)' : p.pms != null ? '#f87171' : 'var(--muted)'};">${p.pms != null ? (+p.pms).toFixed(1) : '—'}</span>
+      <span class="lc-slot-pms" style="color:${pmsColor(p.pms).tx};">${p.pms != null ? (+p.pms).toFixed(1) : '—'}</span>
     </div>`;
   }
 
@@ -8780,7 +8789,7 @@ function _deadCode_renderPortfolioCards() {
     // Static badges
     const ownClr = m.totalOwn <= 80 ? '#4ade80' : m.totalOwn <= 120 ? '#fbbf24' : '#f87171';
     const levClr = m.leverage >= 50 ? '#4ade80' : m.leverage >= 30 ? '#fbbf24' : 'var(--muted)';
-    const pmsClr = m.avgPms >= 7 ? '#4ade80' : m.avgPms >= 5 ? '#fbbf24' : 'var(--muted)';
+    const pmsClr = pmsColor(m.avgPms).tx;
     const hesClr = m.avgHes >= 7 ? '#4ade80' : m.avgHes >= 5 ? '#fbbf24' : 'var(--muted)';
     const staticBadges = `<span style="font-size:8px;color:${ownClr};">${m.totalOwn}%own</span>`
       + `<span style="font-size:8px;color:${levClr};">${m.leverage}lev</span>`
@@ -9095,7 +9104,7 @@ function renderPoolCards() {
         const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
         const pc = sl.isCpt ? {bg:'#a78bfa',tx:'#fff'} : posColor(p.position || 'OF');
         const pv = p.pms;
-        const pmsClr = pv >= 8 ? '#4ade80' : pv >= 6 ? '#fbbf24' : pv >= 4 ? 'var(--muted)' : pv != null ? '#f87171' : 'var(--muted)';
+        const pmsClr = pmsColor(pv).tx;
         return `<div class="lc-slot-hitter sim-row">
           <span class="lc-slot-pos" style="background:${pc.bg};color:${pc.tx};">${label}</span>
           <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
@@ -9134,7 +9143,7 @@ function renderPoolCards() {
         const pc = posColor(sl.pos);
         const last = (p.name||'').split(' ').slice(1).join(' ') || p.name || '—';
         const pv = p.pms;
-        const pmsClr = pv >= 8 ? '#4ade80' : pv >= 6 ? '#fbbf24' : pv >= 4 ? 'var(--muted)' : pv != null ? '#f87171' : 'var(--muted)';
+        const pmsClr = pmsColor(pv).tx;
         return `<div class="lc-slot-hitter sim-row">
           <span class="lc-slot-pos" style="background:${pc.bg};color:${pc.tx};">${sl.pos}</span>
           <span class="lc-slot-team" style="background:${tc.bg};color:${tc.tx};">${p.team||'—'}</span>
@@ -9150,7 +9159,7 @@ function renderPoolCards() {
     // Static GPP badges (always visible)
     const ownClr = m.totalOwn <= 80 ? '#4ade80' : m.totalOwn <= 120 ? '#fbbf24' : '#f87171';
     const levClr = m.leverage >= 50 ? '#4ade80' : m.leverage >= 30 ? '#fbbf24' : 'var(--muted)';
-    const pmsClr2 = m.avgPms >= 7 ? '#4ade80' : m.avgPms >= 5 ? '#fbbf24' : 'var(--muted)';
+    const pmsClr2 = pmsColor(m.avgPms).tx;
     const hesClr2 = m.avgHes >= 7 ? '#4ade80' : m.avgHes >= 5 ? '#fbbf24' : 'var(--muted)';
     const staticBadges = `<span style="font-size:8px;color:${ownClr};" title="Total lineup ownership">${m.totalOwn}%own</span>`
       + `<span style="font-size:8px;color:${levClr};" title="Leverage: ceiling / ownership">${m.leverage}lev</span>`
@@ -9272,7 +9281,7 @@ function renderPoolExposure() {
         const rowStyle = overMax ? 'background:rgba(248,113,113,.08);' : underMin ? 'background:rgba(251,191,36,.08);' : '';
         return `<tr style="${rowStyle}">
           <td><span class="exp-pos">${r.pos}</span></td>
-          <td><div class="exp-name-cell"><span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${r.team||''}</span>${r.name||'?'}${r.bo!=null?`<span style="font-size:8px;font-weight:700;color:${r.bo<=4?'#4ade80':r.bo<=6?'#fbbf24':'var(--muted)'};margin-left:3px;">#${r.bo}</span>`:''}${r.pms!=null?`<span style="font-size:8px;font-weight:700;padding:0 3px;border-radius:2px;margin-left:2px;background:${r.pms>=8?'rgba(74,222,128,.15)':r.pms>=6?'rgba(251,191,36,.12)':'transparent'};color:${r.pms>=8?'#4ade80':r.pms>=6?'#fbbf24':r.pms>=4?'var(--muted)':'#f87171'};">${r.pms}</span>`:''}</div></td>
+          <td><div class="exp-name-cell"><span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${r.team||''}</span>${r.name||'?'}${r.bo!=null?`<span style="font-size:8px;font-weight:700;color:${r.bo<=4?'#4ade80':r.bo<=6?'#fbbf24':'var(--muted)'};margin-left:3px;">#${r.bo}</span>`:''}${r.pms!=null?`<span style="font-size:8px;font-weight:700;padding:0 3px;border-radius:2px;margin-left:2px;background:${pmsColor(r.pms).bg};color:${pmsColor(r.pms).tx};">${r.pms}</span>`:''}</div></td>
           <td><div class="exp-bar-wrap-wide"><div class="exp-bar-fill" style="width:${pct}%;background:${barClr};"></div></div></td>
           <td style="text-align:right;font-weight:700;color:${barClr};">${pct}%<br><span style="font-size:8px;color:var(--muted);font-weight:400;">${r.count}/${total}</span></td>
           <td><input type="number" class="exp-cap-input" min="0" max="100" placeholder="—" value="${tgt.min!=null?tgt.min:''}" oninput="setPoolExpTarget(${r.id},'min',this.value)" style="width:36px;" title="Min exposure %"></td>

@@ -10578,7 +10578,7 @@ function renderPMSBreakdown(rowId) {
         </div>
       </div>`).join('');
 
-    const scoreColor = score>=8 ? '#4ade80' : score>=6 ? '#86efac' : score>=4 ? '#94a3b8' : score>=2 ? '#fb923c' : '#f87171';
+    const scoreColor = score>=7 ? '#4ade80' : score>=6 ? '#86efac' : score>=5 ? '#94a3b8' : score>=4 ? '#fb923c' : '#f87171';
     html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0 2px;">
       <span style="font-size:10px;color:var(--muted);">${totalPts} of ${maxPts} pts scored</span>
       <span style="font-size:15px;font-weight:800;font-family:'Barlow Condensed',sans-serif;color:${scoreColor};">PMS ${score} <span style="font-size:11px;opacity:.7;">${grade}</span></span>
