@@ -9859,9 +9859,9 @@ function updateGppScores() {
   }
 
   // ── BLENDED: Sequential greedy ranking combining GPP quality + matchup diversity ──
-  // Each lineup's matchup contribution diminishes as games get covered.
-  // This naturally spreads entries across favorable matchups while keeping
-  // sim quality as the primary driver. The Quality/Matchup slider controls the blend.
+  // Tracks TEAM STACK exposure (the actual concentration problem) with diminishing returns.
+  // 1/(1+count): 1st lineup on a team stack gets full credit, 2nd gets 50%, 5th gets 20%.
+  // This directly penalizes repeated stacks and spreads entries across teams.
   {
     const matchupWt = (+(document.getElementById('blend-matchup-wt')?.value ?? 30)) / 100;
     const qualityWt = 1 - matchupWt;
@@ -9879,14 +9879,25 @@ function updateGppScores() {
       return (qualityWt * bQ + matchupWt * bM) - (qualityWt * aQ + matchupWt * aM);
     });
 
-    // Sequential greedy ranking with diminishing game returns
-    // 1/(1+count): 1st lineup on a game gets full credit, 2nd gets 50%, 5th gets 20%
-    const covered = new Map(); // game_pk → count of lineups already using it
+    // Extract main stack team + sub stack team from each lineup's metrics
+    const getTeams = (c) => {
+      const teams = [];
+      const stack = c.metrics?.stack; // e.g. "NYY×4"
+      if (stack) teams.push(stack.split('×')[0]);
+      const sub = c.metrics?.sub;     // e.g. "BOS×3"
+      if (sub) teams.push(sub.split('×')[0]);
+      return teams;
+    };
+
+    // Sequential greedy ranking with diminishing TEAM returns
+    const teamCounts = new Map(); // team → count of lineups stacking this team
+    const playerCounts = new Map(); // player_id → count of lineups using this player
     const blendRanked = [];
 
     if (seedSorted.length) {
       blendRanked.push(seedSorted[0]);
-      for (const gpk of seedSorted[0].metrics?.edgeGames || []) covered.set(gpk, 1);
+      for (const t of getTeams(seedSorted[0])) teamCounts.set(t, 1);
+      for (const pid of seedSorted[0].metrics?.pids || []) playerCounts.set(pid, 1);
 
       const remaining = seedSorted.slice(1);
       while (blendRanked.length < seedSorted.length && remaining.length) {
@@ -9901,22 +9912,36 @@ function updateGppScores() {
           // Matchup quality: PMS + HES blend
           const matchNorm = ((m.avgPms || 0) / (maxPms || 1) + (m.avgHes || 0) / (maxHes || 1)) / 2;
 
-          // Diminishing returns per game: avg 1/(1+count) across edge games
-          let marginalValue = 1.0; // default if no edge games tracked
-          const eg = m.edgeGames;
-          if (eg?.size > 0) {
-            let totalMarginal = 0;
-            for (const gpk of eg) totalMarginal += 1 / (1 + (covered.get(gpk) || 0));
-            marginalValue = totalMarginal / eg.size;
+          // Diminishing returns per TEAM STACK: avg 1/(1+count) across lineup's teams
+          const teams = getTeams(c);
+          let teamMarginal = 1.0;
+          if (teams.length > 0) {
+            let sum = 0;
+            for (const t of teams) sum += 1 / (1 + (teamCounts.get(t) || 0));
+            teamMarginal = sum / teams.length;
           }
 
-          const score = qualityWt * qualNorm + matchupWt * matchNorm * marginalValue;
+          // Diminishing returns per PLAYER: avg 1/(1+count) across hitters
+          // This prevents individual player concentration even within diverse teams
+          const pids = m.pids;
+          let playerMarginal = 1.0;
+          if (pids?.size > 0) {
+            let sum = 0;
+            for (const pid of pids) sum += 1 / (1 + (playerCounts.get(pid) || 0));
+            playerMarginal = sum / pids.size;
+          }
+
+          // Combined marginal: team diversity (60%) + player diversity (40%)
+          const marginal = 0.6 * teamMarginal + 0.4 * playerMarginal;
+
+          const score = qualityWt * qualNorm + matchupWt * matchNorm * marginal;
           if (score > bestScore) { bestScore = score; bestIdx = i; }
         }
         if (bestIdx === -1) break;
         const pick = remaining.splice(bestIdx, 1)[0];
         blendRanked.push(pick);
-        for (const gpk of pick.metrics?.edgeGames || []) covered.set(gpk, (covered.get(gpk) || 0) + 1);
+        for (const t of getTeams(pick)) teamCounts.set(t, (teamCounts.get(t) || 0) + 1);
+        for (const pid of pick.metrics?.pids || []) playerCounts.set(pid, (playerCounts.get(pid) || 0) + 1);
       }
     }
     blendRanked.forEach((c, i) => { c.blendedScore = +((blendRanked.length - i) / blendRanked.length).toFixed(4); });
