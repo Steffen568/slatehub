@@ -9270,7 +9270,7 @@ function renderPoolExposure() {
   const playersEl = document.getElementById('pool-exp-players');
   if (playersEl) {
     playersEl.innerHTML = posTabsHtml + `<table class="exp-table">
-      <thead><tr><th style="width:26px;"></th><th>Player</th><th>Exposure</th><th style="width:44px;text-align:right;">Exp%</th><th style="width:40px;text-align:center;">Min</th><th style="width:40px;text-align:center;">Max</th></tr></thead>
+      <thead><tr><th style="width:26px;"></th><th>Player</th><th style="width:22px;text-align:center;">BO</th><th style="width:26px;text-align:center;">PMS</th><th>Exposure</th><th style="width:44px;text-align:right;">Exp%</th><th style="width:40px;text-align:center;">Min</th><th style="width:40px;text-align:center;">Max</th></tr></thead>
       <tbody>${playerRows.slice(0, 100).map(r => {
         const pct = +(r.count / total * 100).toFixed(0);
         const barClr = pct > 50 ? '#4ade80' : pct > 20 ? '#fbbf24' : 'var(--hi)';
@@ -9279,9 +9279,13 @@ function renderPoolExposure() {
         const overMax = tgt.max != null && pct > tgt.max;
         const underMin = tgt.min != null && pct < tgt.min;
         const rowStyle = overMax ? 'background:rgba(248,113,113,.08);' : underMin ? 'background:rgba(251,191,36,.08);' : '';
+        const boClr = r.bo!=null ? (r.bo<=4?'#4ade80':r.bo<=6?'#fbbf24':'var(--muted)') : 'var(--muted)';
+        const pc = pmsColor(r.pms);
         return `<tr style="${rowStyle}">
           <td><span class="exp-pos">${r.pos}</span></td>
-          <td><div class="exp-name-cell"><span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${r.team||''}</span>${r.name||'?'}${r.bo!=null?`<span style="font-size:8px;font-weight:700;color:${r.bo<=4?'#4ade80':r.bo<=6?'#fbbf24':'var(--muted)'};margin-left:3px;">#${r.bo}</span>`:''}${r.pms!=null?`<span style="font-size:8px;font-weight:700;padding:0 3px;border-radius:2px;margin-left:2px;background:${pmsColor(r.pms).bg};color:${pmsColor(r.pms).tx};">${r.pms}</span>`:''}</div></td>
+          <td><div class="exp-name-cell"><span class="team-tag" style="background:${tc.bg};color:${tc.tx};">${r.team||''}</span>${r.name||'?'}</div></td>
+          <td style="text-align:center;font-size:9px;font-weight:700;color:${boClr};">${r.bo!=null?r.bo:'—'}</td>
+          <td style="text-align:center;font-size:9px;font-weight:700;color:${pc.tx};"><span style="background:${pc.bg};padding:0 3px;border-radius:2px;">${r.pms!=null?r.pms:'—'}</span></td>
           <td><div class="exp-bar-wrap-wide"><div class="exp-bar-fill" style="width:${pct}%;background:${barClr};"></div></div></td>
           <td style="text-align:right;font-weight:700;color:${barClr};">${pct}%<br><span style="font-size:8px;color:var(--muted);font-weight:400;">${r.count}/${total}</span></td>
           <td><input type="number" class="exp-cap-input" min="0" max="100" placeholder="—" value="${tgt.min!=null?tgt.min:''}" oninput="setPoolExpTarget(${r.id},'min',this.value)" style="width:36px;" title="Min exposure %"></td>
