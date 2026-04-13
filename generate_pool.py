@@ -410,8 +410,8 @@ def fetch_data(target_date, slate_filter=None):
             grouped = defaultdict(list)
             for r in rows:
                 grouped[r['player_id']].append(r)
-            for pid, games in grouped.items():
-                recent = [g for g in games[:7] if g.get('xwoba') is not None]
+            for pid, gl_games in grouped.items():
+                recent = [g for g in gl_games[:7] if g.get('xwoba') is not None]
                 if len(recent) >= 2:
                     l7_map[pid] = sum(safe(g['xwoba'], 0) for g in recent) / len(recent)
 
