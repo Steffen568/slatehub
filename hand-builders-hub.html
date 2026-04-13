@@ -6519,7 +6519,7 @@ function renderHitterRow(p, inL, expPct, visCols) {
     value: (()=>{ const pr=projOverrides[p.player_id]??p.proj_dk_pts; const v=(p.salary&&pr!=null)?pr/p.salary*1000:null; const c=v==null?'pt-muted':v>=4?'cf-hi':v>=3?'cf-mid':'cf-lo'; return `<td class="pt-val ${c}">${v!=null?v.toFixed(1):'—'}</td>`; })(),
     hes:   `<td class="${p.hes == null ? 'pt-muted' : p.hes >= 7 ? 'pt-hes-hi' : p.hes >= 5.5 ? 'pt-hes-mid' : 'pt-hes-lo'}">${p.hes != null ? p.hes.toFixed(1) : '—'}</td>`,
     wrc:   (()=>{ const v=p.wrc_plus; const c=v==null?'pt-muted':v>=120?'cf-hi':v>=95?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?Math.round(v):'—'}</td>`; })(),
-    pms:   (()=>{ const v=p.pms; const c=v==null?'pt-muted':v>=7?'cf-hi':v>=5?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v??'—'}</td>`; })(),
+    pms:   (()=>{ const v=p.pms; const bg=v==null?'transparent':v>=8?'rgba(74,222,128,.15)':v>=6?'rgba(251,191,36,.12)':v>=4?'transparent':'rgba(248,113,113,.12)'; const tx=v==null?'var(--muted)':v>=8?'#4ade80':v>=6?'#fbbf24':v>=4?'var(--muted)':'#f87171'; return `<td class="pt-stat" style="color:${tx};"><span style="background:${bg};padding:1px 5px;border-radius:3px;font-weight:700;">${v??'—'}</span></td>`; })(),
     woba:  (()=>{ const v=p.woba; const c=v==null?'pt-muted':v>=.360?'cf-hi':v>=.310?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(3):'—'}</td>`; })(),
     iso:   (()=>{ const v=p.iso;  const c=v==null?'pt-muted':v>=.200?'cf-hi':v>=.140?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(3):'—'}</td>`; })(),
     phr:   (()=>{ const v=p.proj_hr; const c=v==null?'pt-muted':v>=.25?'cf-hi':v>=.12?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(2):'—'}</td>`; })(),
@@ -6901,7 +6901,7 @@ function renderLineupCard(s, i) {
       <span class="lc-slot-own">${fmtOwn(p.proj_ownership)}</span>
       <span class="lc-slot-wrc">${p.wrc_plus != null ? Math.round(+p.wrc_plus) : '—'}</span>
       <span class="lc-slot-woba">${fmtWoba(p.woba)}</span>
-      <span class="lc-slot-pms">${p.pms != null ? (+p.pms).toFixed(1) : '—'}</span>
+      <span class="lc-slot-pms" style="color:${p.pms >= 8 ? '#4ade80' : p.pms >= 6 ? '#fbbf24' : p.pms >= 4 ? 'var(--muted)' : p.pms != null ? '#f87171' : 'var(--muted)'};">${p.pms != null ? (+p.pms).toFixed(1) : '—'}</span>
     </div>`;
   }
 
