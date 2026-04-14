@@ -593,12 +593,19 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     proj_pa = LINEUP_PA.get(batting_order, LEAGUE_AVG_PA)
 
     # ── PA outcome probabilities ──────────────────────────────────────────
-    # K rate: batter talent × pitcher skill ratio × stuff+ adjustment × park K factor
+    # Pitcher quality baseline: Pitching+ (stuff + command combined) is the most
+    # predictive single metric (0.73 y/y stability). Fall back to Stuff+ or rates.
+    # This affects K rate, hit suppression, and HR suppression.
+    pitcher_quality = 100.0  # league average
+    if pitcher:
+        pitcher_quality = pitcher.get('pitching_plus') or pitcher.get('stuff_plus') or 100.0
+    # Location+ further modifies — high command pitchers suppress hits independently of stuff
+    location_quality = pitcher.get('location_plus', 100.0) if pitcher else 100.0
+
+    # K rate: batter talent × pitcher skill ratio × pitcher quality × park K factor
     pitcher_k_ratio = (pitcher['k_pct'] / LEAGUE_AVG_K_PCT) if pitcher else 1.0
-    # Stuff+ matchup interaction (reduced from 0.3 to 0.15 — three-tier blend handles baseline)
-    if pitcher and pitcher.get('stuff_plus'):
-        stuff_adj = (pitcher['stuff_plus'] / 100.0) ** 0.15
-        pitcher_k_ratio *= stuff_adj
+    # Pitching+/Stuff+ K adjustment: each point above 100 = ~0.20% more Ks (exponent 0.20)
+    pitcher_k_ratio *= (pitcher_quality / 100.0) ** 0.20
     park_k = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
     # Swing length: longer swings = more whiff-prone (league avg ~7.2 ft)
     swing_k_adj = clip(1.0 + (talent.get('swing_length', 7.2) - 7.2) * 0.06, 0.94, 1.08)
@@ -616,6 +623,11 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     # Quality of contact adjustment: barrel% and hard_hit% boost BABIP
     qoc_mult = 1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3
     qoc_mult = clip(qoc_mult, 0.85, 1.25)
+    # Pitcher quality suppresses hit probability: elite pitchers limit BABIP
+    # Pitching+ 120 → 0.97 (3% hit suppression), Pitching+ 80 → 1.03 (3% boost)
+    pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.0015, 0.94, 1.06)
+    # Location+ further suppresses: good command = fewer hittable pitches
+    loc_hit_suppression = clip(1.0 - (location_quality - 100) * 0.001, 0.96, 1.04)
 
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather)
@@ -624,7 +636,7 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     ld_adj = 1.0 + (talent.get('ld_pct', 0.21) - 0.21) * 0.5
     ld_adj = clip(ld_adj, 0.90, 1.12)
 
-    hit_prob = clip(talent['babip'] * qoc_mult * park_basic * wx_hit * ld_adj, 0.18, 0.42)
+    hit_prob = clip(talent['babip'] * qoc_mult * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.18, 0.42)
 
     # ── Hit type distribution ─────────────────────────────────────────────
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
@@ -1018,10 +1030,14 @@ BULLPEN_HBP    = 0.008
 
 def _compute_pa_rates(talent, pitcher, park, weather):
     """Compute PA outcome probabilities for a batter vs pitcher. Shared by game sim."""
+    # Pitcher quality baseline: Pitching+ > Stuff+ > rate stats
+    pitcher_quality = 100.0
+    if pitcher:
+        pitcher_quality = pitcher.get('pitching_plus') or pitcher.get('stuff_plus') or 100.0
+    location_quality = pitcher.get('location_plus', 100.0) if pitcher else 100.0
+
     pitcher_k_ratio = (pitcher['k_pct'] / LEAGUE_AVG_K_PCT) if pitcher else 1.0
-    if pitcher and pitcher.get('stuff_plus'):
-        stuff_adj = (pitcher['stuff_plus'] / 100.0) ** 0.15  # reduced — three-tier handles baseline
-        pitcher_k_ratio *= stuff_adj
+    pitcher_k_ratio *= (pitcher_quality / 100.0) ** 0.20
     park_k = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
     swing_k_adj = clip(1.0 + (talent.get('swing_length', 7.2) - 7.2) * 0.06, 0.94, 1.08)
     k_rate = clip(talent['k_pct'] * pitcher_k_ratio * park_k * swing_k_adj, 0.05, 0.50)
@@ -1035,10 +1051,12 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     # Hit probability — quality of contact drives BABIP outcomes
     ev_adj = clip(1.0 + (talent.get('avg_ev', 88.0) - 88.0) * 0.008, 0.92, 1.10)
     qoc_mult = clip(1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3, 0.85, 1.25)
+    pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.0015, 0.94, 1.06)
+    loc_hit_suppression = clip(1.0 - (location_quality - 100) * 0.001, 0.96, 1.04)
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather)
     ld_adj = clip(1.0 + (talent.get('ld_pct', 0.21) - 0.21) * 0.5, 0.90, 1.12)
-    hit_prob = clip(talent['babip'] * qoc_mult * ev_adj * park_basic * wx_hit * ld_adj, 0.18, 0.42)
+    hit_prob = clip(talent['babip'] * qoc_mult * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.18, 0.42)
 
     # HR rate — bat tracking metrics drive power ceiling
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
@@ -1889,13 +1907,13 @@ def run():
             full_name = (curr_stats.get('full_name') if curr_stats else None) or lu.get('player_name')
             team = curr_stats.get('team') if curr_stats else None
 
-            # Transparency multipliers
+            # Transparency multipliers — Pitching+/Stuff+ as primary quality signal
             _pitcher_mult = 1.0
             if pitcher:
+                pq = (pitcher.get('pitching_plus') or pitcher.get('stuff_plus') or 100.0) / 100.0
                 pk = (pitcher['k_pct'] / LEAGUE_AVG_K_PCT) if pitcher['k_pct'] > 0 else 1.0
                 pbr = (LEAGUE_AVG_BB_PCT / pitcher['bb_pct']) if pitcher['bb_pct'] > 0.02 else 1.0
-                phr = (pitcher['hr9'] / LEAGUE_AVG_HR9) if pitcher.get('hr9') else 1.0
-                _pitcher_mult = round2(0.35 * pk + 0.35 * phr + 0.30 * (1.0/pbr) if pbr > 0 else 1.0)
+                _pitcher_mult = round2(0.40 * pq + 0.30 * pk + 0.30 * (1.0/pbr) if pbr > 0 else 1.0)
             _platoon_mult = round2(talent.get('_platoon_adj', 1.0))
             _park_basic = safe(park_row.get('basic_factor'), 100) / 100.0 if park_row else 1.0
             _wx_hit = weather_hit_mult(wx_row)
