@@ -340,6 +340,15 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
     o_swing = o_swing or 0.30            # league avg ~30%
     attack_angle = attack_angle or 12.0  # league avg ~12 degrees
 
+    # Sprint speed (most recent season available — physical trait, doesn't need Marcel weighting)
+    sprint_speed = None
+    for yr in ([current_season] if use_current else []) + [current_season-1, current_season-2]:
+        row = stats_by_season.get(yr)
+        if row and safe(row.get('sprint_speed')):
+            sprint_speed = safe(row['sprint_speed'])
+            break
+    sprint_speed = sprint_speed or 4.40  # league avg ~4.40s home-to-first
+
     # SB rate
     sb_num = 0.0
     sb_den = 0.0
@@ -359,6 +368,7 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
         'babip': babip, 'woba': woba, 'barrel': barrel,
         'hard_hit': hard_hit, 'avg_ev': avg_ev, 'ld_pct': ld_pct,
         'fb_pct': fb_pct, 'pull_pct': pull_pct, 'sb_per_pa': sb_per_pa,
+        'sprint_speed': sprint_speed,
         'bat_speed': bat_speed, 'squared_up': squared_up, 'blast': blast,
         'o_swing': o_swing, 'attack_angle': attack_angle,
         'swing_length': 7.2,  # placeholder — merged from bat_tracking after call
@@ -531,6 +541,15 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
         # Reliever profile being used as opener — project ~2 IP (1-3 innings)
         ip_per_gs = clip(ip_per_gs, 1.5, 3.0)
 
+    # SB vulnerability: most recent season's sb_per_9 (not Marcel-weighted — situational stat)
+    sb_per_9 = None
+    for yr in ([current_season] if use_current else []) + [current_season-1, current_season-2]:
+        row = stats_by_season.get(yr)
+        if row and safe(row.get('sb_per_9')):
+            sb_per_9 = safe(row['sb_per_9'])
+            break
+    sb_per_9 = sb_per_9 or 1.0  # league avg ~1.0 SB/9 IP
+
     return {
         'k_pct': k_pct, 'bb_pct': bb_pct, 'hr9': hr9, 'babip': babip,
         'xfip': xfip, 'siera': siera, 'stuff_plus': stuff_plus,
@@ -539,6 +558,7 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
         'gb_pct': gb_pct, 'ip_per_gs': ip_per_gs,
         'velo': velo, 'lob_pct': lob_pct,
         'is_breakout': is_breakout,
+        'sb_per_9': sb_per_9,
     }
 
 
@@ -583,9 +603,11 @@ def weather_hit_mult(weather_row: dict) -> float:
 
 def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
                     odds: dict, batting_order: int, is_home: bool,
-                    n_sims: int, rng: np.random.Generator) -> np.ndarray:
+                    n_sims: int, rng: np.random.Generator,
+                    sb_context: dict = None) -> np.ndarray:
     """
     Simulate n_sims games for one batter. Returns array of DK points per sim.
+    sb_context: { catcher_pop: float, pitcher_sb_per_9: float } for SB model.
 
     Each game simulates individual PA outcomes using combined batter/pitcher/
     park/weather probabilities.
@@ -723,10 +745,26 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
         is_2b  = is_hit & (~is_hr) & (~is_3b) & (type_rolls < hr_per_hit + triple_per_hit + xb_per_hit)
         is_1b  = is_hit & (~is_hr) & (~is_3b) & (~is_2b)
 
-        # SB opportunity on singles/walks/HBP
+        # SB opportunity on singles/walks/HBP — 3-factor model:
+        # 1. Runner speed (sprint_speed): fast runners attempt + succeed more
+        # 2. Catcher pop time: slow catchers = more SB opportunities
+        # 3. Pitcher SB vulnerability: high sb_per_9 = easier to run on
         on_base = is_1b | is_bb | is_hbp
+        base_sb_rate = talent['sb_per_pa']
+        # Sprint speed multiplier (home-to-first seconds): 3.97s → 1.50x, 4.40s → 1.0x, 4.80s → 0.50x
+        speed_mult = clip(1.0 + (4.40 - talent.get('sprint_speed', 4.40)) * 1.16, 0.50, 1.60)
+        # Catcher/pitcher context multiplier
+        ctx_mult = 1.0
+        if sb_context:
+            # Catcher pop time: 1.95s = avg (1.0x), 2.10s = slow (1.25x), 1.82s = fast (0.80x)
+            pop = sb_context.get('catcher_pop', 1.95)
+            ctx_mult *= clip(1.0 + (pop - 1.95) * 1.67, 0.75, 1.30)
+            # Pitcher SB/9: 1.0 = avg (1.0x), 2.0 = easy to run on (1.25x), 0.3 = tough (0.80x)
+            p_sb9 = sb_context.get('pitcher_sb_per_9', 1.0)
+            ctx_mult *= clip(1.0 + (p_sb9 - 1.0) * 0.25, 0.80, 1.30)
+        sb_rate = clip(base_sb_rate * speed_mult * ctx_mult, 0.0, 0.12)
         sb_rolls = rng.random(n_sims)
-        is_sb = on_base & (sb_rolls < talent['sb_per_pa'])
+        is_sb = on_base & (sb_rolls < sb_rate)
 
         # R scoring: empirical run-scoring rates by event type, scaled by
         # lineup position and Vegas environment
@@ -1087,10 +1125,15 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     xb_per_hit = clip((talent['iso'] - 3 * talent['iso'] / 3.5) / hit_prob * ev_adj, 0.03, 0.20)
     triple_per_hit = 0.015
 
+    # SB rate: 3-factor model (sprint speed × catcher pop × pitcher vulnerability)
+    base_sb = talent.get('sb_per_pa', 0.01)
+    speed_mult = clip(1.0 + (4.40 - talent.get('sprint_speed', 4.40)) * 1.16, 0.50, 1.60)
+    sb_rate = clip(base_sb * speed_mult, 0.0, 0.12)
+
     return {
         'k': k_rate, 'bb': bb_rate, 'hbp': hbp_rate,
         'hit': hit_prob, 'hr': hr_per_hit, 'xb': xb_per_hit, 'triple': triple_per_hit,
-        'sb': talent.get('sb_per_pa', 0.01),
+        'sb': sb_rate,
     }
 
 
@@ -1133,7 +1176,7 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
 
 
 def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
-                  n_sims, rng, sp_proj_ip=5.5):
+                  n_sims, rng, sp_proj_ip=5.5, sb_context=None):
     """
     Simulate n_sims full games for one team's offense.
     Batters hit in lineup order, tracking base state and outs per inning.
@@ -1278,8 +1321,16 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                             bases[1] = bases[0]  # 1B to 2B
                             bases[0] = True  # batter to 1B
 
-                            # SB attempt
-                            if rng.random() < rates['sb']:
+                            # SB attempt — rate already has sprint speed baked in,
+                            # apply catcher/pitcher context multiplier on top
+                            _sb_rate = rates['sb']
+                            if sb_context:
+                                pop = sb_context.get('catcher_pop', 1.95)
+                                _sb_rate *= clip(1.0 + (pop - 1.95) * 1.67, 0.75, 1.30)
+                                p_sb9 = sb_context.get('pitcher_sb_per_9', 1.0)
+                                _sb_rate *= clip(1.0 + (p_sb9 - 1.0) * 0.25, 0.80, 1.30)
+                                _sb_rate = min(_sb_rate, 0.12)
+                            if rng.random() < _sb_rate:
                                 dk_pts[bi][sim] += 5
 
                         # Batter scores a run on any hit if runners drove him in? No —
@@ -1373,7 +1424,7 @@ def fetch_data(target_date: str) -> dict:
         rows = sb.table('batter_stats').select(
             'player_id,season,pa,woba,xwoba,k_pct,bb_pct,iso,avg,sb,babip,'
             'barrel_pct,hard_hit_pct,avg_ev,wrc_plus,full_name,team,fb_pct,pull_pct,'
-            'ld_pct,bat_speed,squared_up_pct,blast_pct,o_swing_pct,swstr_pct,attack_angle'
+            'ld_pct,bat_speed,squared_up_pct,blast_pct,o_swing_pct,swstr_pct,attack_angle,sprint_speed'
         ).in_('player_id', chunk).in_('season', [SEASON, SEASON-1, SEASON-2]).execute().data or []
         for r in rows:
             batter_stats.setdefault(r['player_id'], {})[r['season']] = r
@@ -1399,7 +1450,7 @@ def fetch_data(target_date: str) -> dict:
         rows = sb.table('pitcher_stats').select(
             'player_id,season,ip,g,gs,xfip,siera,k_pct,bb_pct,hr9,babip,'
             'stuff_plus,location_plus,pitching_plus,swstr_pct,csw_pct,full_name,stats_level,'
-            'gb_pct,fb_pct,ld_pct,velo,lob_pct'
+            'gb_pct,fb_pct,ld_pct,velo,lob_pct,sb_per_9'
         ).in_('player_id', list(sp_ids)).in_('season', [SEASON, SEASON-1, SEASON-2]).execute().data or []
         for r in rows:
             pitcher_stats.setdefault(r['player_id'], {})[r['season']] = r
@@ -1552,6 +1603,20 @@ def fetch_data(target_date: str) -> dict:
         ).in_('game_pk', game_pks).execute().data or []
         weather = {r['game_pk']: r for r in rows}
 
+    # Catcher pop time — for SB probability model
+    catcher_poptime = {}
+    try:
+        rows = sb.table('catcher_poptime').select(
+            'player_id,season,pop_2b'
+        ).in_('season', [SEASON, SEASON-1]).order('season', desc=True).execute().data or []
+        for r in rows:
+            if r['player_id'] not in catcher_poptime and r.get('pop_2b'):
+                catcher_poptime[r['player_id']] = r['pop_2b']
+        if catcher_poptime:
+            print(f"  Catcher pop time: {len(catcher_poptime)} catchers loaded")
+    except Exception:
+        pass  # table may not exist yet
+
     # Pitcher props (Vegas IP and K lines)
     pitcher_props = {}
     if game_pks:
@@ -1631,6 +1696,7 @@ def fetch_data(target_date: str) -> dict:
         'arsenal_data': arsenal_data,
         'bat_tracking': bat_tracking,
         'sp_salaries': sp_salaries,
+        'catcher_poptime': catcher_poptime,
         '_reverse_remap': reverse_remap,
     }
 
@@ -1884,10 +1950,24 @@ def run():
             lineup_talents.append(talent)
             lineup_meta.append((pid, stats_pid, stats_by_yr, talent, lu))
 
+        # Build SB context: opposing catcher pop time + pitcher SB vulnerability
+        sb_ctx = None
+        opp_team_id = game.get('away_team_id') if is_home else game.get('home_team_id')
+        opp_lus = game_team_lineups.get((gpk, opp_team_id), [])
+        opp_catcher = next((lu for lu in opp_lus if lu.get('position') == 'C'), None)
+        catcher_pop = 1.95  # league avg default
+        if opp_catcher:
+            cpid = opp_catcher['player_id']
+            pop = data.get('catcher_poptime', {}).get(cpid)
+            if pop:
+                catcher_pop = pop
+        pitcher_sb9 = pitcher.get('sb_per_9', 1.0) if pitcher else 1.0
+        sb_ctx = {'catcher_pop': catcher_pop, 'pitcher_sb_per_9': pitcher_sb9}
+
         # Run full game simulation
         dk_results = sim_full_game(
             lineup_talents, pitcher, park_row, wx_row, odds_row,
-            is_home, n_sims, rng, sp_proj_ip
+            is_home, n_sims, rng, sp_proj_ip, sb_context=sb_ctx
         )
 
         # Build records from results
