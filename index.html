@@ -3644,6 +3644,14 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
           <div class="bb-li"><div class="bb-dot" style="background:#2d2a14;border:1px solid #fbbf24;"></div>Line Drive</div>
         </div>
       </div>
+      <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px;" id="sp-sb-section">
+        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--muted);margin-bottom:6px;">SB Vulnerability</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <span id="sp-sb-per9" class="sb-pill" style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px;background:rgba(154,170,184,.08);border:1px solid rgba(154,170,184,.18);color:var(--muted);">SB/9: --</span>
+          <span id="sp-sb-allowed" class="sb-pill" style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px;background:rgba(154,170,184,.08);border:1px solid rgba(154,170,184,.18);color:var(--muted);">SB: --</span>
+          <span id="sp-sb-pct" class="sb-pill" style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px;background:rgba(154,170,184,.08);border:1px solid rgba(154,170,184,.18);color:var(--muted);">SB%: --</span>
+        </div>
+      </div>
     </div><!-- /sec-body -->
   </div>
 
@@ -6980,6 +6988,31 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
     }
   }
 
+  // SB Vulnerability pills
+  const sbPer9El = document.getElementById('sp-sb-per9');
+  const sbAllEl  = document.getElementById('sp-sb-allowed');
+  const sbPctEl  = document.getElementById('sp-sb-pct');
+  if (sbPer9El) {
+    const sb9 = pd.sb_per_9;
+    const sb9Col = sb9 == null ? 'var(--muted)' : sb9 >= 1.5 ? 'var(--hi)' : sb9 >= 0.8 ? 'var(--mid)' : 'var(--lo)';
+    const sb9Bg  = sb9 == null ? 'rgba(154,170,184,.08)' : sb9 >= 1.5 ? 'rgba(74,222,128,.10)' : sb9 >= 0.8 ? 'rgba(251,191,36,.10)' : 'rgba(248,113,113,.10)';
+    const sb9Bdr = sb9 == null ? 'rgba(154,170,184,.18)' : sb9 >= 1.5 ? 'rgba(74,222,128,.25)' : sb9 >= 0.8 ? 'rgba(251,191,36,.25)' : 'rgba(248,113,113,.25)';
+    sbPer9El.textContent = 'SB/9: ' + (sb9 != null ? sb9.toFixed(2) : '--');
+    sbPer9El.style.color = sb9Col;
+    sbPer9El.style.background = sb9Bg;
+    sbPer9El.style.borderColor = sb9Bdr;
+  }
+  if (sbAllEl) {
+    const sba = pd.sb_allowed;
+    sbAllEl.textContent = 'SB: ' + (sba != null ? sba : '--');
+  }
+  if (sbPctEl) {
+    const sbp = pd.sb_pct;
+    const sbpCol = sbp == null ? 'var(--muted)' : sbp >= 0.80 ? 'var(--hi)' : sbp >= 0.65 ? 'var(--mid)' : 'var(--lo)';
+    sbPctEl.textContent = 'SB%: ' + (sbp != null ? Math.round(sbp * 100) + '%' : '--');
+    sbPctEl.style.color = sbpCol;
+  }
+
   // Physics panel is populated by loadArsenal() which runs in parallel
 
   // Store stats for signal rendering — re-renders when splits/arsenal arrive
@@ -7143,7 +7176,7 @@ async function loadArsenal(spId) {
     .from('pitch_arsenal')
     .select('*')
     .eq('player_id', spId)
-    .eq('season', 2025)
+    .eq('season', parseInt(activePitcherYear) || 2026)
     .order('usage_pct', { ascending: false });
 
   if (!data || error || data.length === 0) {
@@ -8001,7 +8034,7 @@ console.log('%c SlateHub Debug Ready — run auditPitcherIds() in console', 'col
 // ── BAT TRACKING
 async function loadBatTracking(playerIds) {
   const { data } = await sb.from('bat_tracking').select('*')
-    .in('player_id', playerIds).eq('season', 2025);
+    .in('player_id', playerIds).eq('season', parseInt(activeStatYear) || 2026);
   if (!data) return;
   data.forEach(r => { cachedBatTracking[r.player_id] = r; });
 
@@ -8499,6 +8532,8 @@ async function loadBatterStats(playerIds, lineupPlayers, year = '2026') {
       updateDetCell(corePane, 'SwStr%',   stats.swstr_pct,    v => (v > 1 ? v : v*100).toFixed(1) + '%');
       updateDetCell(corePane, 'O-Swing%', stats.o_swing_pct,  v => (v > 1 ? v : v*100).toFixed(1) + '%');
       updateBattedBallBar(corePane, stats);
+      // SB Profile section — inject once, then update values
+      updateSbProfile(corePane, stats, projMap[String(player.player_id)]);
     }
 
     // Splits tab
@@ -8883,6 +8918,37 @@ function updateBattedBallBar(corePane, stats) {
         `<span style="font-size:9px;color:var(--muted);align-self:center;">Avg: GB 44% · FB 34% · LD 21% · Pull 40% · Oppo 26%</span>`;
     }
   }
+}
+
+function updateSbProfile(corePane, stats, projData) {
+  // Inject SB Profile section after bb-legend (or bb-spray if present)
+  let sbEl = corePane.querySelector('.sb-profile');
+  if (!sbEl) {
+    sbEl = document.createElement('div');
+    sbEl.className = 'sb-profile';
+    const anchor = corePane.querySelector('.bb-spray') || corePane.querySelector('.bb-legend');
+    if (anchor) anchor.after(sbEl);
+    else corePane.appendChild(sbEl);
+  }
+  const psb = projData?.proj_sb;
+  const spd = stats?.sprint_speed;
+  const pSb9 = _activePd?.sb_per_9;
+
+  const sbCls  = psb == null ? '' : psb >= 0.15 ? 'hi' : psb >= 0.07 ? 'mid' : 'lo';
+  const spdCls = spd == null ? '' : spd <= 4.15 ? 'hi' : spd <= 4.35 ? 'mid' : 'lo';
+  const sb9Cls = pSb9 == null ? '' : pSb9 >= 1.5 ? 'hi' : pSb9 >= 0.8 ? 'mid' : 'lo';
+
+  const sbVal  = psb != null ? psb.toFixed(2) : '--';
+  const spdVal = spd != null ? spd.toFixed(2) + 's' : '--';
+  const sb9Val = pSb9 != null ? pSb9.toFixed(2) : '--';
+
+  sbEl.innerHTML =
+    `<div class="det-sec-lbl" style="margin-top:10px;">SB Profile</div>` +
+    `<div class="det-grid det-g3">` +
+      `<div class="det-cell"><div class="det-lbl">Proj SB</div><div class="det-val ${sbCls}">${sbVal}</div></div>` +
+      `<div class="det-cell"><div class="det-lbl">Sprint Spd</div><div class="det-val ${spdCls}">${spdVal}</div></div>` +
+      `<div class="det-cell"><div class="det-lbl">SP SB/9</div><div class="det-val ${sb9Cls}">${sb9Val}</div></div>` +
+    `</div>`;
 }
 
 function updateBatterCell(rowEl, valSelector, label, value, fmt) {
