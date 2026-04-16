@@ -1130,7 +1130,14 @@ def _compute_pa_rates(talent, pitcher, park, weather):
 
     hbp_rate = 0.010
 
-    # Hit probability — quality of contact drives BABIP outcomes
+    # Hit probability — P(hit | ball in play) including HR
+    # BABIP excludes HR from numerator and denominator, so using it raw
+    # under-counts hits by ~12%. Convert to total P(hit|BIP) by adding
+    # the HR component back: hit_prob = BABIP + HR/BIP
+    contact_rate = max(0.50, 1.0 - talent['k_pct'] - talent['bb_pct'] - 0.01)
+    hr_per_bip = clip(talent['iso'] / 3.0, 0.005, 0.08) / contact_rate
+    hit_prob_base = talent['babip'] + hr_per_bip
+
     ev_adj = clip(1.0 + (talent.get('avg_ev', 88.0) - 88.0) * 0.008, 0.92, 1.10)
     qoc_mult = clip(1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3, 0.85, 1.25)
     pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.0015, 0.94, 1.06)
@@ -1138,7 +1145,7 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather)
     ld_adj = clip(1.0 + (talent.get('ld_pct', 0.21) - 0.21) * 0.5, 0.90, 1.12)
-    hit_prob = clip(talent['babip'] * qoc_mult * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.18, 0.42)
+    hit_prob = clip(hit_prob_base * qoc_mult * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.20, 0.44)
 
     # HR rate — bat tracking metrics drive power ceiling
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
@@ -1201,7 +1208,10 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     qoc_mult = clip(1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3, 0.85, 1.25)
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather)
-    hit_prob = clip(bp_babip * qoc_mult * ev_adj * park_basic * wx_hit, 0.18, 0.42)
+    # Add HR/BIP back to BABIP for total P(hit|BIP) — same fix as _compute_pa_rates
+    bp_contact = max(0.50, 1.0 - talent['k_pct'] - talent['bb_pct'] - 0.01)
+    bp_hr_per_bip = clip(talent['iso'] / 3.0, 0.005, 0.08) / bp_contact
+    hit_prob = clip((bp_babip + bp_hr_per_bip) * qoc_mult * ev_adj * park_basic * wx_hit, 0.20, 0.44)
 
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
@@ -1294,11 +1304,9 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 batter_vol_sd = 0.05 + (o_swing_vol - 0.30) * 0.3  # higher chase = wider SD
                 batter_day = rng.normal(1.0, max(0.03, batter_vol_sd))
                 batter_day = clip(batter_day, 0.50, 1.55)
-                # Team factor affects HR power (game script/bullpen) but NOT base hit rate
-                # A hitter's contact ability doesn't change because his team is bad
-                # Hit rate: only individual batter volatility (not team environment)
+                # Hit rate: batter volatility only (team environment affects HR, not contact)
                 hit_p = clip(rates['hit'] * batter_day, 0.12, 0.45)
-                # HR rate: team environment + individual (high-scoring games produce more HRs)
+                # HR rate: stronger team environment effect (power is more context-dependent)
                 hr_p = clip(rates['hr'] * batter_day * (0.70 + 0.30 * tf), 0.02, 0.35)
 
                 # Roll PA
@@ -1438,11 +1446,18 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
             obp = t.get('avg', 0.250) + t.get('bb_pct', 0.08)
             obp_weights.append(obp)
         obp_total = sum(obp_weights) or 1.0
-        # Estimate team runs this sim from implied runs (Vegas) or from DK output
-        est_team_runs = (implied / LEAGUE_AVG_IMPLIED * 4.5) if odds and safe(odds.get('home_implied' if is_home else 'away_implied')) else 4.5
+        # Estimate team runs this sim from implied runs (Vegas) or default
+        _impl = None
+        if odds:
+            _impl = safe(odds.get('home_implied' if is_home else 'away_implied'))
+            if not _impl:
+                _gt = safe(odds.get('game_total'))
+                _impl = _gt / 2.0 if _gt else None
+        est_team_runs = _impl if _impl else 4.5
         est_team_runs *= tf  # scale by team factor for this sim
-        # Non-HR runs scored by baserunners: ~65% of team runs
-        non_hr_runs = est_team_runs * 0.65
+        # Non-HR runs scored by baserunners: ~50% of team runs
+        # (conservative — HR already give R directly, avoid double-counting)
+        non_hr_runs = est_team_runs * 0.50
         for i in range(9):
             r_share = non_hr_runs * obp_weights[i] / obp_total
             # Each run scored = +2 DK pts. Probabilistic: use fractional pts.
