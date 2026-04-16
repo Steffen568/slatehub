@@ -526,6 +526,85 @@ if not DRY_RUN and pitcher_split_rows:
 
 
 # ══════════════════════════════════════════════
+# STEP 5 — Per-pitch Stuff+/Location+/Pitching+ into pitch_arsenal
+# ═══════════════════════════════════════════���══
+
+print("\n═══ PITCH ARSENAL ENRICHMENT (per-pitch plus grades) ═══")
+
+# Build name -> pid from pitch_arsenal (names stored as "Last, First")
+arsenal_name_to_pid = {}
+off = 0
+while True:
+    r = sb.table('pitch_arsenal').select('player_id,player_name').eq('season', SEASON).range(off, off + 999).execute()
+    if not r.data:
+        break
+    for row in r.data:
+        pn = row.get('player_name', '')
+        pid = row.get('player_id')
+        if pn and pid:
+            parts = pn.split(',', 1)
+            if len(parts) == 2:
+                norm = normalize(f"{parts[1].strip()} {parts[0].strip()}")
+            else:
+                norm = normalize(pn)
+            arsenal_name_to_pid[norm] = pid
+    if len(r.data) < 1000:
+        break
+    off += 1000
+
+# Also use the general name_to_mlbam for broader coverage
+for n, pid in name_to_mlbam.items():
+    if n not in arsenal_name_to_pid:
+        arsenal_name_to_pid[n] = pid
+
+print(f"  Arsenal name lookup: {len(arsenal_name_to_pid):,} pitchers")
+
+PITCH_MAP = {'FA': 'FF', 'SI': 'SI', 'FC': 'FC', 'FS': 'FS',
+             'SL': 'SL', 'CU': 'CU', 'CH': 'CH', 'KC': 'KC', 'FO': 'FO'}
+
+arsenal_updates = 0
+for sheet_name, df, prefix, db_col in [
+    ('Stuff+', df_stuff, 'Stf+', 'stuff_plus'),
+    ('Location+', df_loc, 'Loc+', 'location_plus'),
+    ('Pitching+', df_pit_plus, 'Pit+', 'pitching_plus'),
+]:
+    if df.empty:
+        continue
+    sheet_updates = 0
+    for _, row in df.iterrows():
+        name = row.get('Name')
+        if not name or not isinstance(name, str):
+            continue
+        norm = normalize(name)
+        pid = arsenal_name_to_pid.get(norm)
+        if not pid:
+            # Try with team disambiguation
+            pid = resolve_id(name, row.get('Team'))
+        if not pid:
+            continue
+
+        for csv_suffix, pt in PITCH_MAP.items():
+            col_name = f"{prefix} {csv_suffix}"
+            val = sfloat(row.get(col_name))
+            if val is None:
+                continue
+            int_val = int(round(val))
+            if not DRY_RUN:
+                try:
+                    res = sb.table('pitch_arsenal').update({db_col: int_val}).eq(
+                        'player_id', pid).eq('pitch_type', pt).eq('season', SEASON).execute()
+                    if res.data:
+                        sheet_updates += 1
+                except Exception:
+                    pass
+
+    print(f"  {sheet_name} -> pitch_arsenal.{db_col}: {sheet_updates} rows updated")
+    arsenal_updates += sheet_updates
+
+print(f"  Total pitch_arsenal updates: {arsenal_updates}")
+
+
+# ══════════════════════════════════════════════
 # SUMMARY
 # ══════════════════════════════════════════════
 
