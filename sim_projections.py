@@ -65,8 +65,8 @@ PITCHER_IP_FLOOR = 40  # treat early-season IP as at least this for blend weight
 # Without this, a pitcher who's clearly leveled up (Soriano 2026: 2.63 xFIP vs 3.54 prior)
 # stays anchored to last year's mediocre numbers until 80+ IP accumulates.
 BREAKOUT_XFIP_THRESHOLD = 0.50   # min xFIP improvement to trigger boost
-BREAKOUT_IP_MULTIPLIER  = 3.0    # base multiplier for current-season effective IP
-BREAKOUT_MAX_MULTIPLIER = 5.0    # cap for scaled multiplier
+BREAKOUT_IP_MULTIPLIER  = 2.0    # base multiplier for current-season effective IP
+BREAKOUT_MAX_MULTIPLIER = 3.0    # cap for scaled multiplier
 
 # Season-scaled minimums: ramp up as sample grows through the year
 # Opening Day ~Mar 27 → full season ~Sep 28 ≈ 185 days
@@ -349,25 +349,53 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
             break
     sprint_speed = sprint_speed or 4.40  # league avg ~4.40s home-to-first
 
-    # SB rate
-    sb_num = 0.0
-    sb_den = 0.0
+    # Per-hitter counting stat rates (Marcel-weighted like SB)
+    # These replace flat league-average R/RBI/2B rates in the sim
+    def _rate(stat_col, default, lo, hi):
+        num, den = 0.0, 0.0
+        for yr, wt in weights:
+            row = stats_by_season.get(yr)
+            if not row or wt == 0:
+                continue
+            v = safe(row.get(stat_col), 0)
+            p = safe(row.get('pa'), 0)
+            if p > 0:
+                num += (v / p) * p * wt
+                den += p * wt
+        return clip(num / den, lo, hi) if den > 0 else default
+
+    sb_per_pa  = _rate('sb',  0.01, 0.0, 0.08)
+    r_per_pa   = _rate('r',   0.11, 0.03, 0.25)
+    rbi_per_pa = _rate('rbi', 0.10, 0.03, 0.25)
+    hr_per_pa  = _rate('hr',  0.03, 0.005, 0.10)
+
+    # Doubles per hit: derive from ISO, HR, AVG
+    # ISO = (1*2B + 2*3B + 3*HR) / AB, so 2B/AB ~ ISO - 3*HR/AB
+    # 2B/H = 2B/AB / AVG
+    xb_num, xb_den = 0.0, 0.0
     for yr, wt in weights:
         row = stats_by_season.get(yr)
         if not row or wt == 0:
             continue
-        s = safe(row.get('sb'), 0)
-        p = safe(row.get('pa'), 0)
-        if p > 0:
-            sb_num += (s / p) * p * wt
-            sb_den += p * wt
-    sb_per_pa = clip(sb_num / sb_den, 0.0, 0.08) if sb_den > 0 else 0.01
+        _iso = safe(row.get('iso'), 0)
+        _hr  = safe(row.get('hr'), 0)
+        _pa  = safe(row.get('pa'), 0)
+        _avg = safe(row.get('avg'), 0)
+        if _pa > 50 and _avg > 0.10:
+            _ab = _pa * (1 - safe(row.get('bb_pct'), 0.08) - 0.01)
+            _2b_per_ab = max(0, _iso - 3 * _hr / max(_ab, 1)) if _ab > 0 else 0
+            _2b_per_h = _2b_per_ab / _avg if _avg > 0 else 0.14
+            xb_num += _2b_per_h * _pa * wt
+            xb_den += _pa * wt
+    xb_per_hit = clip(xb_num / xb_den, 0.06, 0.30) if xb_den > 0 else 0.14
 
     return {
         'k_pct': k_pct, 'bb_pct': bb_pct, 'iso': iso, 'avg': avg,
         'babip': babip, 'woba': woba, 'barrel': barrel,
         'hard_hit': hard_hit, 'avg_ev': avg_ev, 'ld_pct': ld_pct,
         'fb_pct': fb_pct, 'pull_pct': pull_pct, 'sb_per_pa': sb_per_pa,
+        'r_per_pa': r_per_pa, 'rbi_per_pa': rbi_per_pa,
+        'hr_per_pa': hr_per_pa, 'xb_per_hit': xb_per_hit,
         'sprint_speed': sprint_speed,
         'bat_speed': bat_speed, 'squared_up': squared_up, 'blast': blast,
         'o_swing': o_swing, 'attack_angle': attack_angle,
@@ -445,9 +473,9 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
 
             xfip_improvement = prior_xfip - curr_xfip
             if xfip_improvement >= BREAKOUT_XFIP_THRESHOLD:
-                # Scale multiplier by magnitude: +0.50 = 3x, +1.00 = 5x (capped)
+                # Scale multiplier by magnitude: +0.50 = 2x, +1.00 = 3x (capped)
                 scale = min(BREAKOUT_MAX_MULTIPLIER,
-                            BREAKOUT_IP_MULTIPLIER + (xfip_improvement - BREAKOUT_XFIP_THRESHOLD) * 4.0)
+                            BREAKOUT_IP_MULTIPLIER + (xfip_improvement - BREAKOUT_XFIP_THRESHOLD) * 2.0)
                 # Redefine weighted_stat with boosted current-season IP
                 boosted_floor = PITCHER_IP_FLOOR * scale
                 def weighted_stat(col, league_avg, reg_ip=None, _boosted=boosted_floor, _base=base_reg):
@@ -707,10 +735,6 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     vegas_scale = (implied / LEAGUE_AVG_IMPLIED) if implied else 1.0
     vegas_scale = clip(vegas_scale, 0.70, 1.45)
 
-    # ── R/RBI multipliers ─────────────────────────────────────────────────
-    r_mult   = R_MULT.get(batting_order, 1.0)
-    rbi_mult = RBI_MULT.get(batting_order, 1.0)
-
     # ── Per-sim "hot/cold day" factor for batters ──────────────────────
     # Batters have day-to-day variance: timing, fatigue, approach.
     # hot_day ~ N(1.0, 0.18): scales hit probability and power
@@ -738,11 +762,11 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
         hit_rolls = rng.random(n_sims)
         is_hit = is_bip & (hit_rolls < sim_hit_prob)
 
-        # Hit type (uses per-sim HR rate)
+        # Hit type — use consistent per-sim thresholds
         type_rolls = rng.random(n_sims)
         is_hr  = is_hit & (type_rolls < sim_hr_per_hit)
-        is_3b  = is_hit & (~is_hr) & (type_rolls < hr_per_hit + triple_per_hit)
-        is_2b  = is_hit & (~is_hr) & (~is_3b) & (type_rolls < hr_per_hit + triple_per_hit + xb_per_hit)
+        is_3b  = is_hit & (~is_hr) & (type_rolls < sim_hr_per_hit + triple_per_hit)
+        is_2b  = is_hit & (~is_hr) & (~is_3b) & (type_rolls < sim_hr_per_hit + triple_per_hit + xb_per_hit)
         is_1b  = is_hit & (~is_hr) & (~is_3b) & (~is_2b)
 
         # SB opportunity on singles/walks/HBP — 3-factor model:
@@ -766,28 +790,27 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
         sb_rolls = rng.random(n_sims)
         is_sb = on_base & (sb_rolls < sb_rate)
 
-        # R scoring: empirical run-scoring rates by event type, scaled by
-        # lineup position and Vegas environment
-        # Research: ~33% of runners who reach base eventually score (MLB avg)
-        # HR always scores the batter; XBH score more often than 1B/BB
+        # R scoring: per-hitter R/PA rate, scaled by event type and Vegas
+        # Hitters with high historical R/PA (e.g. leadoff) naturally score more
         r_rolls = rng.random(n_sims)
-        base_r_rate = 0.30 * r_mult * vegas_scale
-        scores_r_1b  = is_1b  & (r_rolls < base_r_rate * 0.85)
-        scores_r_2b  = is_2b  & (r_rolls < base_r_rate * 1.20)
-        scores_r_3b  = is_3b  & (r_rolls < base_r_rate * 1.60)
-        scores_r_bb  = is_bb  & (r_rolls < base_r_rate * 0.70)
-        scores_r_hbp = is_hbp & (r_rolls < base_r_rate * 0.70)
+        hitter_r_rate = talent.get('r_per_pa', 0.11) * proj_pa * vegas_scale
+        # Scale by event type: HR always scores, XBH > 1B > BB
+        scores_r_1b  = is_1b  & (r_rolls < hitter_r_rate * 0.85)
+        scores_r_2b  = is_2b  & (r_rolls < hitter_r_rate * 1.20)
+        scores_r_3b  = is_3b  & (r_rolls < hitter_r_rate * 1.60)
+        scores_r_bb  = is_bb  & (r_rolls < hitter_r_rate * 0.70)
+        scores_r_hbp = is_hbp & (r_rolls < hitter_r_rate * 0.70)
         scores_r = is_hr | scores_r_1b | scores_r_2b | scores_r_3b | scores_r_bb | scores_r_hbp
 
-        # RBI: HR drives in self + runners (~1.3 avg), XBH drive in more
-        # than singles, scaled by lineup position and environment
+        # RBI: per-hitter RBI/PA rate, scaled by event type and Vegas
+        # HR drives in self + runners (~1.3 avg), XBH drive in more than singles
         rbi_rolls = rng.random(n_sims)
         rbi_from_hr = is_hr.astype(float) * (1.0 + rng.poisson(
             clip(0.35 * vegas_scale, 0.1, 0.8), n_sims).clip(0, 3))
-        rbi_rate = 0.18 * rbi_mult * vegas_scale
-        rbi_from_2b = is_2b.astype(float) * (rbi_rolls < rbi_rate * 1.8).astype(float)
-        rbi_from_3b = is_3b.astype(float) * (rbi_rolls < rbi_rate * 2.5).astype(float)
-        rbi_from_1b = is_1b.astype(float) * (rbi_rolls < rbi_rate).astype(float)
+        hitter_rbi_rate = talent.get('rbi_per_pa', 0.10) * proj_pa * vegas_scale
+        rbi_from_2b = is_2b.astype(float) * (rbi_rolls < hitter_rbi_rate * 1.8).astype(float)
+        rbi_from_3b = is_3b.astype(float) * (rbi_rolls < hitter_rbi_rate * 2.5).astype(float)
+        rbi_from_1b = is_1b.astype(float) * (rbi_rolls < hitter_rbi_rate).astype(float)
 
         # DK points
         pts = (
@@ -834,7 +857,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # Breakout pitchers: trust our talent model more — Vegas is slow to adjust
     # props for pitchers who have clearly leveled up (e.g. Soriano 3.5K line
     # despite 29.6% K rate). Reduce Vegas weight from 0.55 to 0.25.
-    VEGAS_WEIGHT = 0.25 if talent.get('is_breakout') else 0.55
+    VEGAS_WEIGHT = 0.40 if talent.get('is_breakout') else 0.55
 
     # Park + weather factors (our edge — granular env data Vegas doesn't fully price)
     park_k   = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
@@ -930,7 +953,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # since SIERA is entirely built from stale prior-year data that the
     # breakout has likely made obsolete.
     if talent.get('is_breakout'):
-        era_anchor = (split_xfip * 0.80 + talent['siera'] * 0.20)
+        era_anchor = (split_xfip * 0.65 + talent['siera'] * 0.35)
     else:
         era_anchor = (split_xfip * 0.50 + talent['siera'] * 0.50)
     # LOB% adjustment: pitchers who strand runners well have lower ER than xFIP predicts.
@@ -955,7 +978,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # Mid/low-tier pitchers (higher ERA) are LESS consistent → wider SD
     # Elite arms (low ERA) are more consistent → tighter SD
     era_consistency = clip(era_anchor / LEAGUE_AVG_XFIP, 0.70, 1.50)
-    stuff_sd = 0.18 + 0.06 * era_consistency  # elite ~0.22, mid ~0.24, bad ~0.27
+    stuff_sd = 0.22 + 0.06 * era_consistency  # elite ~0.26, mid ~0.28, bad ~0.31
     # Pitching+ (composite of stuff + location + command) is the best consistency predictor
     # A pitcher with Pitching+ 120 is far more reliable start-to-start than Stuff+ 120 alone
     pitching_plus = talent.get('pitching_plus', 100)
@@ -964,7 +987,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     location_plus = talent.get('location_plus', 100)
     stuff_sd -= (location_plus - 100) / 100.0 * 0.02  # ±2% additional from command
     stuff_sd = max(0.14, stuff_sd)  # floor
-    stuff_day = rng.normal(1.0, stuff_sd, size=n_sims).clip(0.40, 1.65)
+    stuff_day = rng.normal(1.0, stuff_sd, size=n_sims).clip(0.35, 1.70)
 
     # Scale rates per sim: good stuff day → more Ks, fewer hits, deeper IP
     sim_k_rate  = np.clip(k_rate * stuff_day, 0.08, 0.50)
@@ -1120,9 +1143,9 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     blast_adj = clip(1.0 + (talent.get('blast', 0.08) - 0.08) * 2.5, 0.90, 1.12)
     # Attack angle vs arm angle alignment
     aa_hr_adj = arm_angle_hr_interaction(talent.get('attack_angle'), pitcher.get('arm_angle') if pitcher else None)
-    hr_per_hit = clip((talent['iso'] / 3.5) * effective_park_hr * fb_adj * effective_wx_hr * pitcher_hr_ratio * bat_spd_adj * squp_adj * blast_adj * aa_hr_adj / hit_prob, 0.03, 0.30)
-    # XB rate: avg_ev drives doubles (harder contact = more XBH)
-    xb_per_hit = clip((talent['iso'] - 3 * talent['iso'] / 3.5) / hit_prob * ev_adj, 0.03, 0.20)
+    hr_per_hit = clip((talent['iso'] / 3.0) * effective_park_hr * fb_adj * effective_wx_hr * pitcher_hr_ratio * bat_spd_adj * squp_adj * blast_adj * aa_hr_adj / hit_prob, 0.03, 0.30)
+    # XB rate: per-hitter doubles rate from Marcel, adjusted by park/weather
+    xb_per_hit = clip(talent.get('xb_per_hit', 0.14) * ev_adj * park_basic, 0.06, 0.25)
     triple_per_hit = 0.015
 
     # SB rate: 3-factor model (sprint speed × catcher pop × pitcher vulnerability)
@@ -1165,8 +1188,8 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     bat_spd_adj = clip(1.0 + (talent.get('bat_speed', 72.0) - 72.0) * 0.015, 0.88, 1.15)
     squp_adj = clip(1.0 + (talent.get('squared_up', 0.18) - 0.18) * 1.5, 0.90, 1.12)
     blast_adj = clip(1.0 + (talent.get('blast', 0.08) - 0.08) * 2.5, 0.90, 1.12)
-    hr_per_hit = clip((talent['iso'] / 3.5) * effective_park_hr * fb_adj * effective_wx_hr * (bp_hr9 / LEAGUE_AVG_HR9) * bat_spd_adj * squp_adj * blast_adj / hit_prob, 0.03, 0.30)
-    xb_per_hit = clip((talent['iso'] - 3 * talent['iso'] / 3.5) / hit_prob * ev_adj, 0.03, 0.20)
+    hr_per_hit = clip((talent['iso'] / 3.0) * effective_park_hr * fb_adj * effective_wx_hr * (bp_hr9 / LEAGUE_AVG_HR9) * bat_spd_adj * squp_adj * blast_adj / hit_prob, 0.03, 0.30)
+    xb_per_hit = clip(talent.get('xb_per_hit', 0.14) * ev_adj * park_basic, 0.06, 0.25)
 
     return {
         'k': k_rate, 'bb': bb_rate, 'hbp': BULLPEN_HBP,
@@ -1212,14 +1235,15 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
     # Opposing SP quality: weaker SP → higher team factor
     if sp_talent:
         opp_era = sp_talent.get('xfip', LEAGUE_AVG_XFIP) * 0.5 + sp_talent.get('siera', LEAGUE_AVG_XFIP) * 0.5
-        sp_quality = clip(LEAGUE_AVG_XFIP / opp_era, 0.85, 1.20)  # >1 if SP is worse than avg
-        # Blend: Vegas captures most of this, so only apply 30% of the SP delta
-        team_env_mean *= 1.0 + (sp_quality - 1.0) * 0.30
+        sp_quality = clip(opp_era / LEAGUE_AVG_XFIP, 0.85, 1.20)  # >1 if SP is worse than avg
+        # Blend: Vegas captures some of this, apply 55% of the SP delta
+        team_env_mean *= 1.0 + (sp_quality - 1.0) * 0.55
     team_env_mean = clip(team_env_mean, 0.75, 1.35)
     team_factor = rng.normal(team_env_mean, 0.12, size=n_sims).clip(0.55, 1.50)
 
-    # Pre-allocate DK points per batter
+    # Pre-allocate DK points and SB counts per batter
     dk_pts = {i: np.zeros(n_sims) for i in range(9)}
+    sb_counts = {i: np.zeros(n_sims) for i in range(9)}
 
     # Base state: [1B occupied, 2B occupied, 3B occupied] per sim
     # We'll process sim-by-sim for correctness (base state is sequential)
@@ -1332,6 +1356,7 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                                 _sb_rate = min(_sb_rate, 0.12)
                             if rng.random() < _sb_rate:
                                 dk_pts[bi][sim] += 5
+                                sb_counts[bi][sim] += 1
 
                         # Batter scores a run on any hit if runners drove him in? No —
                         # batter R is tracked when HE crosses home (HR, or scored later).
@@ -1368,7 +1393,7 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
             contact_boost = clip((0.15 - t['k_pct']) / 0.15 * 0.9, 0.0, 0.9)
             dk_pts[i] += contact_boost
 
-    return dk_pts
+    return dk_pts, sb_counts
 
 
 # ── Data Fetching ─────────────────────────────────────────────────────────────
@@ -1392,9 +1417,11 @@ def fetch_data(target_date: str) -> dict:
     ).in_('game_pk', game_pks).gte('batting_order', 1).lte('batting_order', 9).execute().data or []
     print(f"  Lineups: {len(lineups)}")
 
-    # Build reverse PLAYER_ID_REMAP so we can look up stats when lineup
-    # uses a remapped ID (e.g. 115223) but stats are under the original (665489)
-    reverse_remap = {}
+    # Build forward PLAYER_ID_REMAP so we can look up stats when lineup
+    # uses a wrong ID (e.g. 115223) but stats are under the correct ID (665489).
+    # PLAYER_ID_REMAP is {wrong_id -> correct_stats_id}, which is exactly
+    # what we need: lineup has wrong_id, stats are under correct_stats_id.
+    forward_remap = {}
     try:
         import ast as _ast
         import os as _os
@@ -1405,18 +1432,16 @@ def fetch_data(target_date: str) -> dict:
             if isinstance(node, _ast.Assign):
                 for t in node.targets:
                     if isinstance(t, _ast.Name) and t.id == 'PLAYER_ID_REMAP':
-                        remap = eval(compile(_ast.Expression(body=node.value), '<remap>', 'eval'))
-                        for orig, remapped in remap.items():
-                            reverse_remap[remapped] = orig
+                        forward_remap = eval(compile(_ast.Expression(body=node.value), '<remap>', 'eval'))
                         break
     except Exception:
         pass
 
     # Batter stats (3 seasons, chunked)
-    # Include reverse-remapped IDs so stats load for players whose lineup ID
+    # Include remapped IDs so stats load for players whose lineup ID
     # differs from their stats ID (e.g. Vlad Jr: lineup=115223, stats=665489)
     player_ids = list({l['player_id'] for l in lineups if l.get('player_id')})
-    alt_ids = [reverse_remap[pid] for pid in player_ids if pid in reverse_remap]
+    alt_ids = [forward_remap[pid] for pid in player_ids if pid in forward_remap]
     all_stat_ids = list(set(player_ids + alt_ids))
     batter_stats = {}
     for i in range(0, len(all_stat_ids), 500):
@@ -1697,7 +1722,7 @@ def fetch_data(target_date: str) -> dict:
         'bat_tracking': bat_tracking,
         'sp_salaries': sp_salaries,
         'catcher_poptime': catcher_poptime,
-        '_reverse_remap': reverse_remap,
+        '_forward_remap': forward_remap,
     }
 
 
@@ -1907,13 +1932,20 @@ def run():
             pid = lu['player_id']
             stats_pid = pid
             stats_by_yr = data['batter_stats'].get(pid, {})
+            # Phantom rows (full_name=None, pa=None) can exist from load_stats —
+            # treat them as empty so the remap fallback triggers
+            if stats_by_yr:
+                any_real = any(s.get('full_name') and s.get('pa') for s in stats_by_yr.values())
+                if not any_real:
+                    stats_by_yr = {}
             if not stats_by_yr:
-                alt = data.get('_reverse_remap', {}).get(pid)
+                alt = data.get('_forward_remap', {}).get(pid)
                 if alt:
                     stats_by_yr = data['batter_stats'].get(alt, {})
                     if stats_by_yr:
                         stats_pid = alt
             if not stats_by_yr:
+                print(f"    WARNING: No stats found for {lu.get('player_name','?')} (id={pid}) — using league-average fallback")
                 talent = {
                     'k_pct': LEAGUE_AVG_K_PCT, 'bb_pct': LEAGUE_AVG_BB_PCT,
                     'iso': LEAGUE_AVG_ISO, 'avg': 0.248, 'babip': LEAGUE_AVG_BABIP,
@@ -1922,6 +1954,8 @@ def run():
                     'ld_pct': 0.21, 'bat_speed': 72.0, 'squared_up': 0.18,
                     'blast': 0.08, 'o_swing': 0.30, 'attack_angle': 12.0,
                     'swing_length': 7.2,
+                    'r_per_pa': 0.11, 'rbi_per_pa': 0.10,
+                    'hr_per_pa': 0.03, 'xb_per_hit': 0.14,
                 }
             else:
                 talent = marcel_batter(stats_by_yr, SEASON, target_date)
@@ -1930,16 +1964,12 @@ def run():
                 if bt and safe(bt.get('swing_length')):
                     talent['swing_length'] = safe(bt['swing_length'])
 
-            # Platoon adjustment
-            split_row = data['batter_splits'].get(stats_pid, {}).get(opp_sp_hand)
-            talent = platoon_adjust(talent, split_row)
-            if split_row and safe(split_row.get('wrc_plus')):
-                _pa = safe(split_row.get('pa'), 0)
-                _rf = clip(_pa / 300.0, 0.0, 1.0)
-                _rwrc = safe(split_row['wrc_plus']) * _rf + 100.0 * (1 - _rf)
-                talent['_platoon_adj'] = clip(_rwrc / 100.0, 0.70, 1.40)
-            else:
-                talent['_platoon_adj'] = 1.0
+            # Platoon adjustment — REMOVED (Session 45)
+            # Individual batter talent already reflects platoon tendencies via
+            # their own K%/BB%/ISO/BABIP. Applying a team-level platoon_adjust
+            # double-counted the split and showed r=0.000 across all postgame
+            # reviews. Keep _platoon_adj=1.0 for output compatibility.
+            talent['_platoon_adj'] = 1.0
 
             # Compute PA rates vs SP and vs bullpen
             rates_sp = _compute_pa_rates(talent, pitcher, park_row, wx_row)
@@ -1965,7 +1995,7 @@ def run():
         sb_ctx = {'catcher_pop': catcher_pop, 'pitcher_sb_per_9': pitcher_sb9}
 
         # Run full game simulation
-        dk_results = sim_full_game(
+        dk_results, sb_results = sim_full_game(
             lineup_talents, pitcher, park_row, wx_row, odds_row,
             is_home, n_sims, rng, sp_proj_ip, sb_context=sb_ctx
         )
@@ -1973,6 +2003,8 @@ def run():
         # Build records from results
         for slot_idx, (pid, stats_pid, stats_by_yr, talent, lu) in enumerate(lineup_meta):
             dk_dist = dk_results[slot_idx]
+            sb_dist = sb_results[slot_idx]
+            proj_sb = round2(float(np.mean(sb_dist)))
             order = lu.get('batting_order') or (slot_idx + 1)
 
             mean   = float(np.mean(dk_dist))
@@ -2022,6 +2054,7 @@ def run():
                 'pitcher_mult': _pitcher_mult, 'platoon_mult': _platoon_mult,
                 'context_mult': _context_mult, 'vegas_mult': _vegas_mult,
                 'park_mult': _park_mult, 'weather_mult': _weather_mult,
+                'proj_sb': proj_sb,
                 'proj_ip': None, 'proj_ks': None, 'proj_er': None,
                 'proj_h_allowed': None, 'proj_bb_allowed': None, 'win_prob': None,
             })
