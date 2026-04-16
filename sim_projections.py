@@ -370,7 +370,7 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
                 den += p * wt
         return clip(num / den, lo, hi) if den > 0 else default
 
-    sb_per_pa  = _rate('sb',  0.01, 0.0, 0.08)
+    sb_per_pa  = _rate('sb',  0.01, 0.0, 0.15)
     r_per_pa   = _rate('r',   0.11, 0.03, 0.25)
     rbi_per_pa = _rate('rbi', 0.10, 0.03, 0.25)
     hr_per_pa  = _rate('hr',  0.03, 0.005, 0.10)
@@ -1170,9 +1170,12 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     triple_per_hit = 0.015
 
     # SB rate: 3-factor model (sprint speed × catcher pop × pitcher vulnerability)
-    base_sb = talent.get('sb_per_pa', 0.01)
+    # sb_per_pa is the historical rate. In the full-game sim, a batter gets one SB
+    # chance per on-base event, but real SBs also happen during subsequent PAs while
+    # the runner is still on base. Scale up by ~2.5x to account for multi-PA windows.
+    base_sb = talent.get('sb_per_pa', 0.01) * 2.5
     speed_mult = clip(1.0 + (4.40 - talent.get('sprint_speed', 4.40)) * 1.16, 0.50, 1.60)
-    sb_rate = clip(base_sb * speed_mult, 0.0, 0.12)
+    sb_rate = clip(base_sb * speed_mult, 0.0, 0.35)
 
     return {
         'k': k_rate, 'bb': bb_rate, 'hbp': hbp_rate,
@@ -1307,14 +1310,22 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                     # Walk — force advance
                     dk_pts[bi][sim] += 2  # BB
                     if bases[0] and bases[1] and bases[2]:
-                        # Bases loaded walk — runner scores from 3B
-                        # Find who was on 3B (we don't track identity, just score RBI)
                         dk_pts[bi][sim] += 2  # RBI
                     if bases[0] and bases[1]:
                         bases[2] = True
                     if bases[0]:
                         bases[1] = True
                     bases[0] = True
+                    # SB attempt after walk
+                    _sb_rate = rates['sb']
+                    if sb_context:
+                        pop = sb_context.get('catcher_pop', 1.95)
+                        _sb_rate *= clip(1.0 + (pop - 1.95) * 1.67, 0.75, 1.30)
+                        p_sb9 = sb_context.get('pitcher_sb_per_9', 1.0)
+                        _sb_rate *= clip(1.0 + (p_sb9 - 1.0) * 0.25, 0.80, 1.30)
+                    if rng.random() < _sb_rate:
+                        dk_pts[bi][sim] += 5
+                        sb_counts[bi][sim] += 1
                 elif roll < rates['k'] + rates['bb'] + rates['hbp']:
                     # HBP — same as walk
                     dk_pts[bi][sim] += 2  # HBP
@@ -1325,6 +1336,16 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                     if bases[0]:
                         bases[1] = True
                     bases[0] = True
+                    # SB attempt after HBP
+                    _sb_rate = rates['sb']
+                    if sb_context:
+                        pop = sb_context.get('catcher_pop', 1.95)
+                        _sb_rate *= clip(1.0 + (pop - 1.95) * 1.67, 0.75, 1.30)
+                        p_sb9 = sb_context.get('pitcher_sb_per_9', 1.0)
+                        _sb_rate *= clip(1.0 + (p_sb9 - 1.0) * 0.25, 0.80, 1.30)
+                    if rng.random() < _sb_rate:
+                        dk_pts[bi][sim] += 5
+                        sb_counts[bi][sim] += 1
                 else:
                     # Ball in play
                     hit_roll = rng.random()
@@ -1366,15 +1387,13 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                             bases[1] = bases[0]  # 1B to 2B
                             bases[0] = True  # batter to 1B
 
-                            # SB attempt — rate already has sprint speed baked in,
-                            # apply catcher/pitcher context multiplier on top
+                            # SB attempt after single
                             _sb_rate = rates['sb']
                             if sb_context:
                                 pop = sb_context.get('catcher_pop', 1.95)
                                 _sb_rate *= clip(1.0 + (pop - 1.95) * 1.67, 0.75, 1.30)
                                 p_sb9 = sb_context.get('pitcher_sb_per_9', 1.0)
                                 _sb_rate *= clip(1.0 + (p_sb9 - 1.0) * 0.25, 0.80, 1.30)
-                                _sb_rate = min(_sb_rate, 0.12)
                             if rng.random() < _sb_rate:
                                 dk_pts[bi][sim] += 5
                                 sb_counts[bi][sim] += 1
