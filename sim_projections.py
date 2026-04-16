@@ -541,7 +541,7 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
     pitching_plus = pitching_plus or 100.0
     location_plus = location_plus or 100.0
 
-    # IP per GS
+    # IP per GS — use most recent season with enough starts
     ip_per_gs = 5.1
     seasons = [current_season, current_season-1, current_season-2] if use_current \
               else [current_season-1, current_season-2]
@@ -551,23 +551,33 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
             continue
         ip = safe(row.get('ip'), 0)
         gs = safe(row.get('gs'), 0)
-        if gs >= 5:
+        if gs >= 3:  # lowered from 5 to catch early-season starters
             raw = clip(ip / gs, 3.0, 6.5)
             ip_per_gs = raw * 0.92 + 5.1 * 0.08
             break
 
     # Opener/reliever detection: if pitcher is primarily a reliever (GS < 20% of G
     # across recent seasons), they're likely an opener — cap IP projection low.
-    total_g, total_gs = 0, 0
-    for yr in seasons:
-        row = stats_by_season.get(yr)
-        if not row:
-            continue
-        total_g += safe(row.get('g'), 0)
-        total_gs += safe(row.get('gs'), 0)
-    if total_g >= 5 and total_gs / total_g < 0.20:
-        # Reliever profile being used as opener — project ~2 IP (1-3 innings)
-        ip_per_gs = clip(ip_per_gs, 1.5, 3.0)
+    # EXCEPTION: if current season shows starter role (GS/G >= 50%), trust the
+    # role change (e.g. reliever-to-starter conversion like Matz 2026).
+    curr_is_starter = False
+    if use_current and curr:
+        curr_g = safe(curr.get('g'), 0)
+        curr_gs = safe(curr.get('gs'), 0)
+        if curr_g >= 2 and curr_gs / curr_g >= 0.50:
+            curr_is_starter = True
+
+    if not curr_is_starter:
+        total_g, total_gs = 0, 0
+        for yr in seasons:
+            row = stats_by_season.get(yr)
+            if not row:
+                continue
+            total_g += safe(row.get('g'), 0)
+            total_gs += safe(row.get('gs'), 0)
+        if total_g >= 5 and total_gs / total_g < 0.20:
+            # Reliever profile being used as opener — project ~2 IP (1-3 innings)
+            ip_per_gs = clip(ip_per_gs, 1.5, 3.0)
 
     # SB vulnerability: most recent season's sb_per_9 (not Marcel-weighted — situational stat)
     sb_per_9 = None
@@ -873,7 +883,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
         proj_ip = vegas_ip * VEGAS_WEIGHT + talent_ip * (1.0 - VEGAS_WEIGHT)
     else:
         # No Vegas anchor — regress toward league avg to avoid inflated IP/GS
-        proj_ip = talent_ip * 0.60 + 5.1 * 0.40
+        proj_ip = talent_ip * 0.75 + 5.1 * 0.25
 
     # ── Pitcher splits adjustment ──────────────────────────────────────────
     # Blend split-specific K%, BB%, xFIP based on opposing lineup handedness
@@ -904,8 +914,9 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
             split_xfip = r_xfip * r_pct + l_xfip * l_pct
 
     # ── K rate: blend Vegas + talent ────────────────────────────────────────
-    # Talent-based K rate (matchup + park adjusted)
-    talent_k_rate = split_k * (1.0 + (1.0 - opp_quality) * 0.35) * park_k
+    # Talent-based K rate (park adjusted only — opp_quality is wRC+ based, not K%
+    # based, so applying it here suppresses Ks against high-K/high-wRC+ lineups)
+    talent_k_rate = split_k * park_k
     # Note: SwStr% and velo adjustments removed — now captured upstream by
     # reliability_blend_pitcher() (Tier 1 stuff model + Tier 2 pitch-level model)
     if vegas_ks and proj_ip > 0:
@@ -929,7 +940,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     hr_rate = clip(talent['hr9'] / (PA_PER_IP * 9) * park_hr * wx_hr * opp_quality, 0.005, 0.060)
 
     # Win probability
-    win_prob = 0.17
+    win_prob = 0.25
     if odds:
         home_ml = odds.get('home_ml')
         away_ml = odds.get('away_ml')
@@ -941,7 +952,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
             total = hp + ap
             team_win = (hp / total) if is_home else (ap / total)
             ip_scale = clip(proj_ip / 5.1, 0.70, 1.30)
-            win_prob = clip(team_win * 0.68 * ip_scale, 0.10, 0.45)
+            win_prob = clip(team_win * 0.78 * ip_scale, 0.10, 0.52)
 
     # ── ERA-anchored ER model ────────────────────────────────────────────
     # Rather than simulating base-state (which is hard to calibrate),
@@ -965,8 +976,10 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
         reg_lob = lob * 0.40 + 0.72 * 0.60
         lob_adj = clip(1.0 - (reg_lob - 0.72) * 0.8, 0.93, 1.07)
         era_anchor *= lob_adj
-    er_per_ip = era_anchor / 9.0 * opp_quality * (safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0)
-    er_per_ip *= weather_hr_mult(weather)  # HR-driven ER scales with weather
+    # Park HR factor: dampen to ~45% effect on ER (HR accounts for ~35% of runs)
+    park_er_adj = 1.0 + (park_hr - 1.0) * 0.45
+    er_per_ip = era_anchor / 9.0 * opp_quality * park_er_adj
+    er_per_ip *= 1.0 + (wx_hr - 1.0) * 0.45  # same dampening for weather HR effect
 
     # ── Per-sim "stuff day" factor ──────────────────────────────────────
     # A pitcher's effectiveness varies start-to-start. On a great stuff day,
@@ -1001,7 +1014,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # IP variance wider (SD=1.2): allows 3 IP blowups and 8 IP gems
     sim_ip = rng.normal(proj_ip, 1.2, size=n_sims)
     # Stuff day affects IP: good stuff → deeper, bad stuff → shorter
-    sim_ip = sim_ip * (0.85 + 0.15 * stuff_day)
+    sim_ip = sim_ip * (0.88 + 0.12 * stuff_day)
     sim_ip = sim_ip.clip(1.0, 9.0)
     sim_batters_faced = (sim_ip * PA_PER_IP).astype(int).clip(4, 40)
 
@@ -2156,16 +2169,18 @@ def run():
             talent_ip = talent['ip_per_gs']  # raw — no matchup adj (Vegas prices it)
             exp_ip = (v_ip * VW + talent_ip * (1.0 - VW)) if v_ip else (talent_ip * 0.60 + 5.1 * 0.40)
             exp_pa = exp_ip * PA_PER_IP
-            talent_ks = exp_pa * talent['k_pct'] * clip(1.0 + (1.0 - opp_qual) * 0.35, 0.85, 1.18)
+            talent_ks = exp_pa * talent['k_pct']
             exp_ks = (v_ks * VW + talent_ks * (1.0 - VW)) if v_ks else talent_ks
             exp_bb = exp_pa * talent['bb_pct'] * clip(1.0 + (opp_qual - 1.0) * 0.20, 0.88, 1.15)
             era_anchor = talent['xfip'] * 0.50 + talent['siera'] * 0.50
             park_hr_f = safe(park_row.get('hr_factor'), 100) / 100.0 if park_row else 1.0
             wx_hr = weather_hr_mult(wx_row)
-            exp_er = era_anchor * exp_ip / 9.0 * opp_qual * park_hr_f * wx_hr
+            park_er_adj = 1.0 + (park_hr_f - 1.0) * 0.45
+            wx_er_adj = 1.0 + (wx_hr - 1.0) * 0.45
+            exp_er = era_anchor * exp_ip / 9.0 * opp_qual * park_er_adj * wx_er_adj
 
             # Win probability (same as sim_pitcher_game)
-            exp_win = 0.17
+            exp_win = 0.25
             if odds_row:
                 hml = odds_row.get('home_ml')
                 aml = odds_row.get('away_ml')
@@ -2175,7 +2190,7 @@ def run():
                         return abs(ml)/(abs(ml)+100) if ml < 0 else 100/(ml+100)
                     hp, ap = _tp(hml), _tp(aml)
                     tw = (hp / (hp+ap)) if is_home else (ap / (hp+ap))
-                    exp_win = clip(tw * 0.68 * clip(exp_ip / 5.1, 0.70, 1.30), 0.10, 0.45)
+                    exp_win = clip(tw * 0.78 * clip(exp_ip / 5.1, 0.70, 1.30), 0.10, 0.52)
 
             curr = p_stats.get(SEASON) or p_stats.get(SEASON-1) or p_stats.get(SEASON-2)
             full_name = (curr or {}).get('full_name') or '?'
@@ -2208,7 +2223,7 @@ def run():
                 'pitcher_mult': round2(opp_qual),  # opposing lineup quality (lower = weaker lineup = better for pitcher)
                 'platoon_mult': None,
                 'context_mult': None,
-                'vegas_mult': round2(exp_win / 0.17) if exp_win else None,  # win prob relative to baseline
+                'vegas_mult': round2(exp_win / 0.25) if exp_win else None,  # win prob relative to baseline
                 'park_mult': round2(park_hr_f),
                 'weather_mult': round2(wx_hr),
             })
