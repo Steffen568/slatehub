@@ -28,7 +28,7 @@ TEAM_ABBR_TO_ID = {
     "STL": 138, "TB":  139, "TEX": 140, "TOR": 141, "WSH": 120,
     # Alternate abbreviations RG might use
     "CHW": 145, "SDP": 135, "SFG": 137, "TBR": 139, "WSN": 120,
-    "KCR": 118, "AZ": 109, "ATH": 133,
+    "KCR": 118, "AZ": 109, "ATH": 133, "WAS": 120,
 }
 
 
@@ -55,7 +55,9 @@ def normalize(name):
 
 
 def load_player_name_map():
-    """Load normalized name → (mlbam_id, display_name) from players table."""
+    """Load normalized name → (mlbam_id, display_name) from players table.
+    Detects ambiguous names (multiple players share the same normalized name)
+    and excludes them from the dict — roster lookup handles those instead."""
     print("Loading player name map...")
     all_players = []
     offset = 0
@@ -71,12 +73,48 @@ def load_player_name_map():
         offset += 1000
 
     name_map = {}
+    ambiguous = set()
     for p in all_players:
-        if p['name_normalized'] and p['mlbam_id']:
-            full = ' '.join(x for x in [p.get('first_name'), p.get('last_name')] if x)
-            name_map[p['name_normalized']] = (p['mlbam_id'], full)
-    print(f"  {len(name_map):,} player name mappings loaded")
+        nn = p.get('name_normalized')
+        mlbam = p.get('mlbam_id')
+        if nn and mlbam:
+            if nn in name_map and name_map[nn][0] != mlbam:
+                ambiguous.add(nn)
+            else:
+                full = ' '.join(x for x in [p.get('first_name'), p.get('last_name')] if x)
+                name_map[nn] = (mlbam, full)
+
+    # Remove ambiguous names — roster lookup must resolve these
+    for nn in ambiguous:
+        name_map.pop(nn, None)
+
+    print(f"  {len(name_map):,} unique player name mappings loaded")
+    if ambiguous:
+        print(f"  {len(ambiguous)} ambiguous name(s) excluded (will use roster API)")
     return name_map
+
+
+def load_roster_lookup(team_ids):
+    """Build (normalized_name, team_id) → mlbam_id from MLB Stats API active rosters.
+    This is the authoritative source for player IDs — resolves same-name collisions."""
+    print("Loading MLB active rosters for team-based ID resolution...")
+    roster_lookup = {}  # (normalized_name, team_id) -> mlbam_id
+    for tid in team_ids:
+        try:
+            url = f'https://statsapi.mlb.com/api/v1/teams/{tid}/roster?rosterType=active'
+            r = requests.get(url, timeout=10)
+            r.raise_for_status()
+            for p in r.json().get('roster', []):
+                person = p.get('person', {})
+                pid = person.get('id')
+                name = person.get('fullName', '')
+                if pid and name:
+                    norm = normalize(name)
+                    roster_lookup[(norm, tid)] = pid
+        except Exception as e:
+            print(f"  Warning: roster fetch failed for team {tid}: {e}")
+    print(f"  {len(roster_lookup):,} roster entries loaded across {len(team_ids)} teams")
+    return roster_lookup
 
 
 def load_todays_games():
@@ -205,8 +243,12 @@ def run():
         print("No games in database for today. Run load_schedule.py first.")
         return
 
-    # 2. Load player name map
+    # 2. Load player name map (excludes ambiguous names)
     name_map = load_player_name_map()
+
+    # 2b. Load MLB roster lookup for team-based disambiguation
+    all_team_ids = list({g['home_team_id'] for g in db_games} | {g['away_team_id'] for g in db_games})
+    roster_lookup = load_roster_lookup(all_team_ids)
 
     # 3. Check which lineups are already confirmed
     game_pks = [g['game_pk'] for g in db_games]
@@ -253,13 +295,20 @@ def run():
 
             for i, player_name in enumerate(players):
                 norm = normalize(player_name)
-                match = name_map.get(norm)
 
-                if match:
-                    player_id, db_name = match
+                # Priority 1: Roster lookup (team + name = authoritative MLBAM ID)
+                roster_id = roster_lookup.get((norm, team_id))
+                if roster_id:
+                    player_id = roster_id
+                    db_name = player_name
                 else:
-                    unresolved_names.append(player_name)
-                    player_id = None
+                    # Priority 2: Unambiguous name map (only if name is unique)
+                    match = name_map.get(norm)
+                    if match:
+                        player_id, db_name = match
+                    else:
+                        unresolved_names.append(f"{player_name} ({team_name})")
+                        player_id = None
 
                 if not player_id:
                     continue  # Can't insert without a valid player_id
