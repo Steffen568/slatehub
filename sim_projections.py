@@ -211,6 +211,12 @@ def reliability_blend_pitcher(marcel: dict, arsenal: dict, current_ip: float) ->
     if not arsenal:
         return result  # no arsenal data -> Marcel only (graceful fallback)
 
+    # If arsenal has no real Stuff+ data, skip stuff tier —
+    # without Stuff+, the tier just drags Marcel toward league average
+    has_real_stuff = arsenal.get('stuff_plus', 100.0) != 100.0
+    if not has_real_stuff:
+        return result
+
     # Tier reliabilities
     r_stuff = reliability(current_ip, STAB_STUFF)
     has_pitch_level = marcel.get('swstr_pct') is not None or marcel.get('csw_pct') is not None
@@ -596,6 +602,7 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
         'gb_pct': gb_pct, 'ip_per_gs': ip_per_gs,
         'velo': velo, 'lob_pct': lob_pct,
         'is_breakout': is_breakout,
+        '_has_current_siera': bool(curr and safe(curr.get('siera'))),
         'sb_per_9': sb_per_9,
     }
 
@@ -900,9 +907,10 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
         l_pa = safe(l_split.get('pa'), 0)
         # Only use splits with reasonable sample (30+ combined PA)
         if r_pa + l_pa >= 30:
-            # Regress each split toward overall — more PA = less regression
-            r_rf = clip(r_pa / 200.0, 0.0, 0.80)
-            l_rf = clip(l_pa / 200.0, 0.0, 0.80)
+            # Regress each split toward overall — cap at 0.60 to prevent splits
+            # from dominating talent (e.g. 257 PA vs LHH shouldn't override Marcel)
+            r_rf = clip(r_pa / 250.0, 0.0, 0.60)
+            l_rf = clip(l_pa / 250.0, 0.0, 0.60)
             r_k = (safe(r_split.get('k_pct')) or talent['k_pct']) * r_rf + talent['k_pct'] * (1 - r_rf)
             l_k = (safe(l_split.get('k_pct')) or talent['k_pct']) * l_rf + talent['k_pct'] * (1 - l_rf)
             split_k = r_k * r_pct + l_k * l_pct
@@ -960,11 +968,11 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # and environment as the per-9 ER rate, then simulate variance around it.
     #
     # This grounds ER in real pitching metrics instead of a fragile base-runner sim.
-    # Breakout pitchers with no current-season SIERA: lean on xFIP (75/25)
-    # since SIERA is entirely built from stale prior-year data that the
-    # breakout has likely made obsolete.
+    # Breakout pitchers: lean on xFIP over SIERA. If no current-season SIERA,
+    # SIERA is entirely stale prior-year data — weight it even less.
     if talent.get('is_breakout'):
-        era_anchor = (split_xfip * 0.65 + talent['siera'] * 0.35)
+        siera_wt = 0.25 if talent.get('_has_current_siera') else 0.15
+        era_anchor = (split_xfip * (1.0 - siera_wt) + talent['siera'] * siera_wt)
     else:
         era_anchor = (split_xfip * 0.50 + talent['siera'] * 0.50)
     # LOB% adjustment: pitchers who strand runners well have lower ER than xFIP predicts.
@@ -2167,12 +2175,16 @@ def run():
             PA_PER_IP = 4.3
             VW = 0.55  # match VEGAS_WEIGHT in sim_pitcher_game
             talent_ip = talent['ip_per_gs']  # raw — no matchup adj (Vegas prices it)
-            exp_ip = (v_ip * VW + talent_ip * (1.0 - VW)) if v_ip else (talent_ip * 0.60 + 5.1 * 0.40)
+            exp_ip = (v_ip * VW + talent_ip * (1.0 - VW)) if v_ip else (talent_ip * 0.75 + 5.1 * 0.25)
             exp_pa = exp_ip * PA_PER_IP
             talent_ks = exp_pa * talent['k_pct']
             exp_ks = (v_ks * VW + talent_ks * (1.0 - VW)) if v_ks else talent_ks
             exp_bb = exp_pa * talent['bb_pct'] * clip(1.0 + (opp_qual - 1.0) * 0.20, 0.88, 1.15)
-            era_anchor = talent['xfip'] * 0.50 + talent['siera'] * 0.50
+            if talent.get('is_breakout'):
+                siera_wt = 0.25 if talent.get('_has_current_siera') else 0.15
+                era_anchor = talent['xfip'] * (1.0 - siera_wt) + talent['siera'] * siera_wt
+            else:
+                era_anchor = talent['xfip'] * 0.50 + talent['siera'] * 0.50
             park_hr_f = safe(park_row.get('hr_factor'), 100) / 100.0 if park_row else 1.0
             wx_hr = weather_hr_mult(wx_row)
             park_er_adj = 1.0 + (park_hr_f - 1.0) * 0.45
