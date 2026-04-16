@@ -4742,7 +4742,8 @@ const HIT_COLS = [
   { key:'phr',   label:'HR',      w:'36px',  on:false, sort:null,    fixed:false },
   { key:'pr',    label:'R',       w:'32px',  on:false, sort:null,    fixed:false },
   { key:'prbi',  label:'RBI',     w:'36px',  on:false, sort:null,    fixed:false },
-  { key:'psb',   label:'SB',      w:'32px',  on:false, sort:null,    fixed:false },
+  { key:'psb',   label:'SB',      w:'36px',  on:true,  sort:'psb',   fixed:false },
+  { key:'spd',   label:'Spd',     w:'36px',  on:false, sort:'spd',   fixed:false },
   { key:'vssp',  label:'vs SP',   w:'110px', on:true,  sort:null,    fixed:false },
 ];
 const PIT_COLS = [
@@ -5314,7 +5315,7 @@ async function loadPlayerPool(date, slate) {
 
   // 4. Batter stats — batched to avoid URL length limits
   const bRaw = allPlayerIds.length
-    ? await batchIn('batter_stats','player_id,full_name,wrc_plus,woba,iso,barrel_pct,hard_hit_pct,xwoba,o_swing_pct,swstr_pct,k_pct,avg_ev,season','player_id',allPlayerIds,
+    ? await batchIn('batter_stats','player_id,full_name,wrc_plus,woba,iso,barrel_pct,hard_hit_pct,xwoba,o_swing_pct,swstr_pct,k_pct,avg_ev,sprint_speed,season','player_id',allPlayerIds,
         q => q.order('season',{ascending:false}))
     : [];
   const bStatMap = {};
@@ -5625,6 +5626,7 @@ async function loadPlayerPool(date, slate) {
       sp_grade:         spInfo?.grade ?? null,
       hes:              hesInfo?.score ?? null,
       pms:              pmsResult?.score ?? null,
+      sprint_speed:     bs?.sprint_speed ?? null,
     });
   });
 
@@ -6250,6 +6252,8 @@ function sortVal(p, col) {
     case 'era':    return p.era != null ? -p.era : -Infinity;    // lower is better
     case 'splus':  return p.stuff_plus ?? -Infinity;
     case 'lplus':  return p.location_plus ?? -Infinity;
+    case 'psb':    return p.proj_sb ?? -Infinity;
+    case 'spd':    return p.sprint_speed != null ? -p.sprint_speed : -Infinity; // lower is faster = better
     case 'bo':     return p.batting_order ?? 99;
     case 'grade':  return p.sp_grade_self?.letter ? ['A+','A','B+','B','C+','C','D','F'].indexOf(p.sp_grade_self.letter) : 99;
     case 'exp':    return -Infinity; // handled in renderPool
@@ -6540,7 +6544,8 @@ function renderHitterRow(p, inL, expPct, visCols) {
     phr:   (()=>{ const v=p.proj_hr; const c=v==null?'pt-muted':v>=.25?'cf-hi':v>=.12?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(2):'—'}</td>`; })(),
     pr:    (()=>{ const v=p.proj_r;  const c=v==null?'pt-muted':v>=1.0?'cf-hi':v>=.6?'cf-mid':'cf-lo';  return `<td class="pt-stat ${c}">${v!=null?v.toFixed(2):'—'}</td>`; })(),
     prbi:  (()=>{ const v=p.proj_rbi;const c=v==null?'pt-muted':v>=1.0?'cf-hi':v>=.5?'cf-mid':'cf-lo';  return `<td class="pt-stat ${c}">${v!=null?v.toFixed(2):'—'}</td>`; })(),
-    psb:   `<td class="pt-stat">${p.proj_sb != null ? p.proj_sb.toFixed(2) : '—'}</td>`,
+    psb:   (()=>{ const v=p.proj_sb; const c=v==null?'pt-muted':v>=0.15?'cf-hi':v>=0.07?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(2):'—'}</td>`; })(),
+    spd:   (()=>{ const v=p.sprint_speed; const c=v==null?'pt-muted':v<=4.15?'cf-hi':v<=4.35?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(2):'—'}</td>`; })(),
     vssp:  `<td><div class="pt-opp-cell">${spCell}</div></td>`,
   };
 
@@ -8067,7 +8072,7 @@ function boxMullerNormal() {
 }
 
 function buildSimParams(allElig) {
-  const H_W_GAME = 0.387, H_W_TEAM = 0.447, H_W_INDIV = 0.806;
+  const H_W_GAME = 0.150, H_W_TEAM = 0.573, H_W_INDIV = 0.806;
   const P_W_GAME = -0.30, P_W_TEAM = 0.15, P_W_INDIV = 0.94;
   const params = new Map();
   for (const p of allElig) {
@@ -8250,7 +8255,7 @@ function scorePoolLineup(lineupObj) {
   const subSize = stackEntries[1]?.[1] || 0;
   const corrScore = +(
     (mainSize >= 5 ? 4 : mainSize >= 4 ? 3 : mainSize >= 3 ? 1.5 : 0) +
-    (bringBacks >= 2 ? 2.5 : bringBacks >= 1 ? 1.5 : 0) +
+    (bringBacks >= 2 ? 1.0 : bringBacks >= 1 ? 0.5 : 0) +
     (subSize >= 2 ? 1 : 0)
   ).toFixed(1);
 
