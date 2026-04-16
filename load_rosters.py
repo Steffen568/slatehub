@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import sys
+sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
 """
 Phase 9 — 40-Man Rosters
 Pulls current 40-man roster for all 30 MLB teams from the MLB API
@@ -33,10 +35,25 @@ def fetch_roster(team_id, roster_type):
     return r.json()
 
 def run():
-    print("\nPhase 9 — Rosters (40-Man + NRIs)")
+    print("\nPhase 9 — Rosters (40-Man + Active 26-Man)")
     print("=" * 40)
 
-    # Use dict keyed by player_id so 40-man always wins over NRI if same player appears in both
+    # Step 1: Fetch 26-man active rosters to build the active set
+    print("  Fetching 26-man active rosters...")
+    active_pids = set()
+    for team_id in TEAM_IDS:
+        try:
+            data = fetch_roster(team_id, "active")
+            for p in data.get("roster", []):
+                pid = p.get("person", {}).get("id")
+                if pid:
+                    active_pids.add(pid)
+            time.sleep(0.05)
+        except Exception as e:
+            print(f"  Warning: active roster failed for team {team_id}: {e}")
+    print(f"  {len(active_pids)} players on 26-man active rosters")
+
+    # Step 2: Fetch 40-man + NRI rosters (full detail)
     records_map = {}
 
     for team_id in TEAM_IDS:
@@ -56,15 +73,16 @@ def run():
                     # Only write if not already present (40-man takes priority)
                     if pid not in records_map:
                         records_map[pid] = {
-                            "player_id"    : pid,
-                            "player_name"  : person.get("fullName"),
-                            "team_id"      : team_id,
-                            "position"     : pos.get("abbreviation"),
-                            "position_type": pos.get("type"),
-                            "roster_status": status.get("description", "NRI" if not on_40_man else "Active"),
-                            "on_40_man"    : on_40_man,
-                            "throws"       : person.get("pitchHand", {}).get("code"),
-                            "bats"         : person.get("batSide",   {}).get("code"),
+                            "player_id"      : pid,
+                            "player_name"    : person.get("fullName"),
+                            "team_id"        : team_id,
+                            "position"       : pos.get("abbreviation"),
+                            "position_type"  : pos.get("type"),
+                            "roster_status"  : status.get("description", "NRI" if not on_40_man else "Active"),
+                            "on_40_man"      : on_40_man,
+                            "on_active_roster": pid in active_pids,
+                            "throws"         : person.get("pitchHand", {}).get("code"),
+                            "bats"           : person.get("batSide",   {}).get("code"),
                         }
                     team_count += len(roster)
                 time.sleep(0.10)
@@ -77,7 +95,7 @@ def run():
                     print(f"  ERROR team {team_id} ({roster_type}): {e}")
                 continue
 
-        print(f"  ✓ Team {team_id}: {team_count} players (40-man + NRIs)")
+        print(f"  ✓ Team {team_id}: {team_count} players")
 
     all_records = list(records_map.values())
     print(f"\n  Total: {len(all_records)} unique players (40-man + NRIs)")

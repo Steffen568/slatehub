@@ -7484,11 +7484,11 @@ async function loadBullpen(teamId, gameDate) {
     .from('rosters')
     .select('player_id,player_name,position_type')
     .eq('team_id', teamId)
-    .eq('on_40_man', true)
+    .eq('on_active_roster', true)
     .eq('position_type', 'Pitcher');
 
   const rosterSet = new Set((rosterData || []).map(r => r.player_id));
-  // Filter appearances to 40-man only
+  // Filter appearances to 26-man active roster only
   apps = apps.filter(a => rosterSet.has(a.player_id));
 
   // Merge: relievers from appearances + all rostered pitchers who aren't today's starters
