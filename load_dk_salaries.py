@@ -231,15 +231,19 @@ PLAYER_ID_REMAP = {
     1053621 : 671056,   # Ivan Herrera (auto-fixed)
     467793  : 808652,   # Carlos Santana (auto-fixed)
     503373  : 691777,   # Max Muncy (auto-fixed)
-    608070  : 681459,   # Jose Ramirez (auto-fixed)
+    681459  : 608070,   # Jose Ramirez (fixed direction — 608070 is correct MLBAM)
     657863  : 621566,   # Matt Olson (auto-fixed)
     115223  : 665489,   # Vladimir Guerrero Jr. (fixed direction)
     446920  : 669257,   # Will Smith (fixed direction)
     672356  : 699087,   # Gabriel Arias (auto-fixed)
     676609  : 691606,   # Jose Caballero (auto-fixed)
-    677594  : 451219,   # Julio Rodriguez (auto-fixed)
+    # 677594:451219 removed — was backwards. 677594 is correct MLBAM for Julio Rodriguez.
+    451219  : 677594,   # Julio Rodriguez (fixed direction — 677594 is correct MLBAM)
     828962  : 700951,   # Lane Thomas (auto-fixed)
     872787  : 660821,   # Jesus Sanchez (auto-fixed)
+    123107  : 665487,   # Fernando Tatis Jr. (lineup ID -> correct MLBAM)
+    491706  : 669134,   # Luis Campusano (lineup ID -> correct MLBAM)
+    666126  : 665532,   # Carlos Cortes (lineup ID -> correct MLBAM)
     1316799 : 691777,   # Max Muncy (auto-fixed)
     1396147 : 702284,   # Cole Young (auto-fixed, target updated)
     1452073 : 814526,   # Jacob Wilson (auto-fixed)
@@ -247,15 +251,23 @@ PLAYER_ID_REMAP = {
     1055003 : 669134,   # Luis Campusano (auto-fixed)
     657041  : 700951,   # Lane Thomas (auto-fixed)
     673784  : 702284,   # Cole Young (fixed direction)
-    805779  : 814526,   # Jacob Wilson (auto-fixed)
-    573262  : 569209,   # Mike Yastrzemski (auto-fixed)
+    # 805779:814526 removed — was backwards. 805779 is correct MLBAM for Jacob Wilson.
+    814526  : 805779,   # Jacob Wilson (fixed direction — 805779 is correct MLBAM)
+    # 573262:569209 removed — was backwards. 573262 is correct MLBAM for Mike Yastrzemski.
+    569209  : 573262,   # Mike Yastrzemski (fixed direction — 573262 is correct MLBAM)
     641933  : 828468,   # Tyler O'Neill (auto-fixed)
     446184  : 664040,   # Brandon Lowe (fixed direction — 664040 is correct MLBAM)
-    596142  : 566435,   # Gary Sanchez (auto-fixed)
-    608348  : 803086,   # Carson Kelly (auto-fixed)
+    566435  : 596142,   # Gary Sanchez (fixed direction — 596142 is correct MLBAM)
+    # 608348:803086 removed — was backwards. 608348 is correct MLBAM for Carson Kelly.
+    803086  : 608348,   # Carson Kelly (fixed direction — 608348 is correct MLBAM)
     # 543877 removed — was backwards (auto-fix error). 543877 is correct MLBAM for Christian Vazquez.
     666185  : 684686,   # Dylan Carlson (auto-fixed)
     800513  : 699912,   # Jose Fernandez (fixed direction)
+    594695  : 682641,   # Luis Matos (lineup ID differs from stats ID)
+    824481  : 666152,   # David Hamilton (lineup ID differs from stats ID)
+    123107  : 665487,   # Fernando Tatis Jr. (lineup ID differs from stats ID)
+    504378  : 678246,   # Miguel Vargas (lineup ID differs from stats ID)
+    545848  : 669701,   # Josh Smith (lineup ID differs from stats ID)
     829588  : 656849,   # David Peterson
     1116218 : 669194,   # Ryne Nelson
     657781  : 622663,   # Luis Severino
@@ -268,6 +280,7 @@ PLAYER_ID_REMAP = {
     1115910 : 686681,   # Michael Massey (auto-fixed)
     1122217 : 681190,   # Randy Vasquez (DK ASCII vs MLBAM Vásquez)
     666126  : 665532,   # Carlos Cortes (auto-fixed)
+    875573  : 664731,   # P.J. Higgins (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids

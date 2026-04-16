@@ -1400,12 +1400,34 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 batter_idx += 1
 
         # ── Post-game R distribution ─────────────────────────────────────
-        # The DK points above track RBI correctly (batter who drove in the run).
-        # For R (runs scored), we need to credit the batter who WAS on base.
+        # RBI is tracked above (batter who drove in runs). For R (runs scored),
+        # we need to credit the batter who WAS on base and scored.
         # Since we don't track base runner identity, approximate:
-        # Total team runs ≈ sum of all RBI across batters (roughly correct).
-        # Distribute R proportionally to OBP-weighted lineup.
-        # This is an approximation — true game sim would track runner identity.
+        # Total team R ≈ total RBI. Distribute non-HR R proportionally to
+        # each batter's OBP (high-OBP batters reach base more → score more).
+        #
+        # Extract total RBI from DK pts: each +2 from RBI events.
+        # HR R is already credited (+2 at line 1337). Only distribute non-HR R.
+        total_rbi_pts = sum(dk_pts[i][sim] for i in range(9))
+        # Rough team runs = total_rbi_pts / 2 (since each R gives +2 pts as RBI to driver)
+        # But HR already counted batter R. Estimate non-HR runs:
+        # ~33% of team runs are via HR (batter scores themselves), rest are baserunner R.
+        # Use OBP-weighted distribution for those non-HR runs.
+        obp_weights = []
+        for i in range(9):
+            t = lineup_talents[i]
+            obp = t.get('avg', 0.250) + t.get('bb_pct', 0.08)
+            obp_weights.append(obp)
+        obp_total = sum(obp_weights) or 1.0
+        # Estimate team runs this sim from implied runs (Vegas) or from DK output
+        est_team_runs = (implied / LEAGUE_AVG_IMPLIED * 4.5) if odds and safe(odds.get('home_implied' if is_home else 'away_implied')) else 4.5
+        est_team_runs *= tf  # scale by team factor for this sim
+        # Non-HR runs scored by baserunners: ~65% of team runs
+        non_hr_runs = est_team_runs * 0.65
+        for i in range(9):
+            r_share = non_hr_runs * obp_weights[i] / obp_total
+            # Each run scored = +2 DK pts. Probabilistic: use fractional pts.
+            dk_pts[i][sim] += r_share * 2.0
 
     # Contact hitter adjustment (same as standalone sim)
     for i in range(9):
