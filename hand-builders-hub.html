@@ -4359,9 +4359,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     <span style="color:var(--border);margin:0 2px;">|</span>
     <label style="color:var(--muted);font-weight:700;">Sort:</label>
     <select class="opto-input" style="width:80px;" onchange="setPoolSort(this.value)">
-      <option value="blendedScore" selected>Blended</option>
+      <option value="blendedScore">Blended</option>
       <option value="gppScore">GPP Score</option>
-      <option value="proj">Proj</option>
+      <option value="proj" selected>Proj</option>
       <option value="leverage">Leverage</option>
       <option value="totalOwn">Own (low)</option>
       <option value="winPct">Win%</option>
@@ -7799,24 +7799,30 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set(), stackAppearCou
 
   if (randPct > 0) {
     // ── RANDOMIZED MODE ──────────────────────────────────────────────────────
-    // Shuffle teams so each lineup naturally starts from a different lead team.
-    // Try several random (window, subTeam) combos per team — stop on first feasible.
+    // Perturbed projections feed the solver objective → natural lineup variety.
+    // Try top teams × a few random combos each, keep the best by REAL projection.
+    // This avoids the old "first feasible wins" problem where a random team order
+    // could produce a 20-point gap between lineup 1 and lineup 2.
     const shuffledMain = [...mainCandidates].sort(() => Math.random() - 0.5);
+    const RAND_BUDGET  = 60;   // max LP solves per lineup (matches exhaustive mode)
+    const COMBOS_PER_TEAM = 4; // random (window, sub) combos per team
 
     const makePerturbedProj = () => new Map(allElig.map(p => {
       const base = projOverrides[p.player_id] ?? p.proj_dk_pts ?? 0;
       return [p.player_id, base * (1 + (Math.random() * 2 - 1) * randPct / 100)];
     }));
 
-    outer:
+    let solves = 0;
     for (const mainTeam of shuffledMain) {
+      if (solves >= RAND_BUDGET) break;
       const subPool = getSubCandidates(mainTeam);
-      // Try up to 4 random window/sub combos per team before moving on
-      for (let t = 0; t < 4; t++) {
+      for (let t = 0; t < COMBOS_PER_TEAM; t++) {
+        if (solves >= RAND_BUDGET) break;
         const window  = windows[Math.floor(Math.random() * windows.length)];
         const subTeam = subPool[Math.floor(Math.random() * subPool.length)] ?? null;
+        solves++;
         const res = trySolve(mainTeam, window, subTeam, makePerturbedProj());
-        if (res) { bestLineup = res.lineup; break outer; }
+        if (res && res.score > bestScore) { bestScore = res.score; bestLineup = res.lineup; }
       }
     }
 
@@ -9551,7 +9557,7 @@ function generateOpponentField(numOpponents, contestDb) {
 // ── CONTEST SIMULATION ───────────────────────────────────────────────────────
 
 let _contestSimResults = null; // { perLineup: [{winCount, top1Count, ...}], simWinners: [[]] }
-let _poolSortCol = 'blendedScore';
+let _poolSortCol = 'proj';
 let _poolSortDir = 1;
 let _poolFilteredView = []; // current filtered+sliced lineup list for exposure panel
 
