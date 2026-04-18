@@ -7513,10 +7513,13 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
 
   // Per-team max players constraint (normalized key so pitchers + hitters share it)
   const maxTeam = Math.min(optoSettings.maxPerTeam || 5, 6);
+  const cappedMaxH = opts.cappedMaxH || {};
   const teams = [...new Set(eligPlayers.map(p => optoTeamKey(p)).filter(Boolean))];
   for (const t of teams) {
+    // Tighten hitter cap for teams at their stack exposure limit
+    const hitterMax = Math.min(maxTeam, 5, cappedMaxH[t] ?? 5);
     problem.constraints[`tm_${t}`]  = { max: maxTeam };           // total (pitcher + hitters) ≤ 6
-    problem.constraints[`tmh_${t}`] = { max: Math.min(maxTeam, 5) }; // hitters only ≤ 5
+    problem.constraints[`tmh_${t}`] = { max: hitterMax };         // hitters only — respects stack caps
   }
 
   // Diversity constraints — each past lineup contributes one constraint
@@ -7731,16 +7734,21 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set(), stackAppearCou
   const teamScores  = Object.fromEntries(allTeams.map(t => [t, optoTeamScore(t)]));
   const rankedTeams = [...allTeams].sort((a, b) => teamScores[b] - teamScores[a]);
 
-  // Build set of teams at their stack exposure cap for this stack size
+  // Build set of teams at their stack exposure cap for this stack size,
+  // AND a map of max hitters per team for LP enforcement of ALL stack caps.
   const cappedStackTeams = new Set();
+  const cappedMaxH = {};  // team → max hitters allowed (tightest cap wins)
   Object.entries(stackExpCaps).forEach(([key, capPct]) => {
     const parts = key.split('_');
     const size  = +parts[parts.length - 1];
     const team  = parts.slice(0, -1).join('_');
-    // Cascade: a 3-man cap also blocks 4-man and 5-man stacks of that team
-    if (size <= rule.primarySize) {
-      const maxCount = Math.max(1, Math.ceil(totalN * capPct / 100));
-      if ((stackAppearCount[key] || 0) >= maxCount) cappedStackTeams.add(team);
+    const maxCount = Math.max(1, Math.ceil(totalN * capPct / 100));
+    if ((stackAppearCount[key] || 0) >= maxCount) {
+      // This team-size combo is at capacity — limit hitters to (size - 1)
+      const limit = size - 1;
+      cappedMaxH[team] = Math.min(cappedMaxH[team] ?? 99, limit);
+      // Cascade: block from primary candidates if stack can't form
+      if (size <= rule.primarySize) cappedStackTeams.add(team);
     }
   });
 
@@ -7760,9 +7768,11 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set(), stackAppearCou
   const subPrefs = optoSettings.teamStacks.filter(ts => ts.role === 'sub').map(ts => ts.team);
   function getSubCandidates(mainTeam) {
     if (rule.subSize === 0) return [null];
-    if (subPrefs.length > 0) return subPrefs.filter(t => t !== mainTeam);
+    // Filter out teams that can't form the required sub-stack due to exposure caps
+    const subOk = t => t !== mainTeam && (cappedMaxH[t] ?? 99) >= rule.subSize;
+    if (subPrefs.length > 0) return subPrefs.filter(subOk);
     return rankedTeams
-      .filter(t => t !== mainTeam && allHitters.filter(h => optoTeamKey(h) === t && !isExcluded(h)).length >= rule.subSize);
+      .filter(t => subOk(t) && allHitters.filter(h => optoTeamKey(h) === t && !isExcluded(h)).length >= rule.subSize);
   }
 
   // Shared solve helper
@@ -7775,7 +7785,7 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set(), stackAppearCou
 
     const problem = optoBuildLP(allElig, {
       mainTeam, mainPlayerIds, mainSize: rule.primarySize,
-      subTeam,  subSize: rule.subSize,
+      subTeam,  subSize: rule.subSize, cappedMaxH,
     }, pastSets, perturbedProj);
 
     const ids = optoSolve(problem);
@@ -7828,7 +7838,7 @@ function optoFindBest(rule, pastLineups, capExcluded = new Set(), stackAppearCou
 
     // Fallback: no-stack solve — should almost always work even with tight constraints
     if (!bestLineup) {
-      const prob = optoBuildLP(allElig, { mainTeam: null, mainPlayerIds: [], mainSize: 0, subTeam: null, subSize: 0 }, pastSets, makePerturbedProj());
+      const prob = optoBuildLP(allElig, { mainTeam: null, mainPlayerIds: [], mainSize: 0, subTeam: null, subSize: 0, cappedMaxH }, pastSets, makePerturbedProj());
       const ids  = optoSolve(prob);
       if (ids && ids.length === 10) {
         const fbSal = ids.reduce((s, id) => s + (eligById.get(id)?.salary || 0), 0);
