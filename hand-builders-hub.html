@@ -7091,12 +7091,14 @@ function toggleStackExclude(team, size) {
   else _stackExcludes.add(key);
   renderStackExposure();
   renderPoolCards();
+  if (typeof renderPoolExposure === 'function') renderPoolExposure();
 }
 
 function clearStackExcludes() {
   _stackExcludes.clear();
   renderStackExposure();
   renderPoolCards();
+  if (typeof renderPoolExposure === 'function') renderPoolExposure();
 }
 
 function renderStackExposure() {
@@ -9390,10 +9392,35 @@ function renderPoolExposure() {
   if (_poolExpStackFilter > 0) stackRows = stackRows.filter(r => r.size === _poolExpStackFilter);
 
   const sizes = [...new Set(Object.values(stackCounts).map(r => r.size))].sort();
-  const stackTabsHtml = `<div style="display:flex;gap:3px;padding:6px 8px;border-bottom:1px solid var(--border);">
+  const ddSize = _poolExpStackFilter || sizes[sizes.length - 1] || 0;
+  const ddTeams = [...new Set(Object.values(stackCounts).filter(r => r.size === ddSize).map(r => r.team))].sort();
+  const activeExcl = [..._stackExcludes].filter(k => {
+    const sz = +k.split('_').pop();
+    return _poolExpStackFilter === 0 || sz === _poolExpStackFilter;
+  });
+  const stackTabsHtml = `<div style="display:flex;gap:3px;padding:6px 8px;border-bottom:1px solid var(--border);flex-wrap:wrap;align-items:center;">
     <button class="exp-tab${_poolExpStackFilter===0?' active':''}" onclick="_poolExpStackFilter=0;renderPoolExposure();" style="font-size:9px;padding:2px 6px;">All</button>
-    ${sizes.map(s => `<button class="exp-tab${_poolExpStackFilter===s?' active':''}" onclick="_poolExpStackFilter=${s};renderPoolExposure();" style="font-size:9px;padding:2px 6px;">${s}-man</button>`).join('')}
-  </div>`;
+    ${sizes.map(s => {
+      const exclN = [..._stackExcludes].filter(k => +k.split('_').pop() === s).length;
+      return `<button class="exp-tab${_poolExpStackFilter===s?' active':''}" onclick="_poolExpStackFilter=${s};renderPoolExposure();" style="font-size:9px;padding:2px 6px;">${s}-man${exclN ? ' (−'+exclN+')' : ''}</button>`;
+    }).join('')}
+    <select onchange="if(this.value){const [t,s]=this.value.split('|');toggleStackExclude(t,+s);this.value='';}"
+      style="font-size:9px;padding:2px 4px;margin-left:auto;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;cursor:pointer;">
+      <option value="">Exclude ${ddSize}-man…</option>
+      ${ddTeams.map(t => {
+        const k = t+'_'+ddSize;
+        const already = _stackExcludes.has(k);
+        return '<option value="'+t+'|'+ddSize+'" '+(already?'disabled':'')+'>'+t+(already?' ✕':'')+'</option>';
+      }).join('')}
+    </select>
+  </div>` + (activeExcl.length ? `<div style="display:flex;gap:3px;padding:3px 8px;flex-wrap:wrap;border-bottom:1px solid var(--border);">
+    ${activeExcl.map(k => {
+      const parts = k.split('_'); const sz = parts.pop(); const tm = parts.join('_');
+      const tc = abbrColor(tm);
+      return '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:'+tc.bg+';color:'+tc.tx+';cursor:pointer;display:inline-flex;align-items:center;gap:2px;" onclick="toggleStackExclude(\''+tm+'\','+sz+')" title="Click to remove">'+tm+' '+sz+'-man ✕</span>';
+    }).join('')}
+    ${activeExcl.length > 1 ? '<span style="font-size:9px;padding:1px 6px;color:var(--muted);cursor:pointer;text-decoration:underline;" onclick="clearStackExcludes()">Clear all</span>' : ''}
+  </div>` : '');
 
   const stacksEl = document.getElementById('pool-exp-stacks');
   if (stacksEl) {
