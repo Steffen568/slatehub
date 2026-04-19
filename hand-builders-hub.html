@@ -7078,10 +7078,25 @@ function setStackExpCap(key, val) {
 }
 
 let _stackSizeFilter = 0; // 0 = All, 2 = 2-man, 3 = 3-man, etc.
+let _stackExcludes = new Set(); // "TEAM_N" keys to exclude from pool (e.g. "LAD_5")
 
 function setStackSizeFilter(size) {
   _stackSizeFilter = size;
   renderStackExposure();
+}
+
+function toggleStackExclude(team, size) {
+  const key = `${team}_${size}`;
+  if (_stackExcludes.has(key)) _stackExcludes.delete(key);
+  else _stackExcludes.add(key);
+  renderStackExposure();
+  renderPoolCards();
+}
+
+function clearStackExcludes() {
+  _stackExcludes.clear();
+  renderStackExposure();
+  renderPoolCards();
 }
 
 function renderStackExposure() {
@@ -7130,14 +7145,42 @@ function renderStackExposure() {
 
   const rows = _stackSizeFilter === 0 ? allRows : allRows.filter(r => r.size === _stackSizeFilter);
 
-  const tabsHtml = `<div style="display:flex;gap:3px;padding:6px 8px;border-bottom:1px solid var(--border);">
+  // Dropdown teams: teams that have stacks of the currently selected size (or all sizes)
+  const dropdownSize = _stackSizeFilter || sizes[sizes.length - 1] || 0;
+  const dropdownTeams = [...new Set(allRows.filter(r => r.size === dropdownSize).map(r => r.team))].sort();
+
+  // Active exclusion badges for current view
+  const activeExcl = [..._stackExcludes].filter(k => {
+    const sz = +k.split('_').pop();
+    return _stackSizeFilter === 0 || sz === _stackSizeFilter;
+  });
+
+  const tabsHtml = `<div style="display:flex;gap:3px;padding:6px 8px;border-bottom:1px solid var(--border);flex-wrap:wrap;align-items:center;">
     <button class="exp-tab${_stackSizeFilter === 0 ? ' active' : ''}" onclick="setStackSizeFilter(0)" style="font-size:9px;padding:2px 7px;">All</button>
     ${sizes.map(s => {
       const isActive = _stackSizeFilter === s;
+      const exclCount = [..._stackExcludes].filter(k => +k.split('_').pop() === s).length;
       return `<button class="exp-tab${isActive ? ' active' : ''}" onclick="setStackSizeFilter(${s})"
-        style="font-size:9px;padding:2px 7px;">${s}-man</button>`;
+        style="font-size:9px;padding:2px 7px;">${s}-man${exclCount ? ` (−${exclCount})` : ''}</button>`;
     }).join('')}
-  </div>`;
+    <select onchange="if(this.value){const [t,s]=this.value.split('|');toggleStackExclude(t,+s);this.value='';}"
+      style="font-size:9px;padding:2px 4px;margin-left:auto;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;cursor:pointer;">
+      <option value="">Exclude ${dropdownSize}-man…</option>
+      ${dropdownTeams.map(t => {
+        const k = `${t}_${dropdownSize}`;
+        const already = _stackExcludes.has(k);
+        return `<option value="${t}|${dropdownSize}" ${already ? 'disabled' : ''}>${t}${already ? ' ✕' : ''}</option>`;
+      }).join('')}
+    </select>
+  </div>` + (activeExcl.length ? `<div style="display:flex;gap:3px;padding:3px 8px;flex-wrap:wrap;border-bottom:1px solid var(--border);">
+    ${activeExcl.map(k => {
+      const parts = k.split('_'); const sz = parts.pop(); const tm = parts.join('_');
+      const tc = abbrColor(tm);
+      return `<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:${tc.bg};color:${tc.tx};cursor:pointer;display:inline-flex;align-items:center;gap:2px;"
+        onclick="toggleStackExclude('${tm}',${sz})" title="Click to remove exclusion">${tm} ${sz}-man ✕</span>`;
+    }).join('')}
+    ${activeExcl.length > 1 ? `<span style="font-size:9px;padding:1px 6px;color:var(--muted);cursor:pointer;text-decoration:underline;" onclick="clearStackExcludes()">Clear all</span>` : ''}
+  </div>` : '');
 
   el.innerHTML = tabsHtml + `
     <table class="exp-table">
@@ -8897,6 +8940,19 @@ function filterPoolCandidates() {
       for (const sl of LINEUP_SLOTS) {
         const p = c.lineup[sl.key];
         if (p?.team && teamExcludes.has(p.team)) return false;
+      }
+      return true;
+    });
+  }
+  // Exclude lineups containing specific stack sizes (from exposure panel dropdown)
+  if (_stackExcludes.size > 0) {
+    const hitterSlots = LINEUP_SLOTS.filter(s => s.pos !== 'SP').map(s => s.key);
+    filtered = filtered.filter(c => {
+      const tc = {};
+      hitterSlots.forEach(k => { const p = c.lineup[k]; if (p?.team) tc[p.team] = (tc[p.team]||0)+1; });
+      for (const exKey of _stackExcludes) {
+        const parts = exKey.split('_'); const sz = +parts.pop(); const tm = parts.join('_');
+        if ((tc[tm] || 0) >= sz) return false;
       }
       return true;
     });
