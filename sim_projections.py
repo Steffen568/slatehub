@@ -1153,7 +1153,7 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather)
     ld_adj = clip(1.0 + (talent.get('ld_pct', 0.21) - 0.21) * 0.5, 0.90, 1.12)
-    hit_prob = clip(hit_prob_base * qoc_mult * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.20, 0.44)
+    hit_prob = clip(hit_prob_base * qoc_mult * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.18, 0.42)
 
     # HR rate — bat tracking metrics drive power ceiling
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
@@ -1319,11 +1319,11 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
 
                 # Per-batter volatility: o_swing% (chase rate) widens outcomes
                 o_swing_vol = batter.get('o_swing', 0.30)
-                batter_vol_sd = 0.05 + (o_swing_vol - 0.30) * 0.3
+                batter_vol_sd = 0.04 + (o_swing_vol - 0.30) * 0.25
                 batter_day = rng.normal(1.0, max(0.03, batter_vol_sd))
-                batter_day = clip(batter_day, 0.50, 1.55)
-                hit_p = clip(rates['hit'] * batter_day, 0.12, 0.45)
-                hr_p = clip(rates['hr'] * batter_day * (0.70 + 0.30 * tf), 0.02, 0.35)
+                batter_day = clip(batter_day, 0.60, 1.40)
+                hit_p = clip(rates['hit'] * batter_day, 0.10, 0.42)
+                hr_p = clip(rates['hr'] * batter_day * (0.75 + 0.25 * tf), 0.02, 0.30)
 
                 # Helper: credit R (+2 DK pts) to a runner who scores
                 def score_runner(base_idx):
