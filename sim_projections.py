@@ -281,8 +281,11 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
     min_pa = _season_min(MIN_PA_BATTER_FULL, target_date)
     use_current = curr_pa >= min_pa
 
+    # Scale current-season weight by sample size: 43 PA → weight ~0.43, 250 PA → 2.5, 500+ PA → 5
+    # Prevents small early-season samples from dominating the talent estimate
+    curr_weight = 5 * min(1.0, curr_pa / 500.0) if use_current else 0
     weights = [
-        (current_season,     5 if use_current else 0),
+        (current_season,     curr_weight),
         (current_season - 1, 4),
         (current_season - 2, 3),
     ]
@@ -310,6 +313,7 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
     avg    = clip(weighted_stat('avg',    0.248),              0.15, 0.38)
     babip  = clip(weighted_stat('babip',  LEAGUE_AVG_BABIP),   0.22, 0.38)
     woba   = clip(weighted_stat('woba',   LEAGUE_AVG_WOBA),    0.20, 0.55)
+    xwoba  = clip(weighted_stat('xwoba',  LEAGUE_AVG_WOBA),    0.20, 0.55)
 
     # Quality of contact + batted ball profile
     barrel  = safe(weighted_stat('barrel_pct',   0.065), 0.065)
@@ -397,7 +401,7 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
 
     return {
         'k_pct': k_pct, 'bb_pct': bb_pct, 'iso': iso, 'avg': avg,
-        'babip': babip, 'woba': woba, 'barrel': barrel,
+        'babip': babip, 'woba': woba, 'xwoba': xwoba, 'barrel': barrel,
         'hard_hit': hard_hit, 'avg_ev': avg_ev, 'ld_pct': ld_pct,
         'fb_pct': fb_pct, 'pull_pct': pull_pct, 'sb_per_pa': sb_per_pa,
         'r_per_pa': r_per_pa, 'rbi_per_pa': rbi_per_pa,
@@ -736,9 +740,9 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     # Attack angle vs arm angle: swing plane alignment drives HR over/underperformance
     aa_hr_adj = arm_angle_hr_interaction(talent.get('attack_angle'), pitcher.get('arm_angle') if pitcher else None)
 
-    hr_per_hit = clip((talent['iso'] / 3.5) * effective_park_hr * fb_adj * effective_wx_hr *
+    hr_per_hit = clip(talent.get('hr_per_pa', 0.03) * effective_park_hr * fb_adj * effective_wx_hr *
                        pitcher_hr_ratio * blast_adj * aa_hr_adj / hit_prob, 0.03, 0.30)
-    xb_per_hit = clip((talent['iso'] - 3 * talent['iso']/3.5) / hit_prob, 0.03, 0.20)
+    xb_per_hit = clip(talent.get('xb_per_hit', 0.14), 0.03, 0.20)
     triple_per_hit = 0.015
     single_per_hit = max(0.0, 1.0 - hr_per_hit - xb_per_hit - triple_per_hit)
 
@@ -850,13 +854,6 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
             is_sb.astype(float) * 5
         )
         dk_pts += pts * active
-
-    # Contact hitter adjustment: low-K% batters (K%<15%) are under-projected
-    # by ~0.9 pts per research. Their extra balls in play produce more hits/RBI
-    # than the baseline model captures.
-    if talent['k_pct'] < 0.15:
-        contact_boost = clip((0.15 - talent['k_pct']) / 0.15 * 0.9, 0.0, 0.9)
-        dk_pts += contact_boost
 
     return dk_pts
 
@@ -1142,8 +1139,10 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     # BABIP excludes HR from numerator and denominator, so using it raw
     # under-counts hits by ~12%. Convert to total P(hit|BIP) by adding
     # the HR component back: hit_prob = BABIP + HR/BIP
-    contact_rate = max(0.50, 1.0 - talent['k_pct'] - talent['bb_pct'] - 0.01)
-    hr_per_bip = clip(talent['iso'] / 3.0, 0.005, 0.08) / contact_rate
+    contact_rate = max(0.30, 1.0 - talent['k_pct'] - talent['bb_pct'] - 0.01)
+    # ISO/3.0 overestimated HR by ~67%. ISO/3.5 reduces the overcount while preserving
+    # differentiation between power and contact hitters in the BIP hit probability.
+    hr_per_bip = clip(talent['iso'] / 3.15, 0.005, 0.07) / contact_rate
     hit_prob_base = talent['babip'] + hr_per_bip
 
     ev_adj = clip(1.0 + (talent.get('avg_ev', 88.0) - 88.0) * 0.008, 0.92, 1.10)
@@ -1181,7 +1180,7 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     blast_adj = clip(1.0 + (talent.get('blast', 0.08) - 0.08) * 2.5, 0.90, 1.12)
     # Attack angle vs arm angle alignment
     aa_hr_adj = arm_angle_hr_interaction(talent.get('attack_angle'), pitcher.get('arm_angle') if pitcher else None)
-    hr_per_hit = clip((talent['iso'] / 3.0) * effective_park_hr * fb_adj * effective_wx_hr * pitcher_hr_ratio * bat_spd_adj * squp_adj * blast_adj * aa_hr_adj / hit_prob, 0.03, 0.30)
+    hr_per_hit = clip(talent.get('hr_per_pa', 0.03) * effective_park_hr * fb_adj * effective_wx_hr * pitcher_hr_ratio * bat_spd_adj * squp_adj * blast_adj * aa_hr_adj / hit_prob, 0.03, 0.30)
     # XB rate: per-hitter doubles rate from Marcel. ISO already reflects park, so
     # apply only 50% of park_basic deviation to avoid double-counting.
     park_xb_edge = 1.0 + (park_basic - 1.0) * 0.50
@@ -1192,7 +1191,7 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     # sb_per_pa is the historical rate. In the full-game sim, a batter gets one SB
     # chance per on-base event, but real SBs also happen during subsequent PAs while
     # the runner is still on base. Scale up by ~2.5x to account for multi-PA windows.
-    base_sb = talent.get('sb_per_pa', 0.01) * 2.5
+    base_sb = talent.get('sb_per_pa', 0.01) * 2.0
     speed_mult = clip(1.0 + (4.40 - talent.get('sprint_speed', 4.40)) * 1.16, 0.50, 1.60)
     sb_rate = clip(base_sb * speed_mult, 0.0, 0.35)
 
@@ -1221,9 +1220,9 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather)
     # Add HR/BIP back to BABIP for total P(hit|BIP) — same fix as _compute_pa_rates
-    bp_contact = max(0.50, 1.0 - talent['k_pct'] - talent['bb_pct'] - 0.01)
-    bp_hr_per_bip = clip(talent['iso'] / 3.0, 0.005, 0.08) / bp_contact
-    hit_prob = clip((bp_babip + bp_hr_per_bip) * qoc_mult * ev_adj * park_basic * wx_hit, 0.20, 0.44)
+    bp_contact = max(0.30, 1.0 - talent['k_pct'] - talent['bb_pct'] - 0.01)
+    bp_hr_per_bip = clip(talent['iso'] / 3.5, 0.005, 0.07) / bp_contact
+    hit_prob = clip((bp_babip + bp_hr_per_bip) * qoc_mult * ev_adj * park_basic * wx_hit, 0.20, 0.42)
 
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
@@ -1235,7 +1234,7 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     bat_spd_adj = clip(1.0 + (talent.get('bat_speed', 72.0) - 72.0) * 0.015, 0.88, 1.15)
     squp_adj = clip(1.0 + (talent.get('squared_up', 0.18) - 0.18) * 1.5, 0.90, 1.12)
     blast_adj = clip(1.0 + (talent.get('blast', 0.08) - 0.08) * 2.5, 0.90, 1.12)
-    hr_per_hit = clip((talent['iso'] / 3.0) * effective_park_hr * fb_adj * effective_wx_hr * (bp_hr9 / LEAGUE_AVG_HR9) * bat_spd_adj * squp_adj * blast_adj / hit_prob, 0.03, 0.30)
+    hr_per_hit = clip(talent.get('hr_per_pa', 0.03) * effective_park_hr * fb_adj * effective_wx_hr * (bp_hr9 / LEAGUE_AVG_HR9) * bat_spd_adj * squp_adj * blast_adj / hit_prob, 0.03, 0.30)
     park_xb_edge = 1.0 + (park_basic - 1.0) * 0.50
     xb_per_hit = clip(talent.get('xb_per_hit', 0.14) * ev_adj * park_xb_edge, 0.06, 0.25)
 
@@ -1322,8 +1321,16 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 batter_vol_sd = 0.04 + (o_swing_vol - 0.30) * 0.25
                 batter_day = rng.normal(1.0, max(0.03, batter_vol_sd))
                 batter_day = clip(batter_day, 0.60, 1.40)
-                hit_p = clip(rates['hit'] * batter_day, 0.10, 0.42)
+                # team_factor scales hit, HR, and K: low-implied games suppress
+                # all offense AND increase Ks (tougher pitching environment).
+                # Hit rates driven by individual talent (rates already encode pitcher/park).
+                # team_factor only scales HR — game environment affects power outcomes
+                # (pitch selection, fatigue, blowout state) more than contact rates.
+                # R/RBI naturally adjust via base runner state (weak lineup = fewer runners).
+                hit_p = clip(rates['hit'] * batter_day, 0.08, 0.42)
                 hr_p = clip(rates['hr'] * batter_day * (0.75 + 0.25 * tf), 0.02, 0.30)
+                k_p = rates['k']
+                bb_p = rates['bb']
 
                 # Helper: credit R (+2 DK pts) to a runner who scores
                 def score_runner(base_idx):
@@ -1334,10 +1341,10 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
 
                 # Roll PA
                 roll = rng.random()
-                if roll < rates['k']:
+                if roll < k_p:
                     # Strikeout
                     outs += 1
-                elif roll < rates['k'] + rates['bb']:
+                elif roll < k_p + bb_p:
                     # Walk — force advance
                     dk_pts[bi][sim] += 2  # BB
                     if bases[0] != EMPTY and bases[1] != EMPTY and bases[2] != EMPTY:
@@ -1454,12 +1461,14 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 team_bf += 1
                 batter_idx += 1
 
-    # Contact hitter adjustment (same as standalone sim)
+    # Elite talent multiplier: xwOBA (expected wOBA from quality of contact) is more
+    # predictive and stable than wOBA — strips out BABIP luck and sequencing noise.
+    # Scales each hitter's DK output by their xwOBA relative to league average.
     for i in range(9):
-        t = lineup_talents[i]
-        if t['k_pct'] < 0.15:
-            contact_boost = clip((0.15 - t['k_pct']) / 0.15 * 0.9, 0.0, 0.9)
-            dk_pts[i] += contact_boost
+        xw = lineup_talents[i].get('xwoba', lineup_talents[i].get('woba', LEAGUE_AVG_WOBA))
+        xwoba_dev = (xw / LEAGUE_AVG_WOBA) - 1.0
+        talent_mult = 1.0 + clip(xwoba_dev * 0.65, -0.12, 0.22)
+        dk_pts[i] *= talent_mult
 
     return dk_pts, sb_counts
 
