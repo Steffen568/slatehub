@@ -10303,9 +10303,7 @@ function exportPortfolioDK() {
     const slots = LINEUP_SLOTS.map(sl => {
       const p = lu[sl.key];
       if (!p) return '';
-      const dkId = dkDraftgroupMap[normName(p.name)]
-                || dkDraftgroupMap[(p.name||'').toLowerCase()]
-                || p.dk_id || p.player_id || '';
+      const dkId = dkIdFor(p) || '';
       return `${p.name} (${dkId})`;
     });
 
@@ -10370,7 +10368,7 @@ function exportPoolDK() {
     const slots = LINEUP_SLOTS.map(sl => {
       const p = lu[sl.key];
       if (!p) return '';
-      const dkId = dkDraftgroupMap[normName(p.name)] || dkDraftgroupMap[(p.name||'').toLowerCase()] || p.dk_id || p.player_id || '';
+      const dkId = dkIdFor(p) || '';
       return `${p.name} (${dkId})`;
     });
     const rowBase = `${entry.entryId},${entry.contestName},${entry.contestId},${entry.entryFee},${slots.join(',')}`;
@@ -10998,10 +10996,7 @@ function exportLateSwapCSV() {
     const playerCells = SLOT_MAP.map(slotKey => {
       const p = s.lineup?.[slotKey];
       if (!p) return '';
-      const dkId = p._dkDraftableId
-        || dkDraftgroupMap[normName(p.name)]
-        || dkDraftgroupMap[(p.name || '').toLowerCase()]
-        || p.dk_id || '';
+      const dkId = p._dkDraftableId || dkIdFor(p) || '';
       const displayName = p._dkCellName || p.name || '';
       if (!dkId) unmatchedCount++;
       return `${displayName} (${dkId})`;
@@ -11542,7 +11537,7 @@ function lateSwapAllLineups() {
       for (const sd of part.unlockedSlotDefs) {
         const p = newLineup[sd.key];
         if (p && !p._dkDraftableId) {
-          const dkId = dkDraftgroupMap[normName(p.name)] || dkDraftgroupMap[(p.name || '').toLowerCase()] || p.dk_id || '';
+          const dkId = dkIdFor(p) || '';
           if (dkId) { p._dkDraftableId = dkId; p._dkCellName = p.name; }
         }
         if (p?.player_id) appearCount[p.player_id] = (appearCount[p.player_id] || 0) + 1;
@@ -11650,7 +11645,7 @@ function generateSwapVariations() {
         for (const sd of part.unlockedSlotDefs) {
           const p = newLineup[sd.key];
           if (p && !p._dkDraftableId) {
-            const dkId = dkDraftgroupMap[normName(p.name)] || dkDraftgroupMap[(p.name || '').toLowerCase()] || p.dk_id || '';
+            const dkId = dkIdFor(p) || '';
             if (dkId) { p._dkDraftableId = dkId; p._dkCellName = p.name; }
           }
         }
@@ -12047,10 +12042,15 @@ function fillDKTemplate(event) {
 
 // ── CSV EXPORT ───────────────────────────────────────────────────────────────
 function dkIdFor(p) {
-  // Priority: draftgroup map (from uploaded template) > dk_id > player_id (wrong, last resort)
+  // Priority: team-qualified name > name-only > dk_id > player_id (last resort)
+  // Team-qualified key prevents same-name collisions (e.g. two Max Muncys on different teams)
   if (!p) return null;
-  return dkDraftgroupMap[normName(p.name)]
-      || dkDraftgroupMap[(p.name || '').toLowerCase()]
+  const nn = normName(p.name);
+  const ln = (p.name || '').toLowerCase();
+  const team = p.team || '';
+  return (team && dkDraftgroupMap[nn + '|' + team])
+      || dkDraftgroupMap[nn]
+      || dkDraftgroupMap[ln]
       || p.dk_id
       || p.player_id;
 }
@@ -12814,18 +12814,19 @@ function importDKTemplate(file) {
     //    Pool header: Position,Name + ID,Name,ID,Roster Position,Salary,...
     // Detect layout by scanning for the pool header row (contains "Name" AND "ID" AND "Roster Position")
 
-    let colRosterPos = -1, colName = -1, colId = -1, poolHeaderRow = -1, lastSlotCol = 3;
+    let colRosterPos = -1, colName = -1, colId = -1, colTeam = -1, poolHeaderRow = -1, lastSlotCol = 3;
     for (let ri = 0; ri < Math.min(rows.length, 20); ri++) {
       const r = rows[ri];
-      let foundName = -1, foundId = -1, foundRP = -1;
+      let foundName = -1, foundId = -1, foundRP = -1, foundTeam = -1;
       for (let c = 0; c < r.length; c++) {
         const h = (r[c] || '').trim();
         if (h === 'Name') foundName = c;
         else if (h === 'ID' && foundName >= 0) foundId = c;
         else if (h === 'Roster Position') foundRP = c;
+        else if (h === 'TeamAbbrev') foundTeam = c;
       }
       if (foundName >= 0 && foundId >= 0 && foundRP >= 0) {
-        colName = foundName; colId = foundId; colRosterPos = foundRP;
+        colName = foundName; colId = foundId; colRosterPos = foundRP; colTeam = foundTeam;
         poolHeaderRow = ri;
         break;
       }
@@ -12865,15 +12866,20 @@ function importDKTemplate(file) {
         if (poolName && poolDkId && /^\d{6,}$/.test(poolDkId)) {
           const nName = normName(poolName);
           const lName = poolName.toLowerCase();
+          const poolTeam = colTeam >= 0 ? (r[colTeam] || '').trim() : '';
           if (rosterPos === 'CPT') {
             cptIds[nName] = poolDkId; cptIds[lName] = poolDkId;
+            if (poolTeam) { cptIds[nName + '|' + poolTeam] = poolDkId; }
             isSD = true;
           } else if (rosterPos === 'UTIL') {
             utilIds[nName] = poolDkId; utilIds[lName] = poolDkId;
+            if (poolTeam) { utilIds[nName + '|' + poolTeam] = poolDkId; }
             isSD = true;
           }
           classicIds[nName] = poolDkId;
           classicIds[lName] = poolDkId;
+          // Team-qualified key: prevents same-name collisions (e.g. two Max Muncys)
+          if (poolTeam) { classicIds[nName + '|' + poolTeam] = poolDkId; }
         }
       }
       // Also parse DK IDs from slot columns (4 through lastSlotCol): format "Name (DK_ID)"
@@ -13223,12 +13229,14 @@ function saveLineup_SD() {
 
 function dkIdForSD(p, isCpt) {
   if (!p) return null;
+  const nn = normName(p.name);
+  const ln = (p.name || '').toLowerCase();
+  const team = p.team || '';
   const map = isCpt ? dkDraftgroupMapCPT : dkDraftgroupMapFLEX;
-  return map[normName(p.name)]
-      || map[(p.name||'').toLowerCase()]
-      || dkDraftgroupMap[normName(p.name)]
-      || p.dk_id
-      || p.player_id;
+  return (team && map[nn + '|' + team])
+      || map[nn]
+      || map[ln]
+      || dkIdFor(p);
 }
 
 function exportCSV_Showdown() {

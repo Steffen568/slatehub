@@ -283,10 +283,11 @@ def build_pool(data, slate=None):
     if name_fallback_count:
         print(f"  Name-matched {name_fallback_count} players with ID mismatches")
 
-    # Deduplicate by name
+    # Deduplicate by name+team — same name on DIFFERENT teams are different players
     name_groups = defaultdict(list)
     for p in pool:
-        name_groups[p['name'].lower().strip()].append(p)
+        dedup_key = (p['name'].lower().strip(), (p.get('team') or '').lower().strip())
+        name_groups[dedup_key].append(p)
 
     deduped = []
     merges = 0

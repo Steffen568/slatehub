@@ -753,9 +753,17 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     vegas_scale = clip(vegas_scale, 0.70, 1.45)
 
     # ── Per-sim "hot/cold day" factor for batters ──────────────────────
-    # Batters have day-to-day variance: timing, fatigue, approach.
-    # hot_day ~ N(1.0, 0.18): scales hit probability and power
-    hot_day = rng.normal(1.0, 0.18, size=n_sims).clip(0.50, 1.55)
+    # Variance derived from the batter's actual talent profile:
+    # - High K% = more volatile (boom/bust swings, more zeros)
+    # - High ISO = power is streaky → wider variance
+    # - High BB% = floor support → tighter variance (walks stabilize)
+    # - High contact (low K%) = more consistent outcomes
+    # Base SD ~0.10 for a league-average hitter; ranges from ~0.07 (elite contact) to ~0.16 (high-K power)
+    k_vol    = (talent['k_pct'] - LEAGUE_AVG_K_PCT) * 0.4    # +K% widens
+    iso_vol  = (talent['iso'] - LEAGUE_AVG_ISO) * 0.3         # +ISO widens
+    bb_stab  = (talent['bb_pct'] - LEAGUE_AVG_BB_PCT) * 0.25  # +BB% tightens
+    batter_sd = clip(0.10 + k_vol + iso_vol - bb_stab, 0.06, 0.18)
+    hot_day = rng.normal(1.0, batter_sd, size=n_sims).clip(0.65, 1.40)
     sim_hit_prob = np.clip(hit_prob * hot_day, 0.12, 0.45)
     sim_hr_per_hit = np.clip(hr_per_hit * hot_day, 0.02, 0.35)
 
@@ -922,23 +930,21 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
             split_xfip = r_xfip * r_pct + l_xfip * l_pct
 
     # ── K rate: blend Vegas + talent ────────────────────────────────────────
-    # Talent-based K rate (park adjusted only — opp_quality is wRC+ based, not K%
-    # based, so applying it here suppresses Ks against high-K/high-wRC+ lineups)
-    talent_k_rate = split_k * park_k
-    # Note: SwStr% and velo adjustments removed — now captured upstream by
-    # reliability_blend_pitcher() (Tier 1 stuff model + Tier 2 pitch-level model)
+    # Talent K rate is NOT park-adjusted here — park effect is applied once
+    # via park_k_edge on the blend. Applying park_k to talent AND park_k_edge
+    # to the blend double-counts (e.g. T-Mobile 117 K factor was 1.17 * 1.085 = 1.27x).
+    talent_k_rate = split_k
     if vegas_ks and proj_ip > 0:
-        # Derive Vegas-implied K rate from expected Ks / expected batters faced
         vegas_bf = proj_ip * PA_PER_IP
         vegas_k_rate = vegas_ks / vegas_bf if vegas_bf > 0 else talent_k_rate
-        # Blend, then apply park K factor as env edge on top
         blended_k = vegas_k_rate * VEGAS_WEIGHT + talent_k_rate * (1.0 - VEGAS_WEIGHT)
         # Park K factor: apply as deviation from neutral (1.0)
         # Vegas already partially prices park, so apply only the delta
         park_k_edge = 1.0 + (park_k - 1.0) * 0.5  # half the park effect (Vegas knows some of it)
         k_rate = clip(blended_k * park_k_edge, 0.10, 0.45)
     else:
-        k_rate = clip(talent_k_rate, 0.10, 0.45)
+        # No Vegas — apply full park K factor to talent-only rate
+        k_rate = clip(talent_k_rate * park_k, 0.10, 0.45)
     bb_rate = clip(split_bb * (1.0 + (opp_quality - 1.0) * 0.20) * park_bb, 0.03, 0.16)
     contact_rate = max(0.15, 1.0 - k_rate - bb_rate)
 
@@ -1008,7 +1014,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     location_plus = talent.get('location_plus', 100)
     stuff_sd -= (location_plus - 100) / 100.0 * 0.02  # ±2% additional from command
     stuff_sd = max(0.14, stuff_sd)  # floor
-    stuff_day = rng.normal(1.0, stuff_sd, size=n_sims).clip(0.35, 1.70)
+    stuff_day = rng.normal(1.0, stuff_sd, size=n_sims).clip(0.50, 1.55)
 
     # Scale rates per sim: good stuff day → more Ks, fewer hits, deeper IP
     sim_k_rate  = np.clip(k_rate * stuff_day, 0.08, 0.50)
@@ -1019,8 +1025,10 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     sim_hit_rate = np.clip(hit_on_contact * (2.0 - stuff_day), 0.15, 0.42)
 
     # ── Simulate n_sims games ─────────────────────────────────────────────
-    # IP variance wider (SD=1.2): allows 3 IP blowups and 8 IP gems
-    sim_ip = rng.normal(proj_ip, 1.2, size=n_sims)
+    # IP variance derived from pitcher quality: elite arms go deeper more consistently.
+    # Base SD=0.85, widens for worse pitchers (higher ERA), tightens for elite.
+    ip_sd = clip(0.85 * era_consistency, 0.55, 1.15)
+    sim_ip = rng.normal(proj_ip, ip_sd, size=n_sims)
     # Stuff day affects IP: good stuff → deeper, bad stuff → shorter
     sim_ip = sim_ip * (0.88 + 0.12 * stuff_day)
     sim_ip = sim_ip.clip(1.0, 9.0)
@@ -1161,7 +1169,9 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     pitcher_hr_ratio = (pitcher['hr9'] / LEAGUE_AVG_HR9) if pitcher else 1.0
     # Park/weather sensitivity: low avg_ev = wall scrapers = more park-sensitive
     park_sens = clip(1.0 + (88.0 - talent.get('avg_ev', 88.0)) * 0.015, 0.85, 1.20)
-    effective_park_hr = 1.0 + (park_hr - 1.0) * park_sens
+    # ISO already reflects parks the batter played in (~50% home). Apply only 50%
+    # of the park deviation as an "edge" to avoid double-counting.
+    effective_park_hr = 1.0 + (park_hr - 1.0) * 0.50 * park_sens
     effective_wx_hr = 1.0 + (wx_hr - 1.0) * park_sens
     # Bat speed: raw power — each mph above 72 (avg) scales HR probability
     bat_spd_adj = clip(1.0 + (talent.get('bat_speed', 72.0) - 72.0) * 0.015, 0.88, 1.15)
@@ -1172,8 +1182,10 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     # Attack angle vs arm angle alignment
     aa_hr_adj = arm_angle_hr_interaction(talent.get('attack_angle'), pitcher.get('arm_angle') if pitcher else None)
     hr_per_hit = clip((talent['iso'] / 3.0) * effective_park_hr * fb_adj * effective_wx_hr * pitcher_hr_ratio * bat_spd_adj * squp_adj * blast_adj * aa_hr_adj / hit_prob, 0.03, 0.30)
-    # XB rate: per-hitter doubles rate from Marcel, adjusted by park/weather
-    xb_per_hit = clip(talent.get('xb_per_hit', 0.14) * ev_adj * park_basic, 0.06, 0.25)
+    # XB rate: per-hitter doubles rate from Marcel. ISO already reflects park, so
+    # apply only 50% of park_basic deviation to avoid double-counting.
+    park_xb_edge = 1.0 + (park_basic - 1.0) * 0.50
+    xb_per_hit = clip(talent.get('xb_per_hit', 0.14) * ev_adj * park_xb_edge, 0.06, 0.25)
     triple_per_hit = 0.015
 
     # SB rate: 3-factor model (sprint speed × catcher pop × pitcher vulnerability)
@@ -1217,13 +1229,15 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
     wx_hr = weather_hr_mult(weather)
     park_sens = clip(1.0 + (88.0 - talent.get('avg_ev', 88.0)) * 0.015, 0.85, 1.20)
-    effective_park_hr = 1.0 + (park_hr - 1.0) * park_sens
+    # ISO already reflects parks — apply only 50% of deviation (same as _compute_pa_rates)
+    effective_park_hr = 1.0 + (park_hr - 1.0) * 0.50 * park_sens
     effective_wx_hr = 1.0 + (wx_hr - 1.0) * park_sens
     bat_spd_adj = clip(1.0 + (talent.get('bat_speed', 72.0) - 72.0) * 0.015, 0.88, 1.15)
     squp_adj = clip(1.0 + (talent.get('squared_up', 0.18) - 0.18) * 1.5, 0.90, 1.12)
     blast_adj = clip(1.0 + (talent.get('blast', 0.08) - 0.08) * 2.5, 0.90, 1.12)
     hr_per_hit = clip((talent['iso'] / 3.0) * effective_park_hr * fb_adj * effective_wx_hr * (bp_hr9 / LEAGUE_AVG_HR9) * bat_spd_adj * squp_adj * blast_adj / hit_prob, 0.03, 0.30)
-    xb_per_hit = clip(talent.get('xb_per_hit', 0.14) * ev_adj * park_basic, 0.06, 0.25)
+    park_xb_edge = 1.0 + (park_basic - 1.0) * 0.50
+    xb_per_hit = clip(talent.get('xb_per_hit', 0.14) * ev_adj * park_xb_edge, 0.06, 0.25)
 
     return {
         'k': k_rate, 'bb': bb_rate, 'hbp': BULLPEN_HBP,
@@ -1273,14 +1287,19 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
         # Blend: Vegas captures some of this, apply 55% of the SP delta
         team_env_mean *= 1.0 + (sp_quality - 1.0) * 0.55
     team_env_mean = clip(team_env_mean, 0.75, 1.35)
-    team_factor = rng.normal(team_env_mean, 0.12, size=n_sims).clip(0.55, 1.50)
+    # Team factor variance: higher totals = more certain environment (sharper lines)
+    total = odds.get('game_total', 9.0) if odds else 9.0
+    tf_sd = clip(0.10 + (9.0 - total) * 0.005, 0.06, 0.14)  # high-total games = tighter
+    team_factor = rng.normal(team_env_mean, tf_sd, size=n_sims).clip(0.65, 1.40)
 
     # Pre-allocate DK points and SB counts per batter
     dk_pts = {i: np.zeros(n_sims) for i in range(9)}
     sb_counts = {i: np.zeros(n_sims) for i in range(9)}
 
-    # Base state: [1B occupied, 2B occupied, 3B occupied] per sim
-    # We'll process sim-by-sim for correctness (base state is sequential)
+    # Base state: [1B, 2B, 3B] — stores batter index (0-8) or -1 if empty.
+    # Tracking runner identity lets us credit R to the batter who scored,
+    # eliminating the need for an artificial post-game R distribution.
+    EMPTY = -1
     for sim in range(n_sims):
         tf = team_factor[sim]
         sp_limit = sp_bf_limit[sim]
@@ -1289,7 +1308,7 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
 
         for inning in range(9):  # 9 innings
             outs = 0
-            bases = [False, False, False]  # 1B, 2B, 3B
+            bases = [EMPTY, EMPTY, EMPTY]  # 1B, 2B, 3B — batter index or EMPTY
 
             while outs < 3:
                 bi = batter_idx % 9
@@ -1299,15 +1318,19 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 rates = batter['rates_vs_sp'] if team_bf < sp_limit else batter['rates_vs_bp']
 
                 # Per-batter volatility: o_swing% (chase rate) widens outcomes
-                # High-chase hitters are boom/bust: sometimes they run into one, sometimes they chase everything
                 o_swing_vol = batter.get('o_swing', 0.30)
-                batter_vol_sd = 0.05 + (o_swing_vol - 0.30) * 0.3  # higher chase = wider SD
+                batter_vol_sd = 0.05 + (o_swing_vol - 0.30) * 0.3
                 batter_day = rng.normal(1.0, max(0.03, batter_vol_sd))
                 batter_day = clip(batter_day, 0.50, 1.55)
-                # Hit rate: batter volatility only (team environment affects HR, not contact)
                 hit_p = clip(rates['hit'] * batter_day, 0.12, 0.45)
-                # HR rate: stronger team environment effect (power is more context-dependent)
                 hr_p = clip(rates['hr'] * batter_day * (0.70 + 0.30 * tf), 0.02, 0.35)
+
+                # Helper: credit R (+2 DK pts) to a runner who scores
+                def score_runner(base_idx):
+                    runner = bases[base_idx]
+                    if runner != EMPTY:
+                        dk_pts[runner][sim] += 2  # R scored
+                    bases[base_idx] = EMPTY
 
                 # Roll PA
                 roll = rng.random()
@@ -1317,13 +1340,14 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 elif roll < rates['k'] + rates['bb']:
                     # Walk — force advance
                     dk_pts[bi][sim] += 2  # BB
-                    if bases[0] and bases[1] and bases[2]:
-                        dk_pts[bi][sim] += 2  # RBI
-                    if bases[0] and bases[1]:
-                        bases[2] = True
-                    if bases[0]:
-                        bases[1] = True
-                    bases[0] = True
+                    if bases[0] != EMPTY and bases[1] != EMPTY and bases[2] != EMPTY:
+                        dk_pts[bi][sim] += 2  # RBI (bases loaded)
+                        score_runner(2)
+                    if bases[0] != EMPTY and bases[1] != EMPTY:
+                        bases[2] = bases[1]
+                    if bases[0] != EMPTY:
+                        bases[1] = bases[0]
+                    bases[0] = bi
                     # SB attempt after walk
                     _sb_rate = rates['sb']
                     if sb_context:
@@ -1337,13 +1361,14 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 elif roll < rates['k'] + rates['bb'] + rates['hbp']:
                     # HBP — same as walk
                     dk_pts[bi][sim] += 2  # HBP
-                    if bases[0] and bases[1] and bases[2]:
-                        dk_pts[bi][sim] += 2
-                    if bases[0] and bases[1]:
-                        bases[2] = True
-                    if bases[0]:
-                        bases[1] = True
-                    bases[0] = True
+                    if bases[0] != EMPTY and bases[1] != EMPTY and bases[2] != EMPTY:
+                        dk_pts[bi][sim] += 2  # RBI
+                        score_runner(2)
+                    if bases[0] != EMPTY and bases[1] != EMPTY:
+                        bases[2] = bases[1]
+                    if bases[0] != EMPTY:
+                        bases[1] = bases[0]
+                    bases[0] = bi
                     # SB attempt after HBP
                     _sb_rate = rates['sb']
                     if sb_context:
@@ -1362,38 +1387,51 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                         type_roll = rng.random()
                         if type_roll < hr_p:
                             # HOME RUN — all runners + batter score
-                            rbi = 1 + sum(bases)
+                            rbi = 1  # batter drives self in
+                            for b in range(3):
+                                if bases[b] != EMPTY:
+                                    rbi += 1
+                                    score_runner(b)
                             dk_pts[bi][sim] += 10 + 2 + 2 * rbi  # HR + R + RBI
-                            bases = [False, False, False]
                         elif type_roll < hr_p + rates['triple']:
                             # TRIPLE — all runners score, batter to 3B
-                            rbi = sum(bases)
+                            rbi = 0
+                            for b in range(3):
+                                if bases[b] != EMPTY:
+                                    rbi += 1
+                                    score_runner(b)
                             dk_pts[bi][sim] += 8 + 2 * rbi  # 3B + RBI
-                            # Batter scores often on triples too (~50%)
-                            bases = [False, False, True]
+                            bases = [EMPTY, EMPTY, bi]
                         elif type_roll < hr_p + rates['triple'] + rates['xb']:
                             # DOUBLE — runners on 2B/3B score, 1B to 3B, batter to 2B
-                            rbi = (1 if bases[2] else 0) + (1 if bases[1] else 0)
-                            r_scored = rbi  # runners who scored
-                            dk_pts[bi][sim] += 5 + 2 * rbi  # 2B + RBI
-                            bases = [False, True, bases[0]]  # 1B runner to 3B
-                        else:
-                            # SINGLE — 3B scores, 2B to 3B (scores based on runner speed), 1B to 2B
                             rbi = 0
-                            if bases[2]:
-                                rbi += 1  # runner from 3B scores
-                            # Runner on 2B scoring probability: base 60%, faster runners score more
-                            if bases[1]:
-                                # Use batter's avg_ev as proxy for gap power on the single
+                            if bases[2] != EMPTY:
+                                rbi += 1
+                                score_runner(2)
+                            if bases[1] != EMPTY:
+                                rbi += 1
+                                score_runner(1)
+                            dk_pts[bi][sim] += 5 + 2 * rbi  # 2B + RBI
+                            bases[2] = bases[0]  # 1B runner to 3B
+                            bases[1] = bi         # batter to 2B
+                            bases[0] = EMPTY
+                        else:
+                            # SINGLE — 3B scores, 2B may score, 1B to 2B
+                            rbi = 0
+                            if bases[2] != EMPTY:
+                                rbi += 1
+                                score_runner(2)
+                            if bases[1] != EMPTY:
                                 score_from_2b_prob = 0.60
                                 if rng.random() < score_from_2b_prob:
                                     rbi += 1
-                                    bases[2] = False
+                                    score_runner(1)
                                 else:
                                     bases[2] = bases[1]  # 2B to 3B
+                                    bases[1] = EMPTY
                             dk_pts[bi][sim] += 3 + 2 * rbi  # 1B + RBI
                             bases[1] = bases[0]  # 1B to 2B
-                            bases[0] = True  # batter to 1B
+                            bases[0] = bi         # batter to 1B
 
                             # SB attempt after single
                             _sb_rate = rates['sb']
@@ -1405,63 +1443,16 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                             if rng.random() < _sb_rate:
                                 dk_pts[bi][sim] += 5
                                 sb_counts[bi][sim] += 1
-
-                        # Batter scores a run on any hit if runners drove him in? No —
-                        # batter R is tracked when HE crosses home (HR, or scored later).
-                        # For simplicity: HR = batter scores. Others = batter on base.
                     else:
                         # Out
                         # Sac fly: runner on 3B scores with < 2 outs on ~30% of fly outs
-                        if bases[2] and outs < 2 and rng.random() < 0.30:
+                        if bases[2] != EMPTY and outs < 2 and rng.random() < 0.30:
                             dk_pts[bi][sim] += 2  # RBI from sac fly
-                            bases[2] = False
+                            score_runner(2)
                         outs += 1
-
-                # Track R for batters who reached base and scored
-                # (Handled implicitly: HR gives R directly. For runners who scored
-                # from base, we'd need to track WHO is on each base. For now,
-                # R is approximated: each runner scoring adds R to a random
-                # earlier batter in the inning. We'll handle this below.)
 
                 team_bf += 1
                 batter_idx += 1
-
-        # ── Post-game R distribution ─────────────────────────────────────
-        # RBI is tracked above (batter who drove in runs). For R (runs scored),
-        # we need to credit the batter who WAS on base and scored.
-        # Since we don't track base runner identity, approximate:
-        # Total team R ≈ total RBI. Distribute non-HR R proportionally to
-        # each batter's OBP (high-OBP batters reach base more → score more).
-        #
-        # Extract total RBI from DK pts: each +2 from RBI events.
-        # HR R is already credited (+2 at line 1337). Only distribute non-HR R.
-        total_rbi_pts = sum(dk_pts[i][sim] for i in range(9))
-        # Rough team runs = total_rbi_pts / 2 (since each R gives +2 pts as RBI to driver)
-        # But HR already counted batter R. Estimate non-HR runs:
-        # ~33% of team runs are via HR (batter scores themselves), rest are baserunner R.
-        # Use OBP-weighted distribution for those non-HR runs.
-        obp_weights = []
-        for i in range(9):
-            t = lineup_talents[i]
-            obp = t.get('avg', 0.250) + t.get('bb_pct', 0.08)
-            obp_weights.append(obp)
-        obp_total = sum(obp_weights) or 1.0
-        # Estimate team runs this sim from implied runs (Vegas) or default
-        _impl = None
-        if odds:
-            _impl = safe(odds.get('home_implied' if is_home else 'away_implied'))
-            if not _impl:
-                _gt = safe(odds.get('game_total'))
-                _impl = _gt / 2.0 if _gt else None
-        est_team_runs = _impl if _impl else 4.5
-        est_team_runs *= tf  # scale by team factor for this sim
-        # Non-HR runs scored by baserunners: ~50% of team runs
-        # (conservative — HR already give R directly, avoid double-counting)
-        non_hr_runs = est_team_runs * 0.50
-        for i in range(9):
-            r_share = non_hr_runs * obp_weights[i] / obp_total
-            # Each run scored = +2 DK pts. Probabilistic: use fractional pts.
-            dk_pts[i][sim] += r_share * 2.0
 
     # Contact hitter adjustment (same as standalone sim)
     for i in range(9):
