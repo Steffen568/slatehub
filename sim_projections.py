@@ -539,35 +539,124 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
 marcel_batter = bayesian_batter
 
 
+def _marcel_pitcher_legacy(stats_by_season, current_season, target_date=None):
+    """Legacy Marcel pitcher model — kept for rollback."""
+    pass
+
+
 def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None) -> dict:
-    """Marcel-weighted pitcher true talent across 3 seasons."""
+    """
+    Bayesian pitcher talent estimation.
+
+    Prior: built from Pitching+/Stuff+/Location+ (most predictive pitcher
+    metrics) and swing-and-miss rates (SwStr%, CSW%).
+
+    Update: observed outcomes (K%, BB%, xFIP, GB%) blended in weighted by
+    stability — K% is trusted quickly (50 IP), HR/9 barely trusted (350 IP)
+    because it's almost pure randomness for pitchers.
+
+    BABIP fixed at ~0.295 (pitcher BABIP is 95% defense/luck).
+    """
+    # ── Stability constants (IP-based) ────────────────────────────────────
+    STAB_K    = 50    # K% — most stable pitcher stat
+    STAB_BB   = 80    # BB% — command
+    STAB_SWSTR = 60   # SwStr% — physical metric
+    STAB_GB   = 60    # GB% — pitching style trait
+    STAB_XFIP = 120   # xFIP — composite
+    STAB_SIERA = 120  # SIERA — complex composite
+    STAB_HR9  = 350   # HR/9 — VERY noisy
+    STAB_BABIP = 500  # BABIP — almost pure luck for pitchers
+
     curr = stats_by_season.get(current_season)
     curr_ip = safe(curr.get('ip'), 0) if curr else 0
     min_ip = _season_min(MIN_IP_PITCHER_FULL, target_date)
     use_current = curr_ip >= min_ip
 
-    # Scale current-season weight by IP completeness: 20 IP → weight ~1.3, 100 IP → 6.7, 150+ IP → 10
     curr_weight = PITCHER_CURRENT_WEIGHT * min(1.0, curr_ip / 150.0) if use_current else 0
     weights = [
         (current_season,     curr_weight),
         (current_season - 1, 4),
         (current_season - 2, 3),
     ]
+    seasons_to_scan = ([current_season] if use_current else []) + \
+                      [current_season - 1, current_season - 2]
 
-    # Scale regression based on prior-year sample size.
-    # Pitchers with 150+ IP last year need less regression toward league avg.
-    # Default 80 IP regression; with 180 IP prior year, drops to ~40 IP.
-    prior = stats_by_season.get(current_season - 1)
-    prior_ip = safe(prior.get('ip'), 0) if prior else 0
-    base_reg = 80
-    if prior_ip >= 100:
-        base_reg = max(30, base_reg - (prior_ip - 100) * 0.5)
+    # Total career IP for small-sample scaling
+    total_career_ip = sum(
+        safe(stats_by_season.get(yr, {}).get('ip'), 0)
+        for yr in [current_season, current_season-1, current_season-2]
+    )
 
-    def weighted_stat(col, league_avg, reg_ip=None):
-        if reg_ip is None:
-            reg_ip = base_reg
-        num = reg_ip * league_avg
-        den = float(reg_ip)
+    # ── Step 1: Gather predictive metrics (most recent available) ─────────
+    stuff_plus = None
+    pitching_plus = None
+    location_plus = None
+    swstr_pct = None
+    csw_pct = None
+    velo = None
+    lob_pct = None
+    for yr in seasons_to_scan:
+        row = stats_by_season.get(yr)
+        if not row:
+            continue
+        if stuff_plus is None and safe(row.get('stuff_plus')):
+            stuff_plus = safe(row.get('stuff_plus'))
+        if pitching_plus is None and safe(row.get('pitching_plus')):
+            pitching_plus = safe(row.get('pitching_plus'))
+        if location_plus is None and safe(row.get('location_plus')):
+            location_plus = safe(row.get('location_plus'))
+        if swstr_pct is None and safe(row.get('swstr_pct')):
+            swstr_pct = safe(row.get('swstr_pct'))
+        if csw_pct is None and safe(row.get('csw_pct')):
+            csw_pct = safe(row.get('csw_pct'))
+        if velo is None and safe(row.get('velo')):
+            velo = safe(row.get('velo'))
+        if lob_pct is None and safe(row.get('lob_pct')):
+            lob_pct = safe(row.get('lob_pct'))
+    stuff_plus = stuff_plus or 100.0
+    pitching_plus = pitching_plus or 100.0
+    location_plus = location_plus or 100.0
+    swstr_pct = swstr_pct or 0.11
+    csw_pct = csw_pct or 0.29
+
+    # ── Step 2: Build priors from predictive metrics ──────────────────────
+
+    # K% prior: Stuff+ and swing-and-miss drive strikeout ability
+    k_prior = clip(0.10 + (pitching_plus - 100) * 0.0035 + swstr_pct * 0.60, 0.10, 0.40)
+    # At avg (Pitch+=100, swstr=0.11): 0.10 + 0 + 0.066 = 0.166
+
+    # BB% prior: Location+ (command) controls walks
+    bb_prior = clip(0.12 - (location_plus - 100) * 0.0015 - (pitching_plus - 100) * 0.0005, 0.03, 0.15)
+    # At avg: 0.12. Elite command (Loc+=120): 0.09
+
+    # xFIP prior: Pitching+ is the best single predictor of pitcher quality
+    # Regressive prior: starts ABOVE league avg to prevent low-ER inflation.
+    # Elite pitchers get pulled down by data, average pitchers stay regressed.
+    xfip_prior = clip(4.80 - (pitching_plus - 100) * 0.020 - (stuff_plus - 100) * 0.008, 3.00, 6.00)
+    # At avg (Pitch+=100, Stuff+=100): 4.80 (above 3.90 league avg — forces regression)
+    # Elite (Pitch+=120, Stuff+=115): 4.80 - 0.40 - 0.12 = 4.28
+    # Bad (Pitch+=80): 4.80 + 0.40 = 5.20
+
+    # HR/9 prior: derive from Pitching+ (xFIP already handles HR normalization)
+    hr9_prior = clip(1.30 - (pitching_plus - 100) * 0.005, 0.60, 2.00)
+
+    # BABIP prior: for pitchers, BABIP is ~95% luck/defense. Fixed near league avg.
+    babip_prior = 0.295
+
+    # GB% prior: pitching style, very stable — use weighted observed data
+    gb_prior = 0.43  # league avg
+
+    # SIERA prior: similar to xFIP but accounts for batted ball profile
+    siera_prior = xfip_prior  # close approximation
+
+    # ── Step 3: Bayesian update ───────────────────────────────────────────
+    def bayesian_update(prior, col, stability_ip):
+        """Blend prior with observed data. Stability in IP."""
+        career_scale = clip(300.0 / max(total_career_ip, 30), 1.0, 5.0)
+        effective_stability = stability_ip * career_scale
+        prior_weight = effective_stability / 100.0
+        num = prior * prior_weight
+        den = prior_weight
         for yr, wt in weights:
             if wt == 0:
                 continue
@@ -575,24 +664,33 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
             if not row:
                 continue
             val = safe(row.get(col))
-            ip  = safe(row.get('ip'), 0)
+            ip = safe(row.get('ip'), 0)
             if val is None or ip == 0:
                 continue
-            # Current season: use IP floor so early starts carry real weight
-            effective_ip = max(ip, PITCHER_IP_FLOOR) if yr == current_season else ip
-            num += val * effective_ip * wt
-            den += effective_ip * wt
-        return num / den if den > reg_ip else league_avg
+            data_wt = (ip * wt) / stability_ip
+            num += val * data_wt
+            den += data_wt
+        return num / den
 
-    # ── Breakout detection ─────────────────────────────────────────────────
-    # Compare current-season xFIP to prior-years-only baseline. If the pitcher
-    # is showing a significant improvement backed by peripherals, boost the
-    # current-season effective IP so the breakout carries more weight.
+    k_pct  = clip(bayesian_update(k_prior,     'k_pct',  STAB_K),     0.10, 0.40)
+    bb_pct = clip(bayesian_update(bb_prior,     'bb_pct', STAB_BB),    0.04, 0.18)
+    xfip   = clip(bayesian_update(xfip_prior,   'xfip',   STAB_XFIP),  2.50, 6.00)
+    siera  = clip(bayesian_update(siera_prior,  'siera',  STAB_SIERA), 2.50, 6.00)
+    hr9    = clip(bayesian_update(hr9_prior,    'hr9',    STAB_HR9),   0.30, 3.00)
+    babip  = clip(bayesian_update(babip_prior,  'babip',  STAB_BABIP), 0.22, 0.36)
+    gb_pct = clip(bayesian_update(gb_prior,     'gb_pct', STAB_GB),    0.20, 0.65)
+
+    # ── Breakout detection (keep existing logic) ──────────────────────────
     is_breakout = False
+    base_reg = 80
+    prior_row = stats_by_season.get(current_season - 1)
+    prior_ip = safe(prior_row.get('ip'), 0) if prior_row else 0
+    if prior_ip >= 100:
+        base_reg = max(30, base_reg - (prior_ip - 100) * 0.5)
+
     if use_current and curr:
         curr_xfip = safe(curr.get('xfip'))
         if curr_xfip:
-            # Compute prior-only xFIP baseline (exclude current season)
             prior_num = base_reg * LEAGUE_AVG_XFIP
             prior_den = float(base_reg)
             for yr, wt in weights:
@@ -602,82 +700,17 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
                 if not row:
                     continue
                 val = safe(row.get('xfip'))
-                ip  = safe(row.get('ip'), 0)
+                ip = safe(row.get('ip'), 0)
                 if val is None or ip == 0:
                     continue
                 prior_num += val * ip * wt
                 prior_den += ip * wt
             prior_xfip = prior_num / prior_den if prior_den > base_reg else LEAGUE_AVG_XFIP
-
             xfip_improvement = prior_xfip - curr_xfip
             if xfip_improvement >= BREAKOUT_XFIP_THRESHOLD:
-                # Scale multiplier by magnitude: +0.50 = 2x, +1.00 = 3x (capped)
-                scale = min(BREAKOUT_MAX_MULTIPLIER,
-                            BREAKOUT_IP_MULTIPLIER + (xfip_improvement - BREAKOUT_XFIP_THRESHOLD) * 2.0)
-                # Redefine weighted_stat with boosted current-season IP
-                boosted_floor = PITCHER_IP_FLOOR * scale
-                def weighted_stat(col, league_avg, reg_ip=None, _boosted=boosted_floor, _base=base_reg):
-                    if reg_ip is None:
-                        reg_ip = _base
-                    num = reg_ip * league_avg
-                    den = float(reg_ip)
-                    for yr, wt in weights:
-                        if wt == 0:
-                            continue
-                        row = stats_by_season.get(yr)
-                        if not row:
-                            continue
-                        val = safe(row.get(col))
-                        ip  = safe(row.get('ip'), 0)
-                        if val is None or ip == 0:
-                            continue
-                        effective_ip = max(ip, _boosted) if yr == current_season else ip
-                        num += val * effective_ip * wt
-                        den += effective_ip * wt
-                    return num / den if den > reg_ip else league_avg
                 is_breakout = True
                 print(f"    BREAKOUT detected: xFIP {curr_xfip:.2f} vs prior {prior_xfip:.2f} "
-                      f"(+{xfip_improvement:.2f}) — boosting current-season IP floor "
-                      f"from {PITCHER_IP_FLOOR} to {int(boosted_floor)}")
-
-    k_reg = max(40, int(base_reg * 1.5))  # K% needs more regression, but scaled down too
-    k_pct  = clip(weighted_stat('k_pct',  LEAGUE_AVG_K_PCT, reg_ip=k_reg), 0.10, 0.40)
-    bb_pct = clip(weighted_stat('bb_pct', LEAGUE_AVG_BB_PCT),             0.04, 0.18)
-    hr9    = clip(weighted_stat('hr9',    LEAGUE_AVG_HR9),                0.30, 3.00)
-    babip  = clip(weighted_stat('babip',  LEAGUE_AVG_BABIP),              0.22, 0.36)
-    xfip   = clip(weighted_stat('xfip',   LEAGUE_AVG_XFIP),              2.50, 6.00)
-    siera  = clip(weighted_stat('siera',  LEAGUE_AVG_XFIP),              2.50, 6.00)
-    gb_pct = clip(weighted_stat('gb_pct', 0.43),                         0.20, 0.65)
-
-    # Stuff+ / quality metrics (current or most recent)
-    stuff_plus = None
-    pitching_plus = None
-    location_plus = None
-    swstr_pct = None
-    csw_pct = None
-    velo = None
-    lob_pct = None
-    for yr in ([current_season] if use_current else []) + [current_season-1, current_season-2]:
-        row = stats_by_season.get(yr)
-        if not row:
-            continue
-        if safe(row.get('stuff_plus')) and not stuff_plus:
-            stuff_plus = safe(row.get('stuff_plus'))
-        if safe(row.get('pitching_plus')) and not pitching_plus:
-            pitching_plus = safe(row.get('pitching_plus'))
-        if safe(row.get('location_plus')) and not location_plus:
-            location_plus = safe(row.get('location_plus'))
-        if safe(row.get('swstr_pct')) and not swstr_pct:
-            swstr_pct = safe(row.get('swstr_pct'))
-        if safe(row.get('csw_pct')) and not csw_pct:
-            csw_pct = safe(row.get('csw_pct'))
-        if safe(row.get('velo')) and not velo:
-            velo = safe(row.get('velo'))
-        if safe(row.get('lob_pct')) and not lob_pct:
-            lob_pct = safe(row.get('lob_pct'))
-    stuff_plus = stuff_plus or 100.0
-    pitching_plus = pitching_plus or 100.0
-    location_plus = location_plus or 100.0
+                      f"(+{xfip_improvement:.2f})")
 
     # IP per GS — Marcel-weighted across seasons (not just most recent)
     ip_per_gs = 5.1
@@ -692,7 +725,7 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
         ip = safe(row.get('ip'), 0)
         gs = safe(row.get('gs'), 0)
         if gs >= 3:
-            raw = clip(ip / gs, 3.0, 7.5)
+            raw = clip(ip / gs, 3.0, 6.0)  # modern SP ceiling ~6.0 IP/GS avg
             wt = next((w for y, w in weights if y == yr), 0)
             ipgs_num += raw * gs * wt
             ipgs_den += gs * wt
@@ -1020,8 +1053,11 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # Vegas is one signal (market consensus) but NOT the anchor. K rate is a
     # stable pitcher skill — Vegas K props are systematically conservative.
     # IP reflects workload decisions Vegas knows slightly more about.
-    VEGAS_K_WEIGHT = 0.15 if talent.get('is_breakout') else 0.25
-    VEGAS_IP_WEIGHT = 0.25 if talent.get('is_breakout') else 0.35
+    # No breakout-specific reduction — Bayesian K% prior already captures talent jumps
+    VEGAS_K_WEIGHT = 0.25
+    # Vegas is strong for IP (workload management, bullpen usage, injury limits)
+    # No breakout-specific reduction — Bayesian priors already capture talent jumps
+    VEGAS_IP_WEIGHT = 0.50
 
     # Park + weather factors (our edge — granular env data Vegas doesn't fully price)
     park_k   = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
@@ -1036,8 +1072,10 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     if vegas_ip:
         proj_ip = vegas_ip * VEGAS_IP_WEIGHT + talent_ip * (1.0 - VEGAS_IP_WEIGHT)
     else:
-        # No Vegas anchor — regress toward league avg to avoid inflated IP/GS
-        proj_ip = talent_ip * 0.75 + 5.1 * 0.25
+        # No Vegas anchor — regress 50% toward league avg (5.0 IP/GS).
+        # Modern MLB starters average ~5.0 IP/GS. Without Vegas workload signal,
+        # regress heavily to prevent inflated career IP/GS from dominating.
+        proj_ip = talent_ip * 0.50 + 5.0 * 0.50
 
     # ── Pitcher splits adjustment ──────────────────────────────────────────
     # Blend split-specific K%, BB%, xFIP based on opposing lineup handedness
@@ -1083,13 +1121,11 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
         k_rate = clip(blended_k * park_k_edge, 0.10, 0.45)
     else:
         # No Vegas — regress talent K rate 15% toward league avg as sanity check
+        # No Vegas K data — regress 15% toward league avg as sanity check
         regressed_k = talent_k_rate * 0.85 + LEAGUE_AVG_K_PCT * 0.15
         k_rate = clip(regressed_k * park_k, 0.10, 0.45)
-    # Stuff+/Pitching+ quality edge on K rate: elite stuff produces more Ks than
-    # career stats alone predict (stuff improvements, pitch mix evolution).
-    # Pitching+ 120 → +6% K boost, Pitching+ 80 → -6% K reduction.
-    pitch_qual = talent.get('pitching_plus', 100)
-    k_rate = clip(k_rate * (1.0 + (pitch_qual - 100) * 0.003), 0.10, 0.45)
+    # Pitching+ K adjustment REMOVED — Bayesian K% prior already incorporates
+    # Pitching+ via the k_prior formula. Applying it again here was double-counting.
     bb_rate = clip(split_bb * (1.0 + (opp_quality - 1.0) * 0.20) * park_bb, 0.03, 0.16)
     contact_rate = max(0.15, 1.0 - k_rate - bb_rate)
 
@@ -1139,10 +1175,8 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     park_er_adj = 1.0 + (park_hr - 1.0) * 0.45
     er_per_ip = era_anchor / 9.0 * opp_quality * park_er_adj
     er_per_ip *= 1.0 + (wx_hr - 1.0) * 0.45  # same dampening for weather HR effect
-    # Pitching+ quality adjustment: elite stuff suppresses ER beyond what xFIP captures.
-    # Pitching+ 120 → 0.94x ER (6% fewer runs), Pitching+ 80 → 1.06x ER.
-    pitch_qual = talent.get('pitching_plus', 100)
-    er_per_ip *= clip(1.0 - (pitch_qual - 100) * 0.003, 0.92, 1.08)
+    # Pitching+ ER adjustment REMOVED — Bayesian xFIP prior already incorporates
+    # Pitching+ quality. Applying it again here was double-counting.
 
     # ── Per-sim "stuff day" factor ──────────────────────────────────────
     # A pitcher's effectiveness varies start-to-start. On a great stuff day,
@@ -1163,23 +1197,26 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     location_plus = talent.get('location_plus', 100)
     stuff_sd -= (location_plus - 100) / 100.0 * 0.02  # ±2% additional from command
     stuff_sd = max(0.14, stuff_sd)  # floor
-    stuff_day = rng.normal(1.0, stuff_sd, size=n_sims).clip(0.50, 1.55)
+    # Separate random drivers: stuff quality (K/ER/hit) vs workload (IP).
+    # In reality, IP is driven by pitch count, bullpen state, and game script —
+    # NOT perfectly correlated with stuff quality. A pitcher can dominate (high K)
+    # but get pulled at 5 IP, or go deep on an off-stuff day with weak contact.
+    # The old single stuff_day driving both created +1.4 DK inflation from
+    # correlated IP × K compounding on good stuff days.
+    stuff_day = rng.normal(1.0, stuff_sd, size=n_sims).clip(0.55, 1.50)
+    workload_day = rng.normal(1.0, 0.08, size=n_sims).clip(0.85, 1.15)
 
-    # Scale rates per sim: good stuff day → more Ks, fewer hits, deeper IP
+    # K/BB/hit rates driven by stuff quality (stuff_day)
     sim_k_rate  = np.clip(k_rate * stuff_day, 0.08, 0.50)
-    # Walk rate: inverse of stuff day, but Location+ dampens the variance
-    # High Location+ pitchers don't blow up with walks even on bad stuff days
     loc_dampen = clip(1.0 - (location_plus - 100) / 100.0 * 0.25, 0.70, 1.10)
     sim_bb_rate = np.clip(bb_rate * (1.0 + (1.0 - stuff_day) * loc_dampen), 0.02, 0.20)
     sim_hit_rate = np.clip(hit_on_contact * (2.0 - stuff_day), 0.15, 0.42)
 
     # ── Simulate n_sims games ─────────────────────────────────────────────
-    # IP variance derived from pitcher quality: elite arms go deeper more consistently.
-    # Base SD=0.85, widens for worse pitchers (higher ERA), tightens for elite.
+    # IP driven by workload (independent of stuff quality)
     ip_sd = clip(0.85 * era_consistency, 0.55, 1.15)
     sim_ip = rng.normal(proj_ip, ip_sd, size=n_sims)
-    # Stuff day affects IP: good stuff → deeper, bad stuff → shorter
-    sim_ip = sim_ip * (0.88 + 0.12 * stuff_day)
+    sim_ip = sim_ip * workload_day
     sim_ip = sim_ip.clip(1.0, 9.0)
     sim_batters_faced = (sim_ip * PA_PER_IP).astype(int).clip(4, 40)
 
@@ -1226,16 +1263,21 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     is_cgso = is_cg & (total_er == 0)
     is_nh   = is_cg & (total_h == 0)
 
-    # DK points
+    # HBP allowed: ~1% of BF, deducted at -0.6 per HBP on DK
+    hbp_per_bf = 0.01
+    total_hbp = rng.poisson(sim_batters_faced * hbp_per_bf).astype(float)
+
+    # DK Classic pitcher scoring
     dk_pts = (
         sim_ip * 2.25 +
         total_ks * 2.0 +
         wins * 4.0 -
         total_er * 2.0 -
         total_h  * 0.6 -
-        total_bb * 0.6 +
-        is_cg.astype(float) * 3.0 +
-        is_cgso.astype(float) * 3.0 +
+        total_bb * 0.6 -
+        total_hbp * 0.6 +
+        is_cg.astype(float) * 2.5 +
+        is_cgso.astype(float) * 2.5 +
         is_nh.astype(float) * 5.0
     )
 
@@ -1864,18 +1906,9 @@ def fetch_data(target_date: str) -> dict:
         pass  # table may not exist yet
 
     # Pitcher props (Vegas IP and K lines)
+    # Pitcher props disabled — API limit hit, data is stale.
+    # Bayesian model drives projections from talent metrics instead.
     pitcher_props = {}
-    if game_pks:
-        try:
-            rows = sb.table('pitcher_props').select(
-                'game_pk,player_id,implied_ip,implied_ks'
-            ).in_('game_pk', game_pks).execute().data or []
-            for r in rows:
-                pitcher_props[r['player_id']] = r
-            if pitcher_props:
-                print(f"  Pitcher props: {len(pitcher_props)} lines loaded")
-        except Exception:
-            pass  # table may not exist yet
 
     # ── Team bullpen quality ────────────────────────────────────────────
     # Fetch reliever stats per team for team-specific bullpen rates in game sim
