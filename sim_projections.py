@@ -297,9 +297,9 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
     STAB_K    = 60    # K% stabilizes fastest
     STAB_BB   = 120   # BB% is plate discipline
     STAB_XW   = 150   # xwOBA stabilizes moderately fast
-    STAB_ISO  = 160   # ISO is somewhat noisy
+    STAB_ISO  = 250   # ISO needs more PA than K%/BB% — trust barrel/EV-derived prior longer
     STAB_HR   = 170   # HR rate
-    STAB_BABIP = 400  # BABIP is very noisy — trust prior for a long time
+    STAB_BABIP = 820  # BABIP needs 800+ PA to stabilize — trust xwOBA-derived prior much longer
     STAB_BARREL = 80  # physical metric, stabilizes fast
     STAB_HH   = 100   # hard hit rate
     STAB_EV   = 80    # exit velocity (physical)
@@ -363,10 +363,12 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
     # hitter's contact quality, speed, and batted ball profile.
 
     # K% prior: driven by chase rate and whiff rate (the underlying swing decisions)
-    k_prior = clip(0.05 + swstr * 1.0 + o_swing * 0.25, 0.08, 0.42)
+    # Calibrated: at avg inputs (swstr=0.11, o_swing=0.30) → 0.210, regresses toward 0.225
+    k_prior = clip(0.04 + swstr * 0.95 + o_swing * 0.22, 0.08, 0.42)
 
     # BB% prior: inverse of chase rate + patience signal from wRC+
-    bb_prior = clip(0.14 - o_swing * 0.25 + (wrc_plus - 100) * 0.0003, 0.03, 0.20)
+    # Calibrated: at avg inputs (o_swing=0.30, wrc_plus=100) → 0.094, regresses toward 0.082
+    bb_prior = clip(0.16 - o_swing * 0.22 + (wrc_plus - 100) * 0.0004, 0.03, 0.20)
 
     # BABIP prior: xwOBA-anchored + speed + batted ball profile
     # Sprint speed pulled from most recent season (physical trait)
@@ -381,12 +383,12 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
     # xwOBA of .315 (avg) should produce BABIP ~.298 (avg). Scale accordingly.
     # Higher xwOBA → better contact → higher BABIP. Speed adds infield hits.
     babip_prior = clip(
-        0.060 + xwoba * 0.72 + (sprint_speed - 4.40) * 0.018
-        + (ld_pct - 0.21) * 0.35 + (gb_pct - 0.44) * 0.06,
+        0.030 + xwoba * 0.85 + (sprint_speed - 4.40) * 0.018
+        + (ld_pct - 0.21) * 0.30 + (gb_pct - 0.44) * 0.05,
         0.22, 0.38
     )
-    # Verify: at avg (xwoba=.315, sprint=4.40, ld=.21, gb=.44):
-    # 0.060 + 0.315*0.72 = 0.060 + 0.227 = 0.287 → close to .298 avg BABIP
+    # At avg (xwoba=.315): 0.030 + 0.268 = 0.298 — matches league avg BABIP
+    # At .350 (good hitter): 0.328  At .400 (elite): 0.370
 
     # ISO prior: power from barrel rate, exit velocity, fly ball tendency
     iso_prior = clip(
@@ -403,9 +405,13 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
 
     # ── Step 3: Bayesian update — blend priors with observed outcomes ─────
     def bayesian_update(prior, col, stability_pa):
-        """Blend prior with observed data. Stability controls trust speed."""
-        num = prior * 1.0  # prior weight = 1.0 (always present)
-        den = 1.0
+        """Blend prior with observed data. Stability controls trust speed.
+        Prior weight scales with stability — noisy stats (BABIP, stability=820)
+        get a strong prior that resists observed data longer. Stable stats
+        (K%, stability=60) get a weak prior that defers to data quickly."""
+        prior_weight = stability_pa / 200.0  # BABIP: 4.1, ISO: 1.25, K%: 0.30
+        num = prior * prior_weight
+        den = prior_weight
         for yr, wt in year_weights:
             if wt == 0:
                 continue
@@ -819,7 +825,7 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     ld_adj = 1.0 + (talent.get('ld_pct', 0.21) - 0.21) * 0.5
     ld_adj = clip(ld_adj, 0.90, 1.12)
 
-    hit_prob = clip(talent['babip'] * qoc_mult * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.18, 0.42)
+    hit_prob = clip(talent['babip'] * qoc_mult * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.18, 0.52)
 
     # ── Hit type distribution ─────────────────────────────────────────────
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
@@ -1276,7 +1282,7 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather)
     ld_adj = clip(1.0 + (talent.get('ld_pct', 0.21) - 0.21) * 0.5, 0.90, 1.12)
-    hit_prob = clip(hit_prob_base * qoc_mult * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.18, 0.42)
+    hit_prob = clip(hit_prob_base * qoc_mult * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.18, 0.52)
 
     # HR rate — bat tracking metrics drive power ceiling
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
@@ -1346,7 +1352,7 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     # Add HR/BIP back to BABIP for total P(hit|BIP) — same fix as _compute_pa_rates
     bp_contact = max(0.30, 1.0 - talent['k_pct'] - talent['bb_pct'] - 0.01)
     bp_hr_per_bip = clip(talent['iso'] / 3.5, 0.005, 0.07) / bp_contact
-    hit_prob = clip((bp_babip + bp_hr_per_bip) * qoc_mult * ev_adj * park_basic * wx_hit, 0.20, 0.42)
+    hit_prob = clip((bp_babip + bp_hr_per_bip) * qoc_mult * ev_adj * park_basic * wx_hit, 0.20, 0.52)
 
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
@@ -1434,7 +1440,7 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 # Pure talent-vs-pitcher: rates already encode matchup quality.
                 # No game-environment scaling — lineup quality naturally drives R/RBI
                 # through base runner state (weak lineup = fewer runners on base).
-                hit_p = clip(rates['hit'] * batter_day, 0.08, 0.42)
+                hit_p = clip(rates['hit'] * batter_day, 0.08, 0.52)
                 hr_p = clip(rates['hr'] * batter_day, 0.02, 0.30)
                 k_p = rates['k']
                 bb_p = rates['bb']
@@ -2181,6 +2187,22 @@ def run():
             sb_dist = sb_results[slot_idx]
             proj_sb = round2(float(np.mean(sb_dist)))
             order = lu.get('batting_order') or (slot_idx + 1)
+
+            # R/RBI talent supplement: the full-game sim derives R/RBI purely from
+            # base state, which collapses in weak lineups. But a good hitter's R/RBI
+            # talent is partially independent of lineup — they drive themselves in on
+            # HR/XBH, score on their own extra-base hits, and create their own
+            # opportunities through quality at-bats. Add a talent-based R/RBI
+            # component that the sim's lineup-dependent model underestimates.
+            proj_pa = LINEUP_PA.get(order, LEAGUE_AVG_PA)
+            talent_r = talent.get('r_per_pa', 0.11) * proj_pa * 2     # career R rate → DK pts
+            talent_rbi = talent.get('rbi_per_pa', 0.10) * proj_pa * 2 # career RBI rate → DK pts
+            # Scale supplement by xwOBA — better hitters deserve more R/RBI credit.
+            # A .400 xwOBA hitter gets full 40% supplement; .300 xwOBA gets ~20%.
+            xw = talent.get('xwoba', 0.315)
+            supplement_scale = clip((xw - 0.250) / 0.150, 0.15, 0.45)  # .250→15%, .315→43%, .400→100% of 0.45
+            talent_supplement = (talent_r + talent_rbi) * supplement_scale
+            dk_dist = dk_dist + talent_supplement
 
             mean   = float(np.mean(dk_dist))
             median = float(np.median(dk_dist))
