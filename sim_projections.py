@@ -2261,19 +2261,15 @@ def run():
             proj_sb = round2(float(np.mean(sb_dist)))
             order = lu.get('batting_order') or (slot_idx + 1)
 
-            # R/RBI talent supplement: the full-game sim derives R/RBI purely from
-            # base state, which collapses in weak lineups. But a good hitter's R/RBI
-            # talent is partially independent of lineup — they drive themselves in on
-            # HR/XBH, score on their own extra-base hits, and create their own
-            # opportunities through quality at-bats. Add a talent-based R/RBI
-            # component that the sim's lineup-dependent model underestimates.
+            # Hitters use sim mean — the full-game base-state tracking is the correct
+            # approach for R/RBI (depends on lineup context). Direct calculation doesn't
+            # work for hitters because R/RBI can't be computed from individual rates alone.
+            # The R/RBI supplement bridges the gap between sim and career rates.
             proj_pa = LINEUP_PA.get(order, LEAGUE_AVG_PA)
-            talent_r = talent.get('r_per_pa', 0.11) * proj_pa * 2     # career R rate → DK pts
-            talent_rbi = talent.get('rbi_per_pa', 0.10) * proj_pa * 2 # career RBI rate → DK pts
-            # Scale supplement by xwOBA — better hitters deserve more R/RBI credit.
-            # A .400 xwOBA hitter gets full 40% supplement; .300 xwOBA gets ~20%.
+            talent_r = talent.get('r_per_pa', 0.11) * proj_pa * 2
+            talent_rbi = talent.get('rbi_per_pa', 0.10) * proj_pa * 2
             xw = talent.get('xwoba', 0.315)
-            supplement_scale = clip((xw - 0.300) / 0.120, 0.0, 0.35)  # .300→0%, .360→50%, .400+→35% cap
+            supplement_scale = clip((xw - 0.300) / 0.120, 0.0, 0.35)
             talent_supplement = (talent_r + talent_rbi) * supplement_scale
             dk_dist = dk_dist + talent_supplement
 
@@ -2420,15 +2416,37 @@ def run():
             p75    = float(np.percentile(dk_dist, 75))
             p90    = float(np.percentile(dk_dist, 90))
 
-            # Compute expected component values for transparency
+            # ── Direct calculation of expected DK points ────────────────────
+            # THE BAT X approach: compute expected stat line directly from rates,
+            # then apply DK formula. No Monte Carlo compounding/clipping bias.
+            # Sim still used for distribution (P10, P50, P90, SD).
             PA_PER_IP = 4.3
-            VW = 0.55  # match VEGAS_WEIGHT in sim_pitcher_game
-            talent_ip = talent['ip_per_gs']  # raw — no matchup adj (Vegas prices it)
-            exp_ip = (v_ip * VW + talent_ip * (1.0 - VW)) if v_ip else (talent_ip * 0.75 + 5.1 * 0.25)
-            exp_pa = exp_ip * PA_PER_IP
-            talent_ks = exp_pa * talent['k_pct']
-            exp_ks = (v_ks * VW + talent_ks * (1.0 - VW)) if v_ks else talent_ks
-            exp_bb = exp_pa * talent['bb_pct'] * clip(1.0 + (opp_qual - 1.0) * 0.20, 0.88, 1.15)
+            talent_ip = talent['ip_per_gs']
+            # IP: regress 50% toward 5.0 league avg (no Vegas props available)
+            exp_ip = talent_ip * 0.50 + 5.0 * 0.50
+            exp_bf = exp_ip * PA_PER_IP
+
+            # K rate: talent with park adjustment and 15% league-avg regression
+            park_k = safe(park_row.get('k_factor'), 100) / 100.0 if park_row else 1.0
+            regressed_k = talent['k_pct'] * 0.85 + LEAGUE_AVG_K_PCT * 0.15
+            exp_k_rate = clip(regressed_k * park_k, 0.10, 0.45)
+            exp_ks = exp_bf * exp_k_rate
+
+            # BB rate: talent with park and matchup adjustment
+            park_bb = safe(park_row.get('bb_factor'), 100) / 100.0 if park_row else 1.0
+            exp_bb_rate = clip(talent['bb_pct'] * clip(1.0 + (opp_qual - 1.0) * 0.20, 0.88, 1.15) * park_bb, 0.03, 0.16)
+            exp_bb = exp_bf * exp_bb_rate
+
+            # Hit rate: BABIP adjusted for matchup and park
+            park_basic = safe(park_row.get('basic_factor'), 100) / 100.0 if park_row else 1.0
+            exp_hit_rate = clip(talent['babip'] * opp_qual * park_basic, 0.22, 0.38)
+            contact_rate = max(0.15, 1.0 - exp_k_rate - exp_bb_rate)
+            exp_h = exp_bf * contact_rate * exp_hit_rate
+
+            # HBP
+            exp_hbp = exp_bf * 0.01
+
+            # ER: from xFIP/SIERA blend with park/weather
             if talent.get('is_breakout'):
                 siera_wt = 0.25 if talent.get('_has_current_siera') else 0.15
                 era_anchor = talent['xfip'] * (1.0 - siera_wt) + talent['siera'] * siera_wt
@@ -2440,7 +2458,7 @@ def run():
             wx_er_adj = 1.0 + (wx_hr - 1.0) * 0.45
             exp_er = era_anchor * exp_ip / 9.0 * opp_qual * park_er_adj * wx_er_adj
 
-            # Win probability (same as sim_pitcher_game)
+            # Win probability
             exp_win = 0.25
             if odds_row:
                 hml = odds_row.get('home_ml')
@@ -2453,6 +2471,16 @@ def run():
                     tw = (hp / (hp+ap)) if is_home else (ap / (hp+ap))
                     exp_win = clip(tw * 0.78 * clip(exp_ip / 5.1, 0.70, 1.30), 0.10, 0.52)
 
+            # DK Classic pitcher scoring — direct calculation (no sim bias)
+            direct_dk = (exp_ip * 2.25 + exp_ks * 2.0 + exp_win * 4.0
+                         - exp_er * 2.0 - exp_h * 0.6 - exp_bb * 0.6 - exp_hbp * 0.6)
+
+            # Post-calculation adjustments (same as sim)
+            gb_pct_val = talent.get('gb_pct', 0.43)
+            gb_adj = clip(1.0 - (gb_pct_val - 0.43) * 0.15, 0.92, 1.04)
+            bb_adj = clip(1.0 - (talent['bb_pct'] - LEAGUE_AVG_BB_PCT) * 1.5, 0.92, 1.04)
+            direct_dk *= gb_adj * bb_adj
+
             curr = p_stats.get(SEASON) or p_stats.get(SEASON-1) or p_stats.get(SEASON-2)
             full_name = (curr or {}).get('full_name') or '?'
 
@@ -2461,7 +2489,7 @@ def run():
                 'full_name': full_name, 'team': pitcher_team,
                 'batting_order': None, 'is_pitcher': True,
                 'computed_at': computed_at,
-                'proj_dk_pts': round2(mean),
+                'proj_dk_pts': round2(direct_dk),  # Direct calculation — no sim bias
                 'proj_floor': round2(p10),
                 'proj_ceiling': round2(p90),
                 'sim_mean': round2(mean), 'sim_median': round2(median),
@@ -2472,7 +2500,7 @@ def run():
                 'proj_ip': round2(exp_ip),
                 'proj_ks': round2(exp_ks),
                 'proj_er': round2(exp_er),
-                'proj_h_allowed': round2(exp_pa * max(0.10, 1.0 - talent['k_pct'] - talent['bb_pct']) * talent['babip'] * opp_qual),
+                'proj_h_allowed': round2(exp_h),
                 'proj_bb_allowed': round2(exp_bb),
                 'win_prob': round2(exp_win),
                 # Null out batter-specific fields
