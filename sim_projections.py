@@ -274,116 +274,190 @@ def arm_angle_hr_interaction(attack_angle, arm_angle) -> float:
 
 # ── Marcel True Talent ────────────────────────────────────────────────────────
 
-def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) -> dict:
-    """Marcel-weighted batter true talent across 3 seasons."""
+def _marcel_batter_legacy(stats_by_season, current_season, target_date=None):
+    """Legacy Marcel model — kept for rollback. See bayesian_batter()."""
+    pass  # stripped for size — git history has the full implementation
+
+
+def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None) -> dict:
+    """
+    Bayesian talent estimation for batters.
+
+    Prior: built from quality-of-contact metrics (xwOBA, barrel%, hard_hit%,
+    avg_ev) which are the most predictive/stable batting stats.
+
+    Update: observed outcomes (BABIP, ISO, K%, BB%) are blended in weighted
+    by their statistical stability — K% is trusted quickly (60 PA), BABIP
+    is trusted slowly (400 PA) because it's noisy.
+
+    This replaces Marcel's flat league-average regression with an informative
+    prior anchored in what the hitter's contact quality SHOULD produce.
+    """
+    # ── Stability constants: PA for each stat to reach 50% reliability ────
+    STAB_K    = 60    # K% stabilizes fastest
+    STAB_BB   = 120   # BB% is plate discipline
+    STAB_XW   = 150   # xwOBA stabilizes moderately fast
+    STAB_ISO  = 160   # ISO is somewhat noisy
+    STAB_HR   = 170   # HR rate
+    STAB_BABIP = 400  # BABIP is very noisy — trust prior for a long time
+    STAB_BARREL = 80  # physical metric, stabilizes fast
+    STAB_HH   = 100   # hard hit rate
+    STAB_EV   = 80    # exit velocity (physical)
+    STAB_BB_PROFILE = 120  # batted ball profile (fb%, ld%, etc.)
+    STAB_WRC  = 200   # wRC+ (composite)
+
     curr = stats_by_season.get(current_season)
     curr_pa = safe(curr.get('pa'), 0) if curr else 0
     min_pa = _season_min(MIN_PA_BATTER_FULL, target_date)
     use_current = curr_pa >= min_pa
 
-    # Scale current-season weight by sample size: 43 PA → weight ~0.43, 250 PA → 2.5, 500+ PA → 5
-    # Prevents small early-season samples from dominating the talent estimate
+    # Year weights: scale current season by PA completeness
     curr_weight = 5 * min(1.0, curr_pa / 500.0) if use_current else 0
-    weights = [
+    year_weights = [
         (current_season,     curr_weight),
         (current_season - 1, 4),
         (current_season - 2, 3),
     ]
+    seasons_to_scan = ([current_season] if use_current else []) + \
+                      [current_season - 1, current_season - 2]
 
-    def weighted_stat(col, league_avg, reg_pa=200):
-        num = reg_pa * league_avg
-        den = float(reg_pa)
-        for yr, wt in weights:
+    # ── Step 1: Gather predictive metrics (QoC) across seasons ────────────
+    # These are weighted by recency but NOT regressed to league avg —
+    # they ARE the prior, not observations that need regression.
+    def _qoc_weighted(col, default):
+        """Weight predictive metrics by recency + PA, minimal regression."""
+        num, den = 0.0, 0.0
+        for yr, wt in year_weights:
             if wt == 0:
                 continue
             row = stats_by_season.get(yr)
             if not row:
                 continue
             val = safe(row.get(col))
-            pa  = safe(row.get('pa'), 0)
+            pa = safe(row.get('pa'), 0)
             if val is None or pa == 0:
                 continue
             num += val * pa * wt
             den += pa * wt
-        return num / den if den > reg_pa else league_avg
+        return num / den if den > 0 else default
 
-    k_pct  = clip(weighted_stat('k_pct',  LEAGUE_AVG_K_PCT),  0.05, 0.45)
-    bb_pct = clip(weighted_stat('bb_pct', LEAGUE_AVG_BB_PCT), 0.02, 0.25)
-    iso    = clip(weighted_stat('iso',    LEAGUE_AVG_ISO),     0.02, 0.40)
-    avg    = clip(weighted_stat('avg',    0.248),              0.15, 0.38)
-    babip  = clip(weighted_stat('babip',  LEAGUE_AVG_BABIP),   0.22, 0.38)
-    woba   = clip(weighted_stat('woba',   LEAGUE_AVG_WOBA),    0.20, 0.55)
-    xwoba  = clip(weighted_stat('xwoba',  LEAGUE_AVG_WOBA),    0.20, 0.55)
+    # Predictive metrics — form the Bayesian prior
+    xwoba    = clip(_qoc_weighted('xwoba',       0.315), 0.20, 0.55)
+    barrel   = clip(_qoc_weighted('barrel_pct',  0.065), 0.01, 0.30)
+    hard_hit = clip(_qoc_weighted('hard_hit_pct', 0.35), 0.15, 0.65)
+    avg_ev   = clip(_qoc_weighted('avg_ev',      88.0),  82.0, 98.0)
+    wrc_plus = clip(_qoc_weighted('wrc_plus',    100.0), 50.0, 220.0)
+    o_swing  = clip(_qoc_weighted('o_swing_pct', 0.30),  0.15, 0.50)
+    swstr    = clip(_qoc_weighted('swstr_pct',   0.11),  0.04, 0.25)
 
-    # Quality of contact + batted ball profile
-    barrel  = safe(weighted_stat('barrel_pct',   0.065), 0.065)
-    hard_hit = safe(weighted_stat('hard_hit_pct', 0.35),  0.35)
-    avg_ev  = safe(weighted_stat('avg_ev',       88.0),   88.0)
-    ld_pct  = safe(weighted_stat('ld_pct',       0.21),   0.21)
-    fb_pct  = safe(weighted_stat('fb_pct',       0.35),   0.35)
-    pull_pct = safe(weighted_stat('pull_pct',    0.40),   0.40)
+    # Batted ball profile (moderately stable)
+    fb_pct   = clip(_qoc_weighted('fb_pct',  0.35), 0.15, 0.65)
+    ld_pct   = clip(_qoc_weighted('ld_pct',  0.21), 0.10, 0.35)
+    gb_pct   = clip(_qoc_weighted('gb_pct',  0.44), 0.20, 0.70)
+    pull_pct = clip(_qoc_weighted('pull_pct', 0.40), 0.20, 0.60)
+    cent_pct = clip(_qoc_weighted('cent_pct', 0.34), 0.15, 0.50)
+    oppo_pct = clip(_qoc_weighted('oppo_pct', 0.26), 0.10, 0.45)
 
-    # Bat tracking metrics (current or most recent — not Marcel'd across seasons
-    # because these are Statcast measurements that change with swing mechanics)
-    bat_speed = None
-    squared_up = None
-    blast = None
-    o_swing = None
-    attack_angle = None
-    for yr in ([current_season] if use_current else []) + [current_season-1, current_season-2]:
-        row = stats_by_season.get(yr)
-        if not row:
-            continue
-        if bat_speed is None and safe(row.get('bat_speed')):
-            bat_speed = safe(row.get('bat_speed'))
-        if squared_up is None and safe(row.get('squared_up_pct')):
-            squared_up = safe(row.get('squared_up_pct'))
-        if blast is None and safe(row.get('blast_pct')):
-            blast = safe(row.get('blast_pct'))
-        if o_swing is None and safe(row.get('o_swing_pct')):
-            o_swing = safe(row.get('o_swing_pct'))
-        if attack_angle is None and safe(row.get('attack_angle')):
-            attack_angle = safe(row.get('attack_angle'))
-    bat_speed = bat_speed or 72.0        # league avg ~72 mph
-    squared_up = squared_up or 0.18      # league avg ~18%
-    blast = blast or 0.08                # league avg ~8%
-    o_swing = o_swing or 0.30            # league avg ~30%
-    attack_angle = attack_angle or 12.0  # league avg ~12 degrees
+    # ── Step 2: Build priors from predictive metrics ──────────────────────
+    # These formulas derive what each outcome stat SHOULD be given the
+    # hitter's contact quality, speed, and batted ball profile.
 
-    # Sprint speed (most recent season available — physical trait, doesn't need Marcel weighting)
+    # K% prior: driven by chase rate and whiff rate (the underlying swing decisions)
+    k_prior = clip(0.05 + swstr * 1.0 + o_swing * 0.25, 0.08, 0.42)
+
+    # BB% prior: inverse of chase rate + patience signal from wRC+
+    bb_prior = clip(0.14 - o_swing * 0.25 + (wrc_plus - 100) * 0.0003, 0.03, 0.20)
+
+    # BABIP prior: contact quality + speed (fast guys beat out infield hits)
+    # Sprint speed pulled from most recent season (physical trait)
     sprint_speed = None
-    for yr in ([current_season] if use_current else []) + [current_season-1, current_season-2]:
+    for yr in seasons_to_scan:
         row = stats_by_season.get(yr)
         if row and safe(row.get('sprint_speed')):
             sprint_speed = safe(row['sprint_speed'])
             break
-    sprint_speed = sprint_speed or 4.40  # league avg ~4.40s home-to-first
+    sprint_speed = sprint_speed or 4.40
 
-    # Per-hitter counting stat rates (Marcel-weighted like SB)
-    # These replace flat league-average R/RBI/2B rates in the sim
-    def _rate(stat_col, default, lo, hi):
+    babip_prior = clip(
+        0.120 + xwoba * 0.50 + (sprint_speed - 4.40) * 0.015
+        + (ld_pct - 0.21) * 0.40 + (gb_pct - 0.44) * 0.08,
+        0.22, 0.38
+    )
+
+    # ISO prior: power from barrel rate, exit velocity, fly ball tendency
+    iso_prior = clip(
+        barrel * 1.5 + (avg_ev - 88.0) * 0.010 + (fb_pct - 0.35) * 0.12
+        + (pull_pct - 0.40) * 0.08,
+        0.04, 0.40
+    )
+
+    # HR/PA prior: barrels that leave the yard
+    hr_prior = clip(barrel * 0.38 + (avg_ev - 88.0) * 0.004 + (fb_pct - 0.35) * 0.03, 0.005, 0.10)
+
+    # XB/hit prior: doubles from gap power
+    xb_prior = clip(0.14 + (avg_ev - 88.0) * 0.005 + (pull_pct - 0.40) * 0.08, 0.06, 0.30)
+
+    # ── Step 3: Bayesian update — blend priors with observed outcomes ─────
+    def bayesian_update(prior, col, stability_pa):
+        """Blend prior with observed data. Stability controls trust speed."""
+        num = prior * 1.0  # prior weight = 1.0 (always present)
+        den = 1.0
+        for yr, wt in year_weights:
+            if wt == 0:
+                continue
+            row = stats_by_season.get(yr)
+            if not row:
+                continue
+            val = safe(row.get(col))
+            pa = safe(row.get('pa'), 0)
+            if val is None or pa == 0:
+                continue
+            data_wt = (pa * wt) / stability_pa
+            num += val * data_wt
+            den += data_wt
+        return num / den
+
+    k_pct  = clip(bayesian_update(k_prior,     'k_pct',  STAB_K),     0.05, 0.45)
+    bb_pct = clip(bayesian_update(bb_prior,     'bb_pct', STAB_BB),    0.02, 0.25)
+    babip  = clip(bayesian_update(babip_prior,  'babip',  STAB_BABIP), 0.22, 0.38)
+    iso    = clip(bayesian_update(iso_prior,    'iso',    STAB_ISO),   0.02, 0.40)
+    avg    = clip(bayesian_update(0.248,        'avg',    300),        0.15, 0.38)
+    woba   = clip(bayesian_update(xwoba,        'woba',   350),        0.20, 0.55)
+
+    # HR/PA and SB: use prior + career counting stats
+    def _counting_rate(col, default, lo, hi):
         num, den = 0.0, 0.0
-        for yr, wt in weights:
+        for yr, wt in year_weights:
             row = stats_by_season.get(yr)
             if not row or wt == 0:
                 continue
-            v = safe(row.get(stat_col), 0)
+            v = safe(row.get(col), 0)
             p = safe(row.get('pa'), 0)
             if p > 0:
                 num += (v / p) * p * wt
                 den += p * wt
         return clip(num / den, lo, hi) if den > 0 else default
 
-    sb_per_pa  = _rate('sb',  0.01, 0.0, 0.15)
-    r_per_pa   = _rate('r',   0.11, 0.03, 0.25)
-    rbi_per_pa = _rate('rbi', 0.10, 0.03, 0.25)
-    hr_per_pa  = _rate('hr',  0.03, 0.005, 0.10)
+    # HR/PA: blend prior (from barrel/EV) with observed career HR rate
+    raw_hr_rate = _counting_rate('hr', 0.03, 0.005, 0.10)
+    hr_per_pa = clip(
+        (hr_prior * 1.0 + raw_hr_rate * max(0.1, sum(
+            safe(stats_by_season.get(yr, {}).get('pa'), 0) * wt / STAB_HR
+            for yr, wt in year_weights if wt > 0
+        ))) / (1.0 + max(0.1, sum(
+            safe(stats_by_season.get(yr, {}).get('pa'), 0) * wt / STAB_HR
+            for yr, wt in year_weights if wt > 0
+        ))),
+        0.005, 0.10
+    )
 
-    # Doubles per hit: derive from ISO, HR, AVG
-    # ISO = (1*2B + 2*3B + 3*HR) / AB, so 2B/AB ~ ISO - 3*HR/AB
-    # 2B/H = 2B/AB / AVG
-    xb_num, xb_den = 0.0, 0.0
-    for yr, wt in weights:
+    sb_per_pa  = _counting_rate('sb',  0.01, 0.0, 0.15)
+    r_per_pa   = _counting_rate('r',   0.11, 0.03, 0.25)
+    rbi_per_pa = _counting_rate('rbi', 0.10, 0.03, 0.25)
+
+    # XB per hit: blend prior with observed doubles rate
+    xb_num, xb_den = xb_prior * 1.0, 1.0  # prior
+    for yr, wt in year_weights:
         row = stats_by_season.get(yr)
         if not row or wt == 0:
             continue
@@ -395,9 +469,32 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
             _ab = _pa * (1 - safe(row.get('bb_pct'), 0.08) - 0.01)
             _2b_per_ab = max(0, _iso - 3 * _hr / max(_ab, 1)) if _ab > 0 else 0
             _2b_per_h = _2b_per_ab / _avg if _avg > 0 else 0.14
-            xb_num += _2b_per_h * _pa * wt
-            xb_den += _pa * wt
+            data_wt = (_pa * wt) / STAB_ISO
+            xb_num += _2b_per_h * data_wt
+            xb_den += data_wt
     xb_per_hit = clip(xb_num / xb_den, 0.06, 0.30) if xb_den > 0 else 0.14
+
+    # ── Step 4: Swing mechanics (most recent, not weighted) ───────────────
+    bat_speed = None
+    squared_up = None
+    blast = None
+    attack_angle = None
+    for yr in seasons_to_scan:
+        row = stats_by_season.get(yr)
+        if not row:
+            continue
+        if bat_speed is None and safe(row.get('bat_speed')):
+            bat_speed = safe(row.get('bat_speed'))
+        if squared_up is None and safe(row.get('squared_up_pct')):
+            squared_up = safe(row.get('squared_up_pct'))
+        if blast is None and safe(row.get('blast_pct')):
+            blast = safe(row.get('blast_pct'))
+        if attack_angle is None and safe(row.get('attack_angle')):
+            attack_angle = safe(row.get('attack_angle'))
+    bat_speed = bat_speed or 72.0
+    squared_up = squared_up or 0.18
+    blast = blast or 0.08
+    attack_angle = attack_angle or 12.0
 
     return {
         'k_pct': k_pct, 'bb_pct': bb_pct, 'iso': iso, 'avg': avg,
@@ -413,6 +510,10 @@ def marcel_batter(stats_by_season: dict, current_season: int, target_date=None) 
     }
 
 
+# Alias for backward compatibility
+marcel_batter = bayesian_batter
+
+
 def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None) -> dict:
     """Marcel-weighted pitcher true talent across 3 seasons."""
     curr = stats_by_season.get(current_season)
@@ -420,8 +521,10 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
     min_ip = _season_min(MIN_IP_PITCHER_FULL, target_date)
     use_current = curr_ip >= min_ip
 
+    # Scale current-season weight by IP completeness: 20 IP → weight ~1.3, 100 IP → 6.7, 150+ IP → 10
+    curr_weight = PITCHER_CURRENT_WEIGHT * min(1.0, curr_ip / 150.0) if use_current else 0
     weights = [
-        (current_season,     PITCHER_CURRENT_WEIGHT if use_current else 0),
+        (current_season,     curr_weight),
         (current_season - 1, 4),
         (current_season - 2, 3),
     ]
@@ -551,8 +654,10 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
     pitching_plus = pitching_plus or 100.0
     location_plus = location_plus or 100.0
 
-    # IP per GS — use most recent season with enough starts
+    # IP per GS — Marcel-weighted across seasons (not just most recent)
     ip_per_gs = 5.1
+    ipgs_num = 30.0 * 5.1  # regression: 30 GS at league avg
+    ipgs_den = 30.0
     seasons = [current_season, current_season-1, current_season-2] if use_current \
               else [current_season-1, current_season-2]
     for yr in seasons:
@@ -561,10 +666,13 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
             continue
         ip = safe(row.get('ip'), 0)
         gs = safe(row.get('gs'), 0)
-        if gs >= 3:  # lowered from 5 to catch early-season starters
-            raw = clip(ip / gs, 3.0, 6.5)
-            ip_per_gs = raw * 0.92 + 5.1 * 0.08
-            break
+        if gs >= 3:
+            raw = clip(ip / gs, 3.0, 7.5)
+            wt = next((w for y, w in weights if y == yr), 0)
+            ipgs_num += raw * gs * wt
+            ipgs_den += gs * wt
+    if ipgs_den > 30:
+        ip_per_gs = ipgs_num / ipgs_den
 
     # Opener/reliever detection: if pitcher is primarily a reliever (GS < 20% of G
     # across recent seasons), they're likely an opener — cap IP projection low.
@@ -876,10 +984,12 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     Vegas IP and K lines are used as anchors when available.
     """
     PA_PER_IP = 4.3
-    # Breakout pitchers: trust our talent model more — Vegas is slow to adjust
-    # props for pitchers who have clearly leveled up (e.g. Soriano 3.5K line
-    # despite 29.6% K rate). Reduce Vegas weight from 0.55 to 0.25.
-    VEGAS_WEIGHT = 0.40 if talent.get('is_breakout') else 0.55
+    # Talent-first: projections driven by true/expected talent, not Vegas lines.
+    # Vegas is one signal (market consensus) but NOT the anchor. K rate is a
+    # stable pitcher skill — Vegas K props are systematically conservative.
+    # IP reflects workload decisions Vegas knows slightly more about.
+    VEGAS_K_WEIGHT = 0.15 if talent.get('is_breakout') else 0.25
+    VEGAS_IP_WEIGHT = 0.25 if talent.get('is_breakout') else 0.35
 
     # Park + weather factors (our edge — granular env data Vegas doesn't fully price)
     park_k   = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
@@ -892,7 +1002,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # Talent-based IP (raw — no matchup adjustment; Vegas already prices matchup)
     talent_ip = talent['ip_per_gs']
     if vegas_ip:
-        proj_ip = vegas_ip * VEGAS_WEIGHT + talent_ip * (1.0 - VEGAS_WEIGHT)
+        proj_ip = vegas_ip * VEGAS_IP_WEIGHT + talent_ip * (1.0 - VEGAS_IP_WEIGHT)
     else:
         # No Vegas anchor — regress toward league avg to avoid inflated IP/GS
         proj_ip = talent_ip * 0.75 + 5.1 * 0.25
@@ -934,14 +1044,20 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     if vegas_ks and proj_ip > 0:
         vegas_bf = proj_ip * PA_PER_IP
         vegas_k_rate = vegas_ks / vegas_bf if vegas_bf > 0 else talent_k_rate
-        blended_k = vegas_k_rate * VEGAS_WEIGHT + talent_k_rate * (1.0 - VEGAS_WEIGHT)
+        blended_k = vegas_k_rate * VEGAS_K_WEIGHT + talent_k_rate * (1.0 - VEGAS_K_WEIGHT)
         # Park K factor: apply as deviation from neutral (1.0)
         # Vegas already partially prices park, so apply only the delta
         park_k_edge = 1.0 + (park_k - 1.0) * 0.5  # half the park effect (Vegas knows some of it)
         k_rate = clip(blended_k * park_k_edge, 0.10, 0.45)
     else:
-        # No Vegas — apply full park K factor to talent-only rate
-        k_rate = clip(talent_k_rate * park_k, 0.10, 0.45)
+        # No Vegas — regress talent K rate 15% toward league avg as sanity check
+        regressed_k = talent_k_rate * 0.85 + LEAGUE_AVG_K_PCT * 0.15
+        k_rate = clip(regressed_k * park_k, 0.10, 0.45)
+    # Stuff+/Pitching+ quality edge on K rate: elite stuff produces more Ks than
+    # career stats alone predict (stuff improvements, pitch mix evolution).
+    # Pitching+ 120 → +6% K boost, Pitching+ 80 → -6% K reduction.
+    pitch_qual = talent.get('pitching_plus', 100)
+    k_rate = clip(k_rate * (1.0 + (pitch_qual - 100) * 0.003), 0.10, 0.45)
     bb_rate = clip(split_bb * (1.0 + (opp_quality - 1.0) * 0.20) * park_bb, 0.03, 0.16)
     contact_rate = max(0.15, 1.0 - k_rate - bb_rate)
 
@@ -991,6 +1107,10 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     park_er_adj = 1.0 + (park_hr - 1.0) * 0.45
     er_per_ip = era_anchor / 9.0 * opp_quality * park_er_adj
     er_per_ip *= 1.0 + (wx_hr - 1.0) * 0.45  # same dampening for weather HR effect
+    # Pitching+ quality adjustment: elite stuff suppresses ER beyond what xFIP captures.
+    # Pitching+ 120 → 0.94x ER (6% fewer runs), Pitching+ 80 → 1.06x ER.
+    pitch_qual = talent.get('pitching_plus', 100)
+    er_per_ip *= clip(1.0 - (pitch_qual - 100) * 0.003, 0.92, 1.08)
 
     # ── Per-sim "stuff day" factor ──────────────────────────────────────
     # A pitcher's effectiveness varies start-to-start. On a great stuff day,
@@ -1277,15 +1397,16 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
             total = safe(odds.get('game_total'))
             implied = total / 2.0 if total else None
         if implied:
-            # Scale team factor mean by implied runs vs league average (4.5)
-            team_env_mean = clip(implied / LEAGUE_AVG_IMPLIED, 0.80, 1.30)
-    # Opposing SP quality: weaker SP → higher team factor
+            # Damped Vegas signal — talent drives projections, Vegas is context.
+            # Blend implied toward neutral (4.5) so it's a mild influence, not dominant.
+            vegas_signal = clip(implied / LEAGUE_AVG_IMPLIED, 0.85, 1.20)
+            team_env_mean = 0.60 + 0.40 * vegas_signal  # at avg: 1.0, at 3.5 impl: 0.91
+    # Opposing SP quality: weaker SP → higher team factor (talent-driven, not Vegas)
     if sp_talent:
         opp_era = sp_talent.get('xfip', LEAGUE_AVG_XFIP) * 0.5 + sp_talent.get('siera', LEAGUE_AVG_XFIP) * 0.5
-        sp_quality = clip(opp_era / LEAGUE_AVG_XFIP, 0.85, 1.20)  # >1 if SP is worse than avg
-        # Blend: Vegas captures some of this, apply 55% of the SP delta
-        team_env_mean *= 1.0 + (sp_quality - 1.0) * 0.55
-    team_env_mean = clip(team_env_mean, 0.75, 1.35)
+        sp_quality = clip(opp_era / LEAGUE_AVG_XFIP, 0.85, 1.20)
+        team_env_mean *= 1.0 + (sp_quality - 1.0) * 0.40  # dampened from 0.55
+    team_env_mean = clip(team_env_mean, 0.85, 1.20)
     # Team factor variance: higher totals = more certain environment (sharper lines)
     total = odds.get('game_total', 9.0) if odds else 9.0
     tf_sd = clip(0.10 + (9.0 - total) * 0.005, 0.06, 0.14)  # high-total games = tighter
@@ -1323,12 +1444,12 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 batter_day = clip(batter_day, 0.60, 1.40)
                 # team_factor scales hit, HR, and K: low-implied games suppress
                 # all offense AND increase Ks (tougher pitching environment).
-                # Hit rates driven by individual talent (rates already encode pitcher/park).
-                # team_factor only scales HR — game environment affects power outcomes
-                # (pitch selection, fatigue, blowout state) more than contact rates.
+                # Talent-first: hit and HR rates driven by individual talent (rates already
+                # encode pitcher quality and park). team_factor provides mild HR context
+                # but talent dominates — a power hitter doesn't lose his swing in a low-total game.
                 # R/RBI naturally adjust via base runner state (weak lineup = fewer runners).
                 hit_p = clip(rates['hit'] * batter_day, 0.08, 0.42)
-                hr_p = clip(rates['hr'] * batter_day * (0.75 + 0.25 * tf), 0.02, 0.30)
+                hr_p = clip(rates['hr'] * batter_day * (0.85 + 0.15 * tf), 0.02, 0.30)
                 k_p = rates['k']
                 bb_p = rates['bb']
 
@@ -1460,15 +1581,6 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
 
                 team_bf += 1
                 batter_idx += 1
-
-    # Elite talent multiplier: xwOBA (expected wOBA from quality of contact) is more
-    # predictive and stable than wOBA — strips out BABIP luck and sequencing noise.
-    # Scales each hitter's DK output by their xwOBA relative to league average.
-    for i in range(9):
-        xw = lineup_talents[i].get('xwoba', lineup_talents[i].get('woba', LEAGUE_AVG_WOBA))
-        xwoba_dev = (xw / LEAGUE_AVG_WOBA) - 1.0
-        talent_mult = 1.0 + clip(xwoba_dev * 0.65, -0.12, 0.22)
-        dk_pts[i] *= talent_mult
 
     return dk_pts, sb_counts
 
