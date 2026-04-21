@@ -324,9 +324,18 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
     # ── Step 1: Gather predictive metrics (QoC) across seasons ────────────
     # These are weighted by recency but NOT regressed to league avg —
     # they ARE the prior, not observations that need regression.
+    # Total career PA across available seasons — used for regression scaling
+    total_career_pa = sum(
+        safe(stats_by_season.get(yr, {}).get('pa'), 0)
+        for yr in [current_season, current_season-1, current_season-2]
+    )
+
     def _qoc_weighted(col, default):
-        """Weight predictive metrics by recency + PA, minimal regression."""
-        num, den = 0.0, 0.0
+        """Weight predictive metrics by recency + PA, with sample-size regression.
+        Players with < 300 career PA get regressed toward league avg."""
+        reg_pa = max(0, 400 - total_career_pa)  # 400 PA = fully trusted, 0 PA = full regression
+        num = reg_pa * default  # league avg regression
+        den = float(reg_pa)
         for yr, wt in year_weights:
             if wt == 0:
                 continue
@@ -408,8 +417,15 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
         """Blend prior with observed data. Stability controls trust speed.
         Prior weight scales with stability — noisy stats (BABIP, stability=820)
         get a strong prior that resists observed data longer. Stable stats
-        (K%, stability=60) get a weak prior that defers to data quickly."""
-        prior_weight = stability_pa / 200.0  # BABIP: 4.1, ISO: 1.25, K%: 0.30
+        (K%, stability=60) get a weak prior that defers to data quickly.
+
+        Career PA scaling: players with < 500 career PA get inflated stability
+        (harder to move away from prior) because small samples are noisy even
+        for 'stable' stats. A 69 PA .208 barrel rate doesn't mean .208 barrel talent."""
+        # Scale stability UP for small-career players: 140 PA → 2.5x stability, 500+ PA → 1.0x
+        career_scale = clip(500.0 / max(total_career_pa, 50), 1.0, 3.0)
+        effective_stability = stability_pa * career_scale
+        prior_weight = effective_stability / 200.0
         num = prior * prior_weight
         den = prior_weight
         for yr, wt in year_weights:
