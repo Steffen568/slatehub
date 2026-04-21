@@ -397,7 +397,6 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
         0.22, 0.38
     )
     # At avg (xwoba=.315): 0.030 + 0.268 = 0.298 — matches league avg BABIP
-    # At .350 (good hitter): 0.328  At .400 (elite): 0.370
 
     # ISO prior: power from barrel rate, exit velocity, fly ball tendency
     iso_prior = clip(
@@ -423,7 +422,7 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
         (harder to move away from prior) because small samples are noisy even
         for 'stable' stats. A 69 PA .208 barrel rate doesn't mean .208 barrel talent."""
         # Scale stability UP for small-career players: 140 PA → 2.5x stability, 500+ PA → 1.0x
-        career_scale = clip(500.0 / max(total_career_pa, 50), 1.0, 3.0)
+        career_scale = clip(500.0 / max(total_career_pa, 50), 1.0, 5.0)
         effective_stability = stability_pa * career_scale
         prior_weight = effective_stability / 200.0
         num = prior * prior_weight
@@ -841,7 +840,14 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     ld_adj = 1.0 + (talent.get('ld_pct', 0.21) - 0.21) * 0.5
     ld_adj = clip(ld_adj, 0.90, 1.12)
 
-    hit_prob = clip(talent['babip'] * qoc_mult * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.18, 0.52)
+    # Player-specific qoc_mult (same logic as _compute_pa_rates)
+    raw_qoc = 1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3
+    babip_vs_avg = (talent['babip'] - LEAGUE_AVG_BABIP) / 0.05
+    qoc_vs_avg = (raw_qoc - 1.0) / 0.10
+    overlap = clip(min(babip_vs_avg, qoc_vs_avg), 0.0, 1.0) if babip_vs_avg > 0 and qoc_vs_avg > 0 else 0.0
+    adjusted_qoc = 1.0 + (raw_qoc - 1.0) * (1.0 - overlap * 0.85)
+    adjusted_qoc = clip(adjusted_qoc, 0.90, 1.20)
+    hit_prob = clip(talent['babip'] * adjusted_qoc * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.14, 0.52)
 
     # ── Hit type distribution ─────────────────────────────────────────────
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
@@ -1298,7 +1304,19 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather)
     ld_adj = clip(1.0 + (talent.get('ld_pct', 0.21) - 0.21) * 0.5, 0.90, 1.12)
-    hit_prob = clip(hit_prob_base * qoc_mult * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.18, 0.52)
+    # Player-specific qoc_mult: compare physical tools to what BABIP already reflects.
+    # If BABIP is already "fair" for the player's barrel/HH/EV, qoc_mult is minimal.
+    # If BABIP is low despite elite tools, qoc_mult boosts to close the gap.
+    raw_qoc = 1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3
+    # How much of this boost is already in the Bayesian BABIP?
+    babip_vs_avg = (talent['babip'] - LEAGUE_AVG_BABIP) / 0.05  # +1.0 per 5 pts above avg
+    qoc_vs_avg = (raw_qoc - 1.0) / 0.10  # +1.0 per 10% boost
+    # If BABIP already reflects the QoC (both positive), dampen the mult.
+    # If BABIP is low despite good QoC, let the mult through.
+    overlap = clip(min(babip_vs_avg, qoc_vs_avg), 0.0, 1.0) if babip_vs_avg > 0 and qoc_vs_avg > 0 else 0.0
+    adjusted_qoc = 1.0 + (raw_qoc - 1.0) * (1.0 - overlap * 0.85)  # dampen 70% of overlap
+    adjusted_qoc = clip(adjusted_qoc, 0.90, 1.20)
+    hit_prob = clip(hit_prob_base * adjusted_qoc * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.14, 0.52)
 
     # HR rate — bat tracking metrics drive power ceiling
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
@@ -1367,8 +1385,14 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     wx_hit = weather_hit_mult(weather)
     # Add HR/BIP back to BABIP for total P(hit|BIP) — same fix as _compute_pa_rates
     bp_contact = max(0.30, 1.0 - talent['k_pct'] - talent['bb_pct'] - 0.01)
-    bp_hr_per_bip = clip(talent['iso'] / 3.5, 0.005, 0.07) / bp_contact
-    hit_prob = clip((bp_babip + bp_hr_per_bip) * qoc_mult * ev_adj * park_basic * wx_hit, 0.20, 0.52)
+    bp_hr_per_bip = clip(talent['iso'] / 3.15, 0.005, 0.07) / bp_contact
+    # Player-specific qoc_mult (same logic)
+    raw_qoc = 1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3
+    babip_vs_avg = (talent['babip'] - LEAGUE_AVG_BABIP) / 0.05
+    qoc_vs_avg = (raw_qoc - 1.0) / 0.10
+    overlap = clip(min(babip_vs_avg, qoc_vs_avg), 0.0, 1.0) if babip_vs_avg > 0 and qoc_vs_avg > 0 else 0.0
+    adjusted_qoc = clip(1.0 + (raw_qoc - 1.0) * (1.0 - overlap * 0.70), 0.90, 1.20)
+    hit_prob = clip((bp_babip + bp_hr_per_bip) * adjusted_qoc * ev_adj * park_basic * wx_hit, 0.20, 0.52)
 
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
@@ -1456,7 +1480,7 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 # Pure talent-vs-pitcher: rates already encode matchup quality.
                 # No game-environment scaling — lineup quality naturally drives R/RBI
                 # through base runner state (weak lineup = fewer runners on base).
-                hit_p = clip(rates['hit'] * batter_day, 0.08, 0.52)
+                hit_p = clip(rates['hit'] * batter_day, 0.06, 0.52)
                 hr_p = clip(rates['hr'] * batter_day, 0.02, 0.30)
                 k_p = rates['k']
                 bb_p = rates['bb']
@@ -2216,7 +2240,7 @@ def run():
             # Scale supplement by xwOBA — better hitters deserve more R/RBI credit.
             # A .400 xwOBA hitter gets full 40% supplement; .300 xwOBA gets ~20%.
             xw = talent.get('xwoba', 0.315)
-            supplement_scale = clip((xw - 0.250) / 0.150, 0.15, 0.45)  # .250→15%, .315→43%, .400→100% of 0.45
+            supplement_scale = clip((xw - 0.300) / 0.120, 0.0, 0.35)  # .300→0%, .360→50%, .400+→35% cap
             talent_supplement = (talent_r + talent_rbi) * supplement_scale
             dk_dist = dk_dist + talent_supplement
 
