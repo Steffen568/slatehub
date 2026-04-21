@@ -368,7 +368,7 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
     # BB% prior: inverse of chase rate + patience signal from wRC+
     bb_prior = clip(0.14 - o_swing * 0.25 + (wrc_plus - 100) * 0.0003, 0.03, 0.20)
 
-    # BABIP prior: contact quality + speed (fast guys beat out infield hits)
+    # BABIP prior: xwOBA-anchored + speed + batted ball profile
     # Sprint speed pulled from most recent season (physical trait)
     sprint_speed = None
     for yr in seasons_to_scan:
@@ -378,21 +378,25 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
             break
     sprint_speed = sprint_speed or 4.40
 
+    # xwOBA of .315 (avg) should produce BABIP ~.298 (avg). Scale accordingly.
+    # Higher xwOBA → better contact → higher BABIP. Speed adds infield hits.
     babip_prior = clip(
-        0.120 + xwoba * 0.50 + (sprint_speed - 4.40) * 0.015
-        + (ld_pct - 0.21) * 0.40 + (gb_pct - 0.44) * 0.08,
+        0.060 + xwoba * 0.72 + (sprint_speed - 4.40) * 0.018
+        + (ld_pct - 0.21) * 0.35 + (gb_pct - 0.44) * 0.06,
         0.22, 0.38
     )
+    # Verify: at avg (xwoba=.315, sprint=4.40, ld=.21, gb=.44):
+    # 0.060 + 0.315*0.72 = 0.060 + 0.227 = 0.287 → close to .298 avg BABIP
 
     # ISO prior: power from barrel rate, exit velocity, fly ball tendency
     iso_prior = clip(
-        barrel * 1.5 + (avg_ev - 88.0) * 0.010 + (fb_pct - 0.35) * 0.12
+        barrel * 1.6 + (avg_ev - 88.0) * 0.012 + (fb_pct - 0.35) * 0.12
         + (pull_pct - 0.40) * 0.08,
         0.04, 0.40
     )
 
     # HR/PA prior: barrels that leave the yard
-    hr_prior = clip(barrel * 0.38 + (avg_ev - 88.0) * 0.004 + (fb_pct - 0.35) * 0.03, 0.005, 0.10)
+    hr_prior = clip(barrel * 0.40 + (avg_ev - 88.0) * 0.005 + (fb_pct - 0.35) * 0.03, 0.005, 0.10)
 
     # XB/hit prior: doubles from gap power
     xb_prior = clip(0.14 + (avg_ev - 88.0) * 0.005 + (pull_pct - 0.40) * 0.08, 0.06, 0.30)
@@ -1388,29 +1392,12 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
     # SP exits after this many batters faced (varies per sim)
     sp_bf_limit = rng.normal(sp_proj_ip * PA_PER_IP, 5.0, size=n_sims).clip(8, 40).astype(int)
 
-    # Per-sim team factor — driven by game environment, not pure random
-    # Teams with higher implied totals facing weaker SPs get a higher mean
-    team_env_mean = 1.0
-    if odds:
-        implied = safe(odds.get('home_implied' if is_home else 'away_implied'))
-        if not implied:
-            total = safe(odds.get('game_total'))
-            implied = total / 2.0 if total else None
-        if implied:
-            # Damped Vegas signal — talent drives projections, Vegas is context.
-            # Blend implied toward neutral (4.5) so it's a mild influence, not dominant.
-            vegas_signal = clip(implied / LEAGUE_AVG_IMPLIED, 0.85, 1.20)
-            team_env_mean = 0.60 + 0.40 * vegas_signal  # at avg: 1.0, at 3.5 impl: 0.91
-    # Opposing SP quality: weaker SP → higher team factor (talent-driven, not Vegas)
-    if sp_talent:
-        opp_era = sp_talent.get('xfip', LEAGUE_AVG_XFIP) * 0.5 + sp_talent.get('siera', LEAGUE_AVG_XFIP) * 0.5
-        sp_quality = clip(opp_era / LEAGUE_AVG_XFIP, 0.85, 1.20)
-        team_env_mean *= 1.0 + (sp_quality - 1.0) * 0.40  # dampened from 0.55
-    team_env_mean = clip(team_env_mean, 0.85, 1.20)
-    # Team factor variance: higher totals = more certain environment (sharper lines)
-    total = odds.get('game_total', 9.0) if odds else 9.0
-    tf_sd = clip(0.10 + (9.0 - total) * 0.005, 0.06, 0.14)  # high-total games = tighter
-    team_factor = rng.normal(team_env_mean, tf_sd, size=n_sims).clip(0.65, 1.40)
+    # Team factor REMOVED — it was redundant with pitcher quality (already in
+    # _compute_pa_rates) and lineup quality (naturally determines baserunner traffic).
+    # Applying Vegas implied on top of those double-counted the environment and
+    # suppressed all hitters in low-implied games regardless of their talent.
+    # The sim now runs on pure talent-vs-pitcher matchup rates.
+    team_factor = np.ones(n_sims)  # neutral — no game-environment scaling
 
     # Pre-allocate DK points and SB counts per batter
     dk_pts = {i: np.zeros(n_sims) for i in range(9)}
@@ -1444,12 +1431,11 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 batter_day = clip(batter_day, 0.60, 1.40)
                 # team_factor scales hit, HR, and K: low-implied games suppress
                 # all offense AND increase Ks (tougher pitching environment).
-                # Talent-first: hit and HR rates driven by individual talent (rates already
-                # encode pitcher quality and park). team_factor provides mild HR context
-                # but talent dominates — a power hitter doesn't lose his swing in a low-total game.
-                # R/RBI naturally adjust via base runner state (weak lineup = fewer runners).
+                # Pure talent-vs-pitcher: rates already encode matchup quality.
+                # No game-environment scaling — lineup quality naturally drives R/RBI
+                # through base runner state (weak lineup = fewer runners on base).
                 hit_p = clip(rates['hit'] * batter_day, 0.08, 0.42)
-                hr_p = clip(rates['hr'] * batter_day * (0.85 + 0.15 * tf), 0.02, 0.30)
+                hr_p = clip(rates['hr'] * batter_day, 0.02, 0.30)
                 k_p = rates['k']
                 bb_p = rates['bb']
 
