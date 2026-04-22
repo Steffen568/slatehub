@@ -237,6 +237,7 @@ PLAYER_ID_REMAP = {
     446920  : 669257,   # Will Smith (fixed direction)
     672356  : 699087,   # Gabriel Arias (auto-fixed)
     676609  : 691606,   # Jose Caballero (auto-fixed)
+    916702  : 667755,   # Jose Soriano (LAA) — DK ID → MLBAM ID
     # 677594:451219 removed — was backwards. 677594 is correct MLBAM for Julio Rodriguez.
     451219  : 677594,   # Julio Rodriguez (fixed direction — 677594 is correct MLBAM)
     828962  : 700951,   # Lane Thomas (auto-fixed)
