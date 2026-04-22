@@ -854,7 +854,9 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     park_k = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
     # Swing length: longer swings = more whiff-prone (league avg ~7.2 ft)
     swing_k_adj = clip(1.0 + (talent.get('swing_length', 7.2) - 7.2) * 0.06, 0.94, 1.08)
-    k_rate = clip(talent['k_pct'] * pitcher_k_ratio * park_k * swing_k_adj, 0.05, 0.50)
+    # Dampen park_k: Bayesian K% already includes ~50% home park via career data
+    park_k_edge = 1.0 + (park_k - 1.0) * 0.50
+    k_rate = clip(talent['k_pct'] * pitcher_k_ratio * park_k_edge * swing_k_adj, 0.05, 0.50)
 
     # BB rate: batter talent × inverse pitcher BB ratio × park BB factor
     pitcher_bb_ratio = (LEAGUE_AVG_BB_PCT / pitcher['bb_pct']) if pitcher and pitcher['bb_pct'] > 0.02 else 1.0
@@ -1132,7 +1134,8 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
         # No Vegas — regress talent K rate 15% toward league avg as sanity check
         # No Vegas K data — regress 15% toward league avg as sanity check
         regressed_k = talent_k_rate * 0.85 + LEAGUE_AVG_K_PCT * 0.15
-        k_rate = clip(regressed_k * park_k, 0.10, 0.45)
+        park_k_edge_p = 1.0 + (park_k - 1.0) * 0.50
+        k_rate = clip(regressed_k * park_k_edge_p, 0.10, 0.45)
     # Pitching+ K adjustment REMOVED — Bayesian K% prior already incorporates
     # Pitching+ via the k_prior formula. Applying it again here was double-counting.
     bb_rate = clip(split_bb * (1.0 + (opp_quality - 1.0) * 0.20) * park_bb, 0.03, 0.16)
@@ -1331,7 +1334,9 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     pitcher_k_ratio *= (pitcher_quality / 100.0) ** 0.20
     park_k = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
     swing_k_adj = clip(1.0 + (talent.get('swing_length', 7.2) - 7.2) * 0.06, 0.94, 1.08)
-    k_rate = clip(talent['k_pct'] * pitcher_k_ratio * park_k * swing_k_adj, 0.05, 0.50)
+    # Dampen park_k: Bayesian K% already includes ~50% home park via career data
+    park_k_edge = 1.0 + (park_k - 1.0) * 0.50
+    k_rate = clip(talent['k_pct'] * pitcher_k_ratio * park_k_edge * swing_k_adj, 0.05, 0.50)
 
     pitcher_bb_ratio = (LEAGUE_AVG_BB_PCT / pitcher['bb_pct']) if pitcher and pitcher['bb_pct'] > 0.02 else 1.0
     park_bb = safe(park.get('bb_factor'), 100) / 100.0 if park else 1.0
@@ -2443,7 +2448,8 @@ def run():
             # K rate: talent with park adjustment and 15% league-avg regression
             park_k = safe(park_row.get('k_factor'), 100) / 100.0 if park_row else 1.0
             regressed_k = talent['k_pct'] * 0.85 + LEAGUE_AVG_K_PCT * 0.15
-            exp_k_rate = clip(regressed_k * park_k, 0.10, 0.45)
+            park_k_edge_dc = 1.0 + (park_k - 1.0) * 0.50
+            exp_k_rate = clip(regressed_k * park_k_edge_dc, 0.10, 0.45)
             exp_ks = exp_bf * exp_k_rate
 
             # BB rate: talent with park and matchup adjustment
