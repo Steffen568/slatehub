@@ -332,8 +332,16 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
 
     def _qoc_weighted(col, default):
         """Weight predictive metrics by recency + PA, with sample-size regression.
-        Players with < 300 career PA get regressed toward league avg."""
-        reg_pa = max(0, 400 - total_career_pa)  # 400 PA = fully trusted, 0 PA = full regression
+        Players with < 500 career PA get regressed toward league avg.
+        Regression is HEAVY for very small samples (< 200 PA) to prevent
+        69 PA of .447 xwOBA from producing elite talent estimates."""
+        if total_career_pa < 200:
+            # Very small sample: regression dominates (800+ PA of league avg)
+            reg_pa = 800
+        elif total_career_pa < 500:
+            reg_pa = max(0, 600 - total_career_pa)
+        else:
+            reg_pa = 0
         num = reg_pa * default  # league avg regression
         den = float(reg_pa)
         for yr, wt in year_weights:
@@ -422,7 +430,7 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
         (harder to move away from prior) because small samples are noisy even
         for 'stable' stats. A 69 PA .208 barrel rate doesn't mean .208 barrel talent."""
         # Scale stability UP for small-career players: 140 PA → 2.5x stability, 500+ PA → 1.0x
-        career_scale = clip(500.0 / max(total_career_pa, 50), 1.0, 5.0)
+        career_scale = clip(600.0 / max(total_career_pa, 50), 1.0, 8.0)
         effective_stability = stability_pa * career_scale
         prior_weight = effective_stability / 200.0
         num = prior * prior_weight
@@ -880,7 +888,8 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     overlap = clip(min(babip_vs_avg, qoc_vs_avg), 0.0, 1.0) if babip_vs_avg > 0 and qoc_vs_avg > 0 else 0.0
     adjusted_qoc = 1.0 + (raw_qoc - 1.0) * (1.0 - overlap * 0.85)
     adjusted_qoc = clip(adjusted_qoc, 0.90, 1.20)
-    hit_prob = clip(talent['babip'] * adjusted_qoc * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.14, 0.52)
+    park_basic_edge = 1.0 + (park_basic - 1.0) * 0.50
+    hit_prob = clip(talent['babip'] * adjusted_qoc * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic_edge * wx_hit * ld_adj, 0.14, 0.52)
 
     # ── Hit type distribution ─────────────────────────────────────────────
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
@@ -1130,7 +1139,8 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     contact_rate = max(0.15, 1.0 - k_rate - bb_rate)
 
     # Hit rate when ball in play
-    hit_on_contact = clip(talent['babip'] * opp_quality * park_basic, 0.22, 0.38)
+    park_basic_edge_p = 1.0 + (park_basic - 1.0) * 0.50
+    hit_on_contact = clip(talent['babip'] * opp_quality * park_basic_edge_p, 0.22, 0.38)
     # HR rate per batter faced
     hr_rate = clip(talent['hr9'] / (PA_PER_IP * 9) * park_hr * wx_hr * opp_quality, 0.005, 0.060)
 
@@ -1358,7 +1368,10 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     overlap = clip(min(babip_vs_avg, qoc_vs_avg), 0.0, 1.0) if babip_vs_avg > 0 and qoc_vs_avg > 0 else 0.0
     adjusted_qoc = 1.0 + (raw_qoc - 1.0) * (1.0 - overlap * 0.85)  # dampen 70% of overlap
     adjusted_qoc = clip(adjusted_qoc, 0.90, 1.20)
-    hit_prob = clip(hit_prob_base * adjusted_qoc * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic * wx_hit * ld_adj, 0.14, 0.52)
+    # Dampen park_basic: Bayesian BABIP already reflects ~50% home park effect
+    # via career xwOBA. Apply only 50% of the park deviation as an edge.
+    park_basic_edge = 1.0 + (park_basic - 1.0) * 0.50
+    hit_prob = clip(hit_prob_base * adjusted_qoc * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic_edge * wx_hit * ld_adj, 0.14, 0.52)
 
     # HR rate — bat tracking metrics drive power ceiling
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
@@ -1434,7 +1447,8 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     qoc_vs_avg = (raw_qoc - 1.0) / 0.10
     overlap = clip(min(babip_vs_avg, qoc_vs_avg), 0.0, 1.0) if babip_vs_avg > 0 and qoc_vs_avg > 0 else 0.0
     adjusted_qoc = clip(1.0 + (raw_qoc - 1.0) * (1.0 - overlap * 0.70), 0.90, 1.20)
-    hit_prob = clip((bp_babip + bp_hr_per_bip) * adjusted_qoc * ev_adj * park_basic * wx_hit, 0.20, 0.52)
+    park_basic_edge = 1.0 + (park_basic - 1.0) * 0.50
+    hit_prob = clip((bp_babip + bp_hr_per_bip) * adjusted_qoc * ev_adj * park_basic_edge * wx_hit, 0.20, 0.52)
 
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
@@ -2439,7 +2453,8 @@ def run():
 
             # Hit rate: BABIP adjusted for matchup and park
             park_basic = safe(park_row.get('basic_factor'), 100) / 100.0 if park_row else 1.0
-            exp_hit_rate = clip(talent['babip'] * opp_qual * park_basic, 0.22, 0.38)
+            park_basic_edge = 1.0 + (park_basic - 1.0) * 0.50
+            exp_hit_rate = clip(talent['babip'] * opp_qual * park_basic_edge, 0.22, 0.38)
             contact_rate = max(0.15, 1.0 - exp_k_rate - exp_bb_rate)
             exp_h = exp_bf * contact_rate * exp_hit_rate
 
