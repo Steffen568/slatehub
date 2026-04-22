@@ -5910,7 +5910,8 @@ function toggleGameIds(homeId, awayId) {
     if (activeTeamIds.size === 0) activeTeamIds = new Set();
   }
   syncGameCards();
-  renderPool();
+  // Force browser to flush DOM before re-rendering pool
+  requestAnimationFrame(() => renderPool());
 }
 
 function isoTeamId(teamId) {
@@ -5920,7 +5921,7 @@ function isoTeamId(teamId) {
     activeTeamIds = new Set([teamId]);
   }
   syncGameCards();
-  renderPool();
+  requestAnimationFrame(() => renderPool());
 }
 
 function syncGameCards() {
