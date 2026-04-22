@@ -1729,9 +1729,9 @@ def fetch_data(target_date: str) -> dict:
     for i in range(0, len(all_stat_ids), 500):
         chunk = all_stat_ids[i:i+500]
         rows = sb.table('batter_stats').select(
-            'player_id,season,pa,woba,xwoba,k_pct,bb_pct,iso,avg,sb,babip,'
+            'player_id,season,pa,woba,xwoba,k_pct,bb_pct,iso,avg,sb,r,rbi,hr,babip,'
             'barrel_pct,hard_hit_pct,avg_ev,wrc_plus,full_name,team,fb_pct,pull_pct,'
-            'ld_pct,bat_speed,squared_up_pct,blast_pct,o_swing_pct,swstr_pct,attack_angle,sprint_speed'
+            'ld_pct,gb_pct,cent_pct,oppo_pct,bat_speed,squared_up_pct,blast_pct,o_swing_pct,swstr_pct,attack_angle,sprint_speed'
         ).in_('player_id', chunk).in_('season', [SEASON, SEASON-1, SEASON-2]).execute().data or []
         for r in rows:
             batter_stats.setdefault(r['player_id'], {})[r['season']] = r
@@ -2280,19 +2280,48 @@ def run():
             proj_sb = round2(float(np.mean(sb_dist)))
             order = lu.get('batting_order') or (slot_idx + 1)
 
-            # Hitters use sim mean — the full-game base-state tracking is the correct
-            # approach for R/RBI (depends on lineup context). Direct calculation doesn't
-            # work for hitters because R/RBI can't be computed from individual rates alone.
-            # The R/RBI supplement bridges the gap between sim and career rates.
+            # ── Direct calculation of expected DK points (hitter) ─────────────
+            # The Monte Carlo sim compresses talent: elite hitters (hit_p near 0.52
+            # ceiling) get clipped down, while average hitters get inflated by
+            # R/RBI from base-state tracking. Direct calculation preserves the
+            # true talent separation. Sim still used for distribution (P10-P90).
             proj_pa = LINEUP_PA.get(order, LEAGUE_AVG_PA)
-            talent_r = talent.get('r_per_pa', 0.11) * proj_pa * 2
-            talent_rbi = talent.get('rbi_per_pa', 0.10) * proj_pa * 2
-            xw = talent.get('xwoba', 0.315)
-            supplement_scale = clip((xw - 0.300) / 0.120, 0.0, 0.35)
-            talent_supplement = (talent_r + talent_rbi) * supplement_scale
-            dk_dist = dk_dist + talent_supplement
 
-            mean   = float(np.mean(dk_dist))
+            # Blend SP and BP rates (60% SP, 40% BP — typical split)
+            SP_FRAC = 0.60
+            blended = {}
+            for key in ['k', 'bb', 'hbp', 'hit', 'hr', 'xb', 'triple', 'sb']:
+                sp_val = talent['rates_vs_sp'].get(key, 0)
+                bp_val = talent['rates_vs_bp'].get(key, 0)
+                blended[key] = sp_val * SP_FRAC + bp_val * (1 - SP_FRAC)
+
+            # Expected outcomes per PA
+            bip_rate = max(0.30, 1.0 - blended['k'] - blended['bb'] - blended['hbp'])
+            exp_hits = proj_pa * bip_rate * blended['hit']
+            exp_hr = exp_hits * blended['hr']
+            exp_3b = exp_hits * blended['triple']
+            exp_2b = exp_hits * blended['xb']
+            exp_1b = exp_hits * max(0, 1.0 - blended['hr'] - blended['xb'] - blended['triple'])
+            exp_bb = proj_pa * blended['bb']
+            exp_hbp = proj_pa * blended['hbp']
+            exp_sb = proj_pa * blended['sb']
+
+            # R and RBI: use raw career rates — they already reflect the player's
+            # typical batting order and lineup context from historical data.
+            # NO BO or xwOBA multipliers — those double-count since career rates
+            # were earned in the player's actual batting position.
+            exp_r = talent.get('r_per_pa', 0.11) * proj_pa
+            exp_rbi = talent.get('rbi_per_pa', 0.10) * proj_pa
+
+            # DK Classic hitter scoring — direct calculation
+            direct_dk = (
+                exp_1b * 3 + exp_2b * 5 + exp_3b * 8 + exp_hr * 10
+                + exp_r * 2 + exp_rbi * 2
+                + exp_bb * 2 + exp_hbp * 2
+                + exp_sb * 5
+            )
+
+            mean = direct_dk
             median = float(np.median(dk_dist))
             sd     = float(np.std(dk_dist))
             p10    = float(np.percentile(dk_dist, 10))
