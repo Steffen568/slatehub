@@ -238,6 +238,7 @@ PLAYER_ID_REMAP = {
     672356  : 699087,   # Gabriel Arias (auto-fixed)
     676609  : 691606,   # Jose Caballero (auto-fixed)
     916702  : 667755,   # Jose Soriano (LAA) — DK ID → MLBAM ID
+    621603  : 571510,   # Matthew Boyd (CHC) — DK ID → MLBAM ID
     # 677594:451219 removed — was backwards. 677594 is correct MLBAM for Julio Rodriguez.
     451219  : 677594,   # Julio Rodriguez (fixed direction — 677594 is correct MLBAM)
     828962  : 700951,   # Lane Thomas (auto-fixed)
