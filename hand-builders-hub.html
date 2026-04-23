@@ -5463,25 +5463,80 @@ async function loadPlayerPool(date, slate) {
   wxRaw.forEach(r => { _weather[r.game_pk] = r; });
 
   // 8. SP stats for game starters (for hitter SP grade + PMS)
+  // Load current + prior seasons, blend weighted by IP (current season gets 2x weight if 18+ IP)
   const spIds = [...new Set(_games.flatMap(g=>[g.home_sp_id,g.away_sp_id]).filter(Boolean))];
   const spRaw = spIds.length
-    ? await batchIn('pitcher_stats','player_id,full_name,xfip,siera,k_pct,bb_pct,swstr_pct,stuff_plus,location_plus,pitching_plus,era,barrel_pct,hard_hit_pct','player_id',spIds,
+    ? await batchIn('pitcher_stats','player_id,full_name,season,ip,xfip,siera,k_pct,bb_pct,swstr_pct,stuff_plus,location_plus,pitching_plus,era,barrel_pct,hard_hit_pct','player_id',spIds,
         q => q.order('season',{ascending:false}))
     : [];
   const spStatMap = {};
-  spRaw.forEach(r => { if (!spStatMap[r.player_id]) spStatMap[r.player_id] = r; });
+  // Group by player_id, then blend seasons
+  const spByPlayer = {};
+  spRaw.forEach(r => {
+    if (!spByPlayer[r.player_id]) spByPlayer[r.player_id] = [];
+    spByPlayer[r.player_id].push(r);
+  });
+  const blendFields = ['xfip','siera','k_pct','bb_pct','swstr_pct','stuff_plus','location_plus','pitching_plus','era','barrel_pct','hard_hit_pct'];
+  for (const [pid, rows] of Object.entries(spByPlayer)) {
+    if (rows.length === 1) { spStatMap[pid] = rows[0]; continue; }
+    // Current season (first row, most recent) and prior
+    const curr = rows[0];
+    const prior = rows[1];
+    const currIp = parseFloat(curr.ip) || 0;
+    const priorIp = parseFloat(prior?.ip) || 0;
+    // Current season weight: 2x if 18+ IP, scales down below that
+    const currWt = currIp >= 18 ? currIp * 2.0 : currIp * 0.5;
+    const priorWt = priorIp;
+    const totalWt = currWt + priorWt;
+    if (totalWt <= 0) { spStatMap[pid] = curr; continue; }
+    const blended = { ...curr, ip: currIp };
+    for (const f of blendFields) {
+      const cv = parseFloat(curr[f]);
+      const pv = parseFloat(prior?.[f]);
+      if (!isNaN(cv) && !isNaN(pv)) blended[f] = (cv * currWt + pv * priorWt) / totalWt;
+      else if (!isNaN(cv)) blended[f] = cv;
+      else if (!isNaN(pv)) blended[f] = pv;
+    }
+    spStatMap[pid] = blended;
+  }
 
   // 8b. Pitcher splits (xwOBA, K%, BB%, hard_hit% by hand) — for PMS platoon + K environment
   const pSplitRaw = spIds.length
     ? await batchIn('pitcher_splits','player_id,split,xwoba,woba,k_pct,bb_pct,hard_hit_pct,hr9,season','player_id',spIds,
         q => q.order('season',{ascending:false}))
     : [];
-  const pSplitMap = {}; // spId → { L: row, R: row }
+  // Blend pitcher splits across seasons (same weighting as stats above)
+  const pSplitMap = {}; // spId → { L: blended_row, R: blended_row }
+  const splitByPlayer = {};
   pSplitRaw.forEach(r => {
-    if (!pSplitMap[r.player_id]) pSplitMap[r.player_id] = {};
     const s = r.split?.toUpperCase();
-    if ((s === 'L' || s === 'R') && !pSplitMap[r.player_id][s]) pSplitMap[r.player_id][s] = r;
+    if (s !== 'L' && s !== 'R') return;
+    const key = `${r.player_id}_${s}`;
+    if (!splitByPlayer[key]) splitByPlayer[key] = [];
+    splitByPlayer[key].push(r);
   });
+  const splitBlendFields = ['xwoba','woba','k_pct','bb_pct','hard_hit_pct','hr9'];
+  for (const [key, rows] of Object.entries(splitByPlayer)) {
+    const [pidStr, hand] = key.split('_');
+    const pid = +pidStr;
+    if (!pSplitMap[pid]) pSplitMap[pid] = {};
+    if (rows.length === 1) { pSplitMap[pid][hand] = rows[0]; continue; }
+    const curr = rows[0], prior = rows[1];
+    const currPa = parseFloat(curr.pa) || 0;
+    const priorPa = parseFloat(prior?.pa) || 0;
+    const cw = currPa >= 30 ? currPa * 2.0 : currPa * 0.5;
+    const pw = priorPa;
+    const tw = cw + pw;
+    if (tw <= 0) { pSplitMap[pid][hand] = curr; continue; }
+    const bl = { ...curr };
+    for (const f of splitBlendFields) {
+      const cv = parseFloat(curr[f]), pv = parseFloat(prior?.[f]);
+      if (!isNaN(cv) && !isNaN(pv)) bl[f] = (cv * cw + pv * pw) / tw;
+      else if (!isNaN(cv)) bl[f] = cv;
+      else if (!isNaN(pv)) bl[f] = pv;
+    }
+    pSplitMap[pid][hand] = bl;
+  }
 
   // 8c. Pitch arsenal — fastball release_height for VAA calculation
   const arsenalRaw = spIds.length
