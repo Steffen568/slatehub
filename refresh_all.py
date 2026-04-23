@@ -16,7 +16,7 @@ Modes and when to run them:
 
   --stats      7:00 AM   Season stats refresh — now runs in parallel (~4 min).
 
-  --splits     7:30 AM   Excel Power Query refresh + splits upload to Supabase.
+  --splits     7:30 AM   Excel Power Query refresh + FanGraphs enrichment to Supabase.
 
   --full                 Runs everything. Use for initial setup only.
 
@@ -73,13 +73,13 @@ def run_script(script: str, label: str, logger: RunLogger, continue_on_fail: boo
     return success
 
 
-def run_splits(logger: RunLogger):
-    """Run Excel splits refresh sequentially."""
+def run_excel_enrichment(logger: RunLogger):
+    """Refresh master Excel workbook and enrich DB with FanGraphs data."""
     print(f"\n{'='*55}")
-    print(f"  Splits — Excel Power Query + Supabase Upload")
+    print(f"  FanGraphs — Excel Power Query + DB Enrichment")
     print(f"{'='*55}")
-    run_script('refresh_excel_splits.py', 'Excel Power Query Refresh', logger)
-    run_script('sync_excel_splits.py',    'Splits Upload to Supabase', logger)
+    run_script('refresh_excel.py',          'Excel Power Query Refresh',   logger)
+    run_script('load_fangraphs_excel.py',   'FanGraphs Excel Enrichment',  logger)
 
 
 # ── QUICK — every 15 minutes all day ─────────────────────────────────────────
@@ -107,7 +107,7 @@ if STATS:
     except Exception as e:
         print(f"\n  ERROR in Agent 1 (stats): {e}")
         logger.record('Agent 1 — Stats', False, 0.0, str(e))
-    run_splits(logger)
+    run_excel_enrichment(logger)
 
 # ── MORNING (9:00 AM) ─────────────────────────────────────────────────────────
 if MORNING:
@@ -122,6 +122,9 @@ if MORNING:
 
         stats_future.result()  # wait for stats; results already in shared logger
         _, dk_passed = lineups_future.result()
+
+        # FanGraphs Excel enrichment (after stats load)
+        run_excel_enrichment(logger)
 
         # Contest data (entry fees, prize pools, payout structures)
         run_script('load_contest_data.py', 'DK Contest Data', logger)
@@ -154,7 +157,7 @@ if FULL:
         stats_future.result()
         _, dk_passed = lineups_future.result()
 
-        run_splits(logger)
+        run_excel_enrichment(logger)
 
         # Contest data (entry fees, prize pools, payout structures)
         run_script('load_contest_data.py', 'DK Contest Data', logger)
@@ -190,10 +193,14 @@ if POSTGAME:
     except Exception as e:
         print(f"\n  ERROR in Agent 4 (research): {e}")
         logger.record('Agent 4 — Research', False, 0.0, str(e))
+    # Post-game diagnostics — sim validation + slate review
+    run_script('validate_sim.py',  'Sim Validation — accuracy diagnostic', logger)
+    run_script('review_slate.py',  'Slate Review — lineup pool diagnostic', logger)
+    run_script('calibrate_ownership.py', 'Ownership Calibration — proj vs actual own%', logger)
 
 # ── SPLITS (standalone, 7:30 AM) ─────────────────────────────────────────────
 if SPLITS:
-    run_splits(logger)
+    run_excel_enrichment(logger)
 
 # ── SUMMARY ───────────────────────────────────────────────────────────────────
 logger.print_summary()
