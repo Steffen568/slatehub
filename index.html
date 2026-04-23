@@ -7058,23 +7058,11 @@ async function loadPitcherSplits(spId) {
 
   container.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px;">Loading...</div>';
 
-  // SP IDs in games table are MLB IDs; pitcher_splits uses FG IDs.
-  // Look up pitcher name from pitcher_stats, then query splits by name.
-  const { data: statRows } = await sb
-    .from('pitcher_stats')
-    .select('full_name')
-    .eq('player_id', spId)
-    .limit(1);
-  const statRow = statRows?.[0];
-
-  if (!statRow?.full_name) {
-    container.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px;">No split data available</div>';
-    return;
-  }
-
+  // Query splits by player_id (not name — accent mismatches cause failures
+  // e.g. 'Cristopher Sanchez' vs 'Cristopher Sánchez')
   const splitQuery = activePitcherYear === '3yr'
-    ? sb.from('pitcher_splits').select('*').eq('player_name', statRow.full_name).in('season', [2023, 2024, 2025])
-    : sb.from('pitcher_splits').select('*').eq('player_name', statRow.full_name).eq('season', parseInt(activePitcherYear) || 2025);
+    ? sb.from('pitcher_splits').select('*').eq('player_id', spId).in('season', [2023, 2024, 2025])
+    : sb.from('pitcher_splits').select('*').eq('player_id', spId).eq('season', parseInt(activePitcherYear) || 2025);
   const { data: rawSplits, error } = await splitQuery;
 
   let data = rawSplits;
