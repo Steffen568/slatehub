@@ -2632,6 +2632,27 @@ def run():
 
     print(f"\nSimulation complete. {uploaded} records upserted.")
 
+    # Archive to projection_history (append-only, never overwritten)
+    try:
+        history_rows = [{
+            'player_id': r['player_id'], 'game_pk': r.get('game_pk'),
+            'game_date': r['game_date'], 'full_name': r.get('full_name'),
+            'team': r.get('team'), 'batting_order': r.get('batting_order'),
+            'is_pitcher': r.get('is_pitcher', False),
+            'proj_dk_pts': r.get('proj_dk_pts'),
+            'proj_floor': r.get('proj_floor'), 'proj_ceiling': r.get('proj_ceiling'),
+            'proj_ip': r.get('proj_ip'), 'proj_ks': r.get('proj_ks'),
+            'proj_er': r.get('proj_er'), 'win_prob': r.get('win_prob'),
+            'computed_at': r.get('computed_at'),
+        } for r in records]
+        # Delete existing history for this date (re-run overwrites)
+        sb.table('projection_history').delete().eq('game_date', target_date).execute()
+        for i in range(0, len(history_rows), 500):
+            sb.table('projection_history').insert(history_rows[i:i+500]).execute()
+        print(f"  Archived {len(history_rows)} rows to projection_history.")
+    except Exception as e:
+        print(f"  (projection_history archive skipped: {e})")
+
 
 if __name__ == '__main__':
     run()
