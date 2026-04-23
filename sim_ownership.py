@@ -42,18 +42,18 @@ W_BAT_ORDER = 0.15   # lineup position premium
 W_ENV       = 0.20   # game environment (Vegas total) — public heavily targets high-total games
 W_VALUE     = 0.05   # pts per $1k — near-zero correlation but kept
 
-# Pitcher gets a multiplicative boost — top SPs get 30-47% actual ownership
-PITCHER_BOOST = 5.0
+# Pitcher gets a multiplicative boost — calibrated from actual contest data.
+# Was 5.0 but ownership calibration showed pitchers over-projected by +34% (Luzardo).
+PITCHER_BOOST = 3.0
 
 # Confirmed/unconfirmed modifiers
 CONFIRMED_BOOST = 1.5
 UNCONFIRMED_PENALTY = 0.4
 
 # Softmax temperature per position — lower = sharper (more concentrated)
-# Tuned for log-score inputs: SP needs sharp concentration (top 2-3 get 30-45%),
-# hitters need moderate spread but clear differentiation
-SOFTMAX_TEMP = {'SP': 0.40, 'C': 0.50, '1B': 0.50, '2B': 0.50,
-                '3B': 0.50, 'SS': 0.50, 'OF': 0.50}
+# Calibration showed +5.11% systematic over-projection — raised temps to spread ownership.
+SOFTMAX_TEMP = {'SP': 0.55, 'C': 0.65, '1B': 0.65, '2B': 0.65,
+                '3B': 0.65, 'SS': 0.65, 'OF': 0.65}
 
 # Per-position ownership cap (large slate)
 POSITION_MAX_OWN = {'SP': 55.0, 'C': 30.0, '1B': 30.0, '2B': 30.0,
