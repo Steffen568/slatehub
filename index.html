@@ -6815,6 +6815,22 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
 
   // For 3yr: average the rate stats across available seasons
   let pd = Array.isArray(data) ? data[0] : data;
+
+  // Fallback: if current-year plus stats are null, fetch from most recent prior season
+  if (pd && pd.stuff_plus == null && activePitcherYear !== '3yr') {
+    const { data: priorRows } = await sb.from('pitcher_stats')
+      .select('stuff_plus,location_plus,pitching_plus,season')
+      .eq('player_id', spId)
+      .not('stuff_plus', 'is', null)
+      .order('season', { ascending: false })
+      .limit(1);
+    if (priorRows?.[0]) {
+      pd.stuff_plus = priorRows[0].stuff_plus;
+      pd.location_plus = priorRows[0].location_plus;
+      pd.pitching_plus = priorRows[0].pitching_plus;
+    }
+  }
+
   if (activePitcherYear === '3yr') {
     if (!Array.isArray(data) || data.length === 0) return;
     const avg = f => {
