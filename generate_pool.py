@@ -29,8 +29,8 @@ sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
 POS_SLOTS = {'SP': 2, 'C': 1, '1B': 1, '2B': 1, '3B': 1, 'SS': 1, 'OF': 3}
 POS_PRIORITY = ['C', 'SS', '2B', '3B', '1B', 'OF', 'SP']
 SALARY_CAP = 50000
-SALARY_FLOOR = 48500
-UPSIDE_BLEND = 0.15    # user pool scoring: 15% weight toward ceiling (P90)
+SALARY_FLOOR = 47000  # lowered from 48500 to use more cap on premium players
+UPSIDE_BLEND = 0.40    # user pool scoring: 40% toward ceiling for GPP upside (was 0.25)
 
 # ── Daily overrides (used by legacy run(), overridden by --watch requests) ──
 USER_EXCLUDE_TEAMS = set()
@@ -618,16 +618,16 @@ def build_player_pool(data):
 # ── Greedy Lineup Builder ────────────────────────────────────────────────────
 
 STACK_CONFIGS = [
-    {'name': '5-3',       'main': 5, 'subs': [3]},    # 20% — 5+3 is the GPP winner
+    {'name': '5-3',       'main': 5, 'subs': [3]},    # 30% — GPP ceiling path
     {'name': '5-3',       'main': 5, 'subs': [3]},
-    {'name': '5-2',       'main': 5, 'subs': [2]},    # 10%
-    {'name': '4-3',       'main': 4, 'subs': [3]},    # 30% — diversified correlation
+    {'name': '5-3',       'main': 5, 'subs': [3]},
+    {'name': '4-3',       'main': 4, 'subs': [3]},    # 30% — balanced correlation
     {'name': '4-3',       'main': 4, 'subs': [3]},
     {'name': '4-3',       'main': 4, 'subs': [3]},
+    {'name': '5-naked',   'main': 5, 'subs': []},     # 10% — max main-stack ceiling
     {'name': '4-3-2',     'main': 4, 'subs': [3, 2]}, # 20% — multi-game correlation
     {'name': '4-3-2',     'main': 4, 'subs': [3, 2]},
-    {'name': '3-3-2',     'main': 3, 'subs': [3, 2]}, # 10% — max diversification
-    {'name': '5-naked',   'main': 5, 'subs': []},     # 10% — naked 5-stack upside
+    {'name': '5-2',       'main': 5, 'subs': [2]},    # 10% — 5-man + mini secondary
 ]
 
 def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
@@ -807,7 +807,7 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                 pick = fallback[-1]  # cheapest
             else:
                 # Tighter selection for SP (quality matters more), wider for hitters
-                top_k = 2 if pos == 'SP' else 3
+                top_k = 3 if pos == 'SP' else 5  # wider pool for ceiling access
                 top = candidates[:top_k]
                 weights = np.array([max(s, 0.1) for _, s, _ in top])
                 weights /= weights.sum()
@@ -918,17 +918,14 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
             else:
                 noise = H_W_GAME * zg + H_W_TEAM * zt + H_W_INDIV * zi
 
-            # PMS/HES edge boost: scale mean for high-edge matchups
-            # PMS 7+ (weak pitcher) = +8%, PMS 5 = neutral, PMS 3 = -4%
-            # HES 7+ (great env) = +5%, HES 5 = neutral, HES 3 = -3%
-            if not p['is_pitcher']:
-                pms = p.get('pms', 5)
-                hes = p.get('hes', 5)
-                edge_mult = 1.0 + (pms - 5) * 0.04 + (hes - 5) * 0.025
-                edge_mult = clip(edge_mult, 0.90, 1.15)
-                mean *= edge_mult
-
             scores[i] = max(0, mean + sd * noise)
+
+            # Light PMS edge: postgame shows PMS is the best strategy for actual outcomes.
+            # Apply as a mild multiplier (±4%) — enough to differentiate matchup quality
+            # without dominating the scoring. Was fully removed, re-enabled at 10% weight.
+            pms_val = p.get('pms') or p.get('avg_pms') or 5
+            pms_edge = 1.0 + (pms_val - 5) * 0.02  # PMS 7 → 1.04x, PMS 3 → 0.96x
+            scores[i] *= pms_edge
 
     return scores
 
@@ -1009,11 +1006,9 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         lev = ceiling_sum / max(own_sum, 5.0)
         gt = hitters[0].get('game_total', 8.5) if hitters else 8.5
         env = (gt / 8.5) ** 2.5  # 12.5 → 2.83x, 9.0 → 1.18x, 7.0 → 0.58x
-        # PMS factor: teams facing weak pitchers get a matchup boost
-        pms_vals = [h.get('pms', 5) for h in hitters if h.get('pms')]
-        avg_pms = sum(pms_vals) / len(pms_vals) if pms_vals else 5.0
-        pms_mult = (avg_pms / 5.0) ** 1.5  # PMS 8 → 1.86x, PMS 5 → 1.0x, PMS 3 → 0.46x
-        team_leverage[t] = {'lev': lev, 'env': env * pms_mult, 'gt': gt}
+        # PMS removed from team weights — it was triple-counted (here + noisy scores + frontend sort).
+        # Team selection should be driven by game environment (Vegas total), not matchup quality.
+        team_leverage[t] = {'lev': lev, 'env': env, 'gt': gt}
     # Normalize each component independently, then blend
     levs = np.array([team_leverage[t]['lev'] for t in viable_teams])
     envs = np.array([team_leverage[t]['env'] for t in viable_teams])
@@ -1022,7 +1017,7 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
     blended = norm_lev * 0.50 + norm_env * 0.50
     team_weights = blended / blended.sum()
     if mode == 'user':
-        min_weight = max(0.025, 1.0 / len(viable_teams))
+        min_weight = max(0.01, 1.0 / len(viable_teams))  # lowered from 2.5% to reduce weak-game exposure
         team_weights = np.maximum(team_weights, min_weight)
         team_weights /= team_weights.sum()
     # Also compute for viable_5
@@ -1100,6 +1095,12 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
             if cands:
                 # Weight sub-stack selection toward high-environment teams
                 sub_wts = np.array([team_leverage.get(t, {}).get('env', 1.0) for t in cands])
+                # Mild bring-back preference: opponent of main stack gets 1.2x
+                if main_team and game_teams:
+                    for idx_t, t in enumerate(cands):
+                        opp = game_teams.get(main_team)
+                        if opp and t == opp:
+                            sub_wts[idx_t] *= 1.2
                 sub_wts = sub_wts / sub_wts.sum()
                 st = rng.choice(cands, p=sub_wts)
                 sub_teams.append(st)
@@ -1165,6 +1166,13 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         sub_t = max(sub_counts, key=sub_counts.get) if sub_counts else None
         sub_s = sub_counts.get(sub_t, 0) if sub_t else 0
 
+        # Avg PMS / HES for lineup diagnostics
+        lu_players = [p for p in pool if p['player_id'] in pid_set]
+        hitter_pms = [p.get('pms', 5) for p in lu_players if not p['is_pitcher'] and p.get('pms')]
+        hitter_hes = [p.get('hes', 5) for p in lu_players if not p['is_pitcher'] and p.get('hes')]
+        avg_pms = round(sum(hitter_pms) / len(hitter_pms), 2) if hitter_pms else 5.0
+        avg_hes = round(sum(hitter_hes) / len(hitter_hes), 2) if hitter_hes else 5.0
+
         lineups.append({
             'player_ids': list(lu),
             'salary': salary,
@@ -1173,6 +1181,8 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
             'stack_size': stack_size,
             'sub_team': sub_t,
             'sub_size': sub_s,
+            'avg_pms': avg_pms,
+            'avg_hes': avg_hes,
         })
         team_stack_counts[stack_team] += 1
         for pid in lu:
@@ -1513,6 +1523,8 @@ def process_sd_request(req):
                 'stack_size': lu.get('stack_size', 0),
                 'sub_team': lu.get('sub_team'),
                 'sub_size': lu.get('sub_size', 0),
+                'avg_pms': lu.get('avg_pms'),
+                'avg_hes': lu.get('avg_hes'),
                 'computed_at': computed_at,
             } for lu in lineups]
 
@@ -1679,6 +1691,8 @@ def process_request(req):
                 'stack_size': lu['stack_size'],
                 'sub_team': lu.get('sub_team'),
                 'sub_size': lu.get('sub_size', 0),
+                'avg_pms': lu.get('avg_pms'),
+                'avg_hes': lu.get('avg_hes'),
                 'computed_at': computed_at,
             } for lu in lineups]
 
@@ -1836,6 +1850,8 @@ def run():
                 'stack_size': lu['stack_size'],
                 'sub_team': lu.get('sub_team'),
                 'sub_size': lu.get('sub_size', 0),
+                'avg_pms': lu.get('avg_pms'),
+                'avg_hes': lu.get('avg_hes'),
                 'computed_at': computed_at,
             } for lu in lineups]
 
