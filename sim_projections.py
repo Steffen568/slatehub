@@ -1133,7 +1133,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     else:
         # No Vegas — regress talent K rate 15% toward league avg as sanity check
         # No Vegas K data — regress 15% toward league avg as sanity check
-        regressed_k = talent_k_rate * 0.85 + LEAGUE_AVG_K_PCT * 0.15
+        regressed_k = talent_k_rate * 0.75 + LEAGUE_AVG_K_PCT * 0.25
         park_k_edge_p = 1.0 + (park_k - 1.0) * 0.50
         k_rate = clip(regressed_k * park_k_edge_p, 0.10, 0.45)
     # Pitching+ K adjustment REMOVED — Bayesian K% prior already incorporates
@@ -1404,7 +1404,9 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     blast_adj = clip(1.0 + (talent.get('blast', 0.08) - 0.08) * 2.5, 0.90, 1.12)
     # Attack angle vs arm angle alignment
     aa_hr_adj = arm_angle_hr_interaction(talent.get('attack_angle'), pitcher.get('arm_angle') if pitcher else None)
-    hr_per_hit = clip(talent.get('hr_per_pa', 0.03) * effective_park_hr * fb_adj * effective_wx_hr * pitcher_hr_ratio * bat_spd_adj * squp_adj * blast_adj * aa_hr_adj / hit_prob, 0.03, 0.30)
+    # bat_spd/squp/blast removed — Bayesian hr_per_pa already captures power profile.
+    # Only game-specific adjustments: park, weather, pitcher HR tendency, arm angle.
+    hr_per_hit = clip(talent.get('hr_per_pa', 0.03) * effective_park_hr * effective_wx_hr * pitcher_hr_ratio * aa_hr_adj / hit_prob, 0.03, 0.30)
     # XB rate: per-hitter doubles rate from Marcel. ISO already reflects park, so
     # apply only 50% of park_basic deviation to avoid double-counting.
     park_xb_edge = 1.0 + (park_basic - 1.0) * 0.50
@@ -1415,7 +1417,9 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     # sb_per_pa is the historical rate. In the full-game sim, a batter gets one SB
     # chance per on-base event, but real SBs also happen during subsequent PAs while
     # the runner is still on base. Scale up by ~2.5x to account for multi-PA windows.
-    base_sb = talent.get('sb_per_pa', 0.01) * 2.0
+    # No multiplier — direct calc uses career SB rate at face value.
+    # The 2.0x was for sim multi-PA windows which no longer drives the mean.
+    base_sb = talent.get('sb_per_pa', 0.01)
     speed_mult = clip(1.0 + (4.40 - talent.get('sprint_speed', 4.40)) * 1.16, 0.50, 1.60)
     sb_rate = clip(base_sb * speed_mult, 0.0, 0.35)
 
@@ -1465,7 +1469,8 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     bat_spd_adj = clip(1.0 + (talent.get('bat_speed', 72.0) - 72.0) * 0.015, 0.88, 1.15)
     squp_adj = clip(1.0 + (talent.get('squared_up', 0.18) - 0.18) * 1.5, 0.90, 1.12)
     blast_adj = clip(1.0 + (talent.get('blast', 0.08) - 0.08) * 2.5, 0.90, 1.12)
-    hr_per_hit = clip(talent.get('hr_per_pa', 0.03) * effective_park_hr * fb_adj * effective_wx_hr * (bp_hr9 / LEAGUE_AVG_HR9) * bat_spd_adj * squp_adj * blast_adj / hit_prob, 0.03, 0.30)
+    # Same as SP path: bat_spd/squp/blast already in Bayesian hr_per_pa
+    hr_per_hit = clip(talent.get('hr_per_pa', 0.03) * effective_park_hr * effective_wx_hr * (bp_hr9 / LEAGUE_AVG_HR9) / hit_prob, 0.03, 0.30)
     park_xb_edge = 1.0 + (park_basic - 1.0) * 0.50
     xb_per_hit = clip(talent.get('xb_per_hit', 0.14) * ev_adj * park_xb_edge, 0.06, 0.25)
 
@@ -2306,12 +2311,13 @@ def run():
             exp_hbp = proj_pa * blended['hbp']
             exp_sb = proj_pa * blended['sb']
 
-            # R and RBI: use raw career rates — they already reflect the player's
-            # typical batting order and lineup context from historical data.
-            # NO BO or xwOBA multipliers — those double-count since career rates
-            # were earned in the player's actual batting position.
-            exp_r = talent.get('r_per_pa', 0.11) * proj_pa
-            exp_rbi = talent.get('rbi_per_pa', 0.10) * proj_pa
+            # R and RBI: career rates regressed 30% toward league average.
+            # Raw career rates inflate power hitters who played on good teams.
+            # K% discount: high-K hitters have fewer productive PAs for R/RBI.
+            league_r, league_rbi = 0.11, 0.10
+            k_discount = clip(1.0 - (talent['k_pct'] - 0.22) * 1.0, 0.85, 1.05)
+            exp_r = (talent.get('r_per_pa', league_r) * 0.70 + league_r * 0.30) * proj_pa * k_discount
+            exp_rbi = (talent.get('rbi_per_pa', league_rbi) * 0.70 + league_rbi * 0.30) * proj_pa * k_discount
 
             # DK Classic hitter scoring — direct calculation
             direct_dk = (
@@ -2476,7 +2482,7 @@ def run():
 
             # K rate: talent with park adjustment and 15% league-avg regression
             park_k = safe(park_row.get('k_factor'), 100) / 100.0 if park_row else 1.0
-            regressed_k = talent['k_pct'] * 0.85 + LEAGUE_AVG_K_PCT * 0.15
+            regressed_k = talent['k_pct'] * 0.75 + LEAGUE_AVG_K_PCT * 0.25
             park_k_edge_dc = 1.0 + (park_k - 1.0) * 0.50
             exp_k_rate = clip(regressed_k * park_k_edge_dc, 0.10, 0.45)
             exp_ks = exp_bf * exp_k_rate
