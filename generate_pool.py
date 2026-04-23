@@ -922,8 +922,13 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
 
             # Light PMS edge: postgame shows PMS is the best strategy for actual outcomes.
             # Apply as a mild multiplier (±4%) — enough to differentiate matchup quality
-            # without dominating the scoring. Was fully removed, re-enabled at 10% weight.
+            # without dominating the scoring. Default to neutral (5) when PMS is missing
+            # or based on a small-sample opposing pitcher (avoids penalizing hitters
+            # facing unknown/rookie pitchers with incomplete data).
             pms_val = p.get('pms') or p.get('avg_pms') or 5
+            pms_confidence = p.get('pms_confidence', 1.0)  # 0-1 scale, low = unreliable
+            if pms_confidence < 0.5 or pms_val is None or pms_val == 0:
+                pms_val = 5  # neutral — don't penalize for missing data
             pms_edge = 1.0 + (pms_val - 5) * 0.02  # PMS 7 → 1.04x, PMS 3 → 0.96x
             scores[i] *= pms_edge
 
