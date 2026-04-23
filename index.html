@@ -6829,6 +6829,7 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
       swstr_pct: avg('swstr_pct'), csw_pct: avg('csw_pct'),
       hard_hit_pct: avg('hard_hit_pct'), barrel_pct: avg('barrel_pct'),
       babip: avg('babip'), stuff_plus: avg('stuff_plus'),
+      location_plus: avg('location_plus'), pitching_plus: avg('pitching_plus'),
       ip: avg('ip'), gs: avg('gs'),
     };
   }
@@ -7495,11 +7496,11 @@ async function loadBullpen(teamId, gameDate) {
   const [{ data: stats }, { data: bpSalaries }, { data: rosterHands }] = await Promise.all([
     activePitcherYear === '3yr'
       ? sb.from('pitcher_stats')
-          .select('player_id,full_name,era,fip,whip,k_pct,bb_pct,swstr_pct,csw_pct,hard_hit_pct,barrel_pct,babip,stuff_plus,ip,g,gs,hr9,sample_size,season')
+          .select('player_id,full_name,era,fip,whip,k_pct,bb_pct,swstr_pct,csw_pct,hard_hit_pct,barrel_pct,babip,stuff_plus,location_plus,pitching_plus,ip,g,gs,hr9,sample_size,season')
           .in('player_id', filteredIds)
           .in('season', [2023, 2024, 2025])
       : sb.from('pitcher_stats')
-          .select('player_id,full_name,era,fip,whip,k_pct,bb_pct,swstr_pct,csw_pct,hard_hit_pct,barrel_pct,babip,stuff_plus,ip,g,gs,hr9,sample_size,season')
+          .select('player_id,full_name,era,fip,whip,k_pct,bb_pct,swstr_pct,csw_pct,hard_hit_pct,barrel_pct,babip,stuff_plus,location_plus,pitching_plus,ip,g,gs,hr9,sample_size,season')
           .in('player_id', filteredIds)
           .eq('season', parseInt(activePitcherYear)),
     sb.from('dk_salaries')
@@ -7533,6 +7534,7 @@ async function loadBullpen(teamId, gameDate) {
         swstr_pct: avg('swstr_pct'), csw_pct: avg('csw_pct'),
         hard_hit_pct: avg('hard_hit_pct'), barrel_pct: avg('barrel_pct'),
         babip: avg('babip'), stuff_plus: avg('stuff_plus'),
+        location_plus: avg('location_plus'), pitching_plus: avg('pitching_plus'),
         hr9: avg('hr9'), ip: avg('ip'), g: avg('g'),
       };
     });
