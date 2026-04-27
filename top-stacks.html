@@ -363,7 +363,7 @@ async function loadAll() {
       sb.from('game_odds').select('game_pk,home_implied,away_implied,game_total,home_ml,away_ml').eq('game_date', _date),
       sb.from('lineups').select('game_pk,player_id,player_name,team_id,batting_order,position')
         .eq('game_date', _date).gte('batting_order', 1).lte('batting_order', 9),
-      sb.from('player_projections').select('player_id,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,stats_level')
+      sb.from('player_projections').select('player_id,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,proj_sb,stats_level')
         .eq('game_date', _date),
       sb.from('weather').select('game_pk,temp,wind_speed,wind_direction').in('game_pk', gamePks),
       venueIds.length
@@ -455,6 +455,7 @@ async function loadAll() {
             proj_dk_pts  : proj.proj_dk_pts || 0,
             proj_ceiling : proj.proj_ceiling || 0,
             proj_ownership: proj.proj_ownership || 0,
+            proj_sb      : proj.proj_sb || 0,
             salary       : salary?.salary || 0,
             pms,
             splitWoba    : splitRow?.woba || null,
@@ -471,6 +472,7 @@ async function loadAll() {
         const avgProjFP   = top5.length ? top5.reduce((s,h) => s + h.proj_dk_pts, 0) / top5.length : 0;
         const avgPMS      = top5.length ? top5.reduce((s,h) => s + h.pms, 0) / top5.length : 5;
         const avgOwnership= top5.length ? top5.reduce((s,h) => s + h.proj_ownership, 0) / top5.length : 20;
+        const stackSB     = hitters.reduce((s,h) => s + (h.proj_sb || 0), 0);
         const stackCeiling= (best5 || best4 || top5).reduce((s,h) => s + (h.proj_ceiling||0), 0);
 
         // HES for this game/team environment
@@ -523,6 +525,7 @@ async function loadAll() {
           best4,
           best5,
           bringBack,
+          stackSB,
         });
       }
     }
@@ -830,6 +833,12 @@ function renderCard(stack, rank) {
       <div class="sh-cell-lbl">Own%</div>
     </div>
 
+    <!-- SB Upside -->
+    <div class="sh-cell">
+      <div class="sh-cell-val" style="color:${stack.stackSB>=0.40?'var(--hi)':stack.stackSB>=0.20?'var(--mid)':'var(--lo)'}">${stack.stackSB ? stack.stackSB.toFixed(2) : '—'}</div>
+      <div class="sh-cell-lbl">SB</div>
+    </div>
+
     <!-- Stack Score ring -->
     <div class="sh-score-cell">
       <div class="sh-score-ring">
@@ -879,6 +888,7 @@ function renderPlayerTable(stack) {
       <td class="c"><span class="pms-badge ${pmsClass(h.pms)}">${h.pms.toFixed(1)}</span></td>
       <td class="r"><span class="own-val">${own}</span></td>
       <td class="r" style="font-size:11px;color:var(--muted2);">${h.splitWoba ? h.splitWoba.toFixed(3) : '—'}</td>
+      <td class="r" style="font-size:11px;color:${h.proj_sb>=0.15?'var(--hi)':h.proj_sb>=0.07?'var(--mid)':'var(--muted2)'};">${h.proj_sb >= 0.05 ? h.proj_sb.toFixed(2) : '—'}</td>
     </tr>`;
   }).join('');
 
@@ -905,6 +915,7 @@ function renderPlayerTable(stack) {
         <th class="c">PMS</th>
         <th class="r">Own%</th>
         <th class="r">Split wOBA</th>
+        <th class="r">SB</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>

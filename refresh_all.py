@@ -197,6 +197,8 @@ if POSTGAME:
     run_script('validate_sim.py',  'Sim Validation — accuracy diagnostic', logger)
     run_script('review_slate.py',  'Slate Review — lineup pool diagnostic', logger)
     run_script('calibrate_ownership.py', 'Ownership Calibration — proj vs actual own%', logger)
+    run_script('analyze_leverage.py',   'Leverage Analysis — predictive GPP signals', logger)
+    run_script('analyze_winners.py',   'Winner Patterns — per-contest game theory', logger)
 
 # ── SPLITS (standalone, 7:30 AM) ─────────────────────────────────────────────
 if SPLITS:

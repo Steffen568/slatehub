@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Agent 1 — Parallel stats runner.
-Runs all 6 stats scripts simultaneously using ThreadPoolExecutor.
+Runs all 5 stats scripts simultaneously using ThreadPoolExecutor.
 Each script is independent; failures are reported but don't stop others.
 """
 import os
@@ -15,12 +15,12 @@ from agents.logger import RunLogger
 REPO_ROOT = Path(__file__).parent.parent
 
 STATS_SCRIPTS = [
-    ('load_rosters.py',        'Rosters'),
-    ('load_stats.py',          'Batter & Pitcher Stats'),
-    ('load_reliever_stats.py', 'Reliever Stats'),
-    ('load_arsenal.py',        'Pitch Arsenal'),
-    ('load_bat_tracking.py',   'Bat Tracking'),
-    ('load_savant_splits.py',  'Savant Splits'),
+    ('load_rosters.py',              'Rosters'),
+    ('load_stats.py',                'Batter & Pitcher Stats'),
+    ('load_arsenal.py',              'Pitch Arsenal'),
+    ('load_bat_tracking.py',         'Bat Tracking'),
+    ('load_savant_splits.py',        'Savant Splits'),
+    ('load_batter_pitch_splits.py',  'Batter vs Pitch Type Splits'),
 ]
 
 
@@ -50,11 +50,11 @@ def _run_single(script: str, label: str) -> dict:
 def run(logger: RunLogger) -> RunLogger:
     """Run all stats scripts in parallel. Returns logger with results."""
     print(f"\n{'='*55}")
-    print(f"  Agent 1 — Stats (parallel, {len(STATS_SCRIPTS)} scripts)")
+    print(f"  Agent 1 \u2014 Stats (parallel, {len(STATS_SCRIPTS)} scripts)")
     print(f"{'='*55}")
 
     futures = {}
-    with ThreadPoolExecutor(max_workers=6) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         for script, label in STATS_SCRIPTS:
             future = executor.submit(_run_single, script, label)
             futures[future] = (script, label)

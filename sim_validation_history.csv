@@ -1,0 +1,8 @@
+date,sample_n,hitter_mae,pitcher_mae,overall_bias,overall_corr,pct_in_p10_p90_hitters,pct_in_p10_p90_pitchers,ip_mae,ks_mae,er_mae,own_mae,own_bias,pitcher_mult_corr,vegas_mult_corr,context_mult_corr,verdict_hitter_mae,verdict_pitcher_mae,verdict_ownership
+2026-04-13,,6.32,9.91,-2.34,0.159,81.5,65.0,1.13,2.15,1.87,,,-0.047,0.08,0.085,WARN,WARN,
+2026-04-20,,5.59,7.9,3.47,-0.138,100.0,100.0,1.76,2.24,1.11,,,,,,PASS,PASS,
+2026-04-21,,5.54,7.02,0.6,0.218,71.4,80.0,1.02,1.83,1.42,,,0.011,-0.222,-0.225,PASS,PASS,
+2026-04-23,,6.38,10.43,0.38,0.317,87.7,47.1,1.15,2.01,1.57,,,,,,WARN,WARN,
+2026-04-24,,6.09,9.5,0.36,0.11,85.3,71.4,1.09,1.94,1.9,,,,,,WARN,WARN,
+2026-04-25,,6.02,8.2,-0.24,0.146,86.9,64.3,1.04,2.1,1.44,,,,,,WARN,WARN,
+2026-04-26,,5.91,8.73,1.24,0.372,89.7,70.0,0.88,1.76,1.61,,,,,,PASS,WARN,

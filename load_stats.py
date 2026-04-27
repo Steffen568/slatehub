@@ -438,17 +438,8 @@ for split in mlb_pitching:
         'avg':           sfloat(stat.get('avg')),
         'w':             sint(stat.get('wins')),
         'l':             sint(stat.get('losses')),
-        # These need FanGraphs or Savant — null if unavailable
-        'siera':         None,
-        'lob_pct':       None,
-        'ld_pct':        None,
-        'swstr_pct':     None,
-        'csw_pct':       None,
-        'stuff_plus':    None,
-        'location_plus': None,
-        'pitching_plus': None,
-        'barrel_pct':    None,
-        'hard_hit_pct':  None,
+        # These need FanGraphs or Savant — omitted (not set to None)
+        # so upsert won't overwrite values loaded by load_fangraphs_excel.py
     }
 
     # Enrich with Savant statcast
@@ -542,21 +533,8 @@ for split in mlb_batting:
         'r':            sint(stat.get('runs')),
         'rbi':          sint(stat.get('rbi')),
         'sb':           sint(stat.get('stolenBases')),
-        # These need FanGraphs or Savant — null if unavailable
-        'wrc_plus':     None,
-        'woba':         None,
-        'xwoba':        None,
-        'barrel_pct':   None,
-        'hard_hit_pct': None,
-        'avg_ev':       None,
-        'swstr_pct':    None,
-        'o_swing_pct':  None,
-        'pull_pct':     None,
-        'cent_pct':     None,
-        'oppo_pct':     None,
-        'fb_pct':       None,
-        'gb_pct':       None,
-        'ld_pct':       None,
+        # FanGraphs/Savant fields omitted here (not set to None)
+        # so upsert won't overwrite values loaded by load_fangraphs_excel.py
     }
 
     # Enrich with Savant expected stats

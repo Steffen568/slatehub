@@ -562,7 +562,41 @@ print(f"  Arsenal name lookup: {len(arsenal_name_to_pid):,} pitchers")
 PITCH_MAP = {'FA': 'FF', 'SI': 'SI', 'FC': 'FC', 'FS': 'FS',
              'SL': 'SL', 'CU': 'CU', 'CH': 'CH', 'KC': 'KC', 'FO': 'FO'}
 
-arsenal_updates = 0
+# FanGraphs and Savant classify some pitches differently:
+#   FG "SL" = Savant "ST" (Sweeper) for 117 pitchers
+#   FG "KC" = Savant "CU" (Curveball) for 31 pitchers
+# Build per-pitcher pitch type set from Savant (rows with usage_pct),
+# then remap FG types to match Savant's classification.
+FG_TO_SAVANT_ALIASES = {'SL': 'ST', 'KC': 'CU'}  # FG type -> possible Savant equivalent
+
+savant_pitches = {}  # pid -> set of pitch_types that have usage data
+off = 0
+while True:
+    r = sb.table('pitch_arsenal').select('player_id,pitch_type,usage_pct').eq('season', SEASON).not_.is_('usage_pct', 'null').range(off, off + 999).execute()
+    if not r.data:
+        break
+    for row in r.data:
+        savant_pitches.setdefault(row['player_id'], set()).add(row['pitch_type'])
+    if len(r.data) < 1000:
+        break
+    off += 1000
+
+def remap_pitch(pid, fg_type):
+    """Remap FG pitch type to match Savant's classification for this pitcher."""
+    player_types = savant_pitches.get(pid, set())
+    if fg_type in player_types:
+        return fg_type  # exact match exists in Savant
+    alias = FG_TO_SAVANT_ALIASES.get(fg_type)
+    if alias and alias in player_types:
+        return alias  # pitcher has the Savant equivalent
+    return fg_type  # no alias found, keep original
+
+# Build all plus-grade updates into a single dict keyed by (player_id, pitch_type)
+# then batch-upsert once — avoids thousands of individual API calls.
+arsenal_pending = {}   # (pid, pt) -> {stuff_plus: int, location_plus: int, pitching_plus: int}
+sheet_counts = {}
+remap_count = 0
+
 for sheet_name, df, prefix, db_col in [
     ('Stuff+', df_stuff, 'Stf+', 'stuff_plus'),
     ('Location+', df_loc, 'Loc+', 'location_plus'),
@@ -570,7 +604,7 @@ for sheet_name, df, prefix, db_col in [
 ]:
     if df.empty:
         continue
-    sheet_updates = 0
+    count = 0
     for _, row in df.iterrows():
         name = row.get('Name')
         if not name or not isinstance(name, str):
@@ -578,7 +612,6 @@ for sheet_name, df, prefix, db_col in [
         norm = normalize(name)
         pid = arsenal_name_to_pid.get(norm)
         if not pid:
-            # Try with team disambiguation
             pid = resolve_id(name, row.get('Team'))
         if not pid:
             continue
@@ -588,20 +621,58 @@ for sheet_name, df, prefix, db_col in [
             val = sfloat(row.get(col_name))
             if val is None:
                 continue
-            int_val = int(round(val))
-            if not DRY_RUN:
-                try:
-                    res = sb.table('pitch_arsenal').update({db_col: int_val}).eq(
-                        'player_id', pid).eq('pitch_type', pt).eq('season', SEASON).execute()
-                    if res.data:
-                        sheet_updates += 1
-                except Exception:
-                    pass
+            mapped_pt = remap_pitch(pid, pt)
+            if mapped_pt != pt:
+                remap_count += 1
+            key = (pid, mapped_pt)
+            if key not in arsenal_pending:
+                arsenal_pending[key] = {}
+            arsenal_pending[key][db_col] = int(round(val))
+            count += 1
 
-    print(f"  {sheet_name} -> pitch_arsenal.{db_col}: {sheet_updates} rows updated")
-    arsenal_updates += sheet_updates
+    sheet_counts[sheet_name] = count
+    print(f"  {sheet_name} -> pitch_arsenal.{db_col}: {count} values collected")
 
-print(f"  Total pitch_arsenal updates: {arsenal_updates}")
+# Batch upsert all collected updates
+arsenal_updates = 0
+if arsenal_pending and not DRY_RUN:
+    rows = []
+    for (pid, pt), cols in arsenal_pending.items():
+        row = {'player_id': pid, 'pitch_type': pt, 'season': SEASON}
+        row.update(cols)
+        rows.append(row)
+
+    BATCH = 500
+    for i in range(0, len(rows), BATCH):
+        batch = rows[i:i + BATCH]
+        sb.table('pitch_arsenal').upsert(
+            batch, on_conflict='player_id,pitch_type,season', ignore_duplicates=False
+        ).execute()
+        print(f"    OK {min(i + BATCH, len(rows))}/{len(rows)}")
+    arsenal_updates = len(rows)
+
+if remap_count:
+    print(f"  Pitch type remaps (FG->Savant): {remap_count} (SL->ST, KC->CU)")
+
+# Clean up orphan rows created by prior runs (FG-only rows with no usage data)
+# These are KC/SL rows where the stuff+ now lives on the CU/ST row instead
+if not DRY_RUN:
+    orphan_types = list(FG_TO_SAVANT_ALIASES.keys())  # ['SL', 'KC']
+    cleaned = 0
+    for fg_type, savant_type in FG_TO_SAVANT_ALIASES.items():
+        # Find rows for this FG type that have stuff+ but no usage (orphans)
+        orphans = sb.table('pitch_arsenal').select('player_id').eq('season', SEASON).eq('pitch_type', fg_type).is_('usage_pct', 'null').not_.is_('stuff_plus', 'null').limit(500).execute()
+        if orphans.data:
+            pids = [r['player_id'] for r in orphans.data]
+            # Only delete if the pitcher has the Savant equivalent with usage
+            for pid in pids:
+                if savant_type in savant_pitches.get(pid, set()):
+                    sb.table('pitch_arsenal').delete().eq('player_id', pid).eq('pitch_type', fg_type).eq('season', SEASON).execute()
+                    cleaned += 1
+    if cleaned:
+        print(f"  Cleaned {cleaned} orphan FG-only pitch rows (merged into Savant types)")
+
+print(f"  Total pitch_arsenal updates: {arsenal_updates} rows")
 
 
 # ══════════════════════════════════════════════

@@ -114,11 +114,72 @@ def compute_sp_grade(ps):
         if a >= thresh: return letter
     return 'F'
 
-def compute_pms(pd, p_splits, bt, b_stats, bat_hand, b_splits=None, vaa=None, l7xwoba=None):
+def _physics_matchup(pitcher_rows, attack_angle, swing_path_tilt, pitcher_arm_angle):
+    """
+    Physics-based pitch geometry vs batter swing plane matchup.
+    Returns (k_adj, contact_adj) — duplicated from sim_projections.py to avoid circular import.
+    Uses stable physical measurements: IVB, HB, VAA, arm_angle vs attack_angle, swing_path_tilt.
+    """
+    LEAGUE_ATTACK = 12.0
+    LEAGUE_ARM    = 45.0
+    if not pitcher_rows:
+        return 1.0, 1.0
+    if attack_angle is None:
+        attack_angle = LEAGUE_ATTACK
+    if swing_path_tilt is None:
+        swing_path_tilt = 0.0
+
+    total_usage = sum(safe(r.get('usage_pct'), 0) for r in pitcher_rows)
+    if total_usage <= 0:
+        return 1.0, 1.0
+
+    weighted_difficulty = 0.0
+    weight_sum = 0.0
+
+    for r in pitcher_rows:
+        u = safe(r.get('usage_pct'), 0) / total_usage
+        if u <= 0:
+            continue
+        rh  = safe(r.get('release_height'), 6.0)
+        ext = safe(r.get('extension'), 6.5)
+        denom = max(60.5 - ext, 1.0)
+        vaa = -math.degrees(math.atan((rh - 2.5) / denom))
+        ivb = safe(r.get('ivb'), 8.0)
+        hb  = safe(r.get('hb'), 0.0)
+
+        vert_gap      = abs(attack_angle - abs(vaa))
+        vert_score    = clip(vert_gap / 15.0, 0.0, 1.0)
+        ivb_dev       = ivb - 8.0
+        aa_dev        = attack_angle - LEAGUE_ATTACK
+        ivb_conflict  = clip(ivb_dev * aa_dev * 0.004, 0.0, 1.0)
+        lat_mismatch  = clip((abs(hb) - abs(swing_path_tilt) * 1.5) / 18.0, 0.0, 1.0)
+
+        pitch_difficulty = (vert_score * 0.45 + ivb_conflict * 0.35 + lat_mismatch * 0.20)
+        weighted_difficulty += pitch_difficulty * u
+        weight_sum += u
+
+    if weight_sum <= 0:
+        return 1.0, 1.0
+
+    raw = weighted_difficulty / weight_sum
+    if pitcher_arm_angle is not None:
+        arm_dev      = pitcher_arm_angle - LEAGUE_ARM
+        arm_conflict = clip(-arm_dev * (attack_angle - LEAGUE_ATTACK) * 0.001, 0.0, 0.15)
+        raw = clip(raw + arm_conflict, 0.0, 1.0)
+
+    k_adj       = clip(1.0 + raw * 0.08, 0.94, 1.10)
+    contact_adj = clip(1.0 - raw * 0.05, 0.92, 1.05)
+    return k_adj, contact_adj
+
+
+def compute_pms(pd, p_splits, bt, b_stats, bat_hand, b_splits=None, vaa=None, l7xwoba=None,
+                sp_arsenal_rows=None, sp_arm_angle=None):
     """PMS v2 — 8-component research-weighted Pitcher Matchup Score (1-10).
     pd: pitcher_stats row. p_splits: { 'L': row, 'R': row }. bt: bat_tracking row.
     b_stats: batter_stats row. bat_hand: 'L'/'R'/'S'. b_splits: { 'L': row, 'R': row }.
-    vaa: pitcher VAA (negative degrees). l7xwoba: L7 avg xwOBA.
+    vaa: pitcher VAA (negative degrees, kept for reference). l7xwoba: L7 avg xwOBA.
+    sp_arsenal_rows: pitch_arsenal rows for the opposing SP (for physics matchup).
+    sp_arm_angle: pitcher arm angle (degrees).
     """
     if not pd:
         return 5.0
@@ -176,13 +237,17 @@ def compute_pms(pd, p_splits, bt, b_stats, bat_hand, b_splits=None, vaa=None, l7
         elif p_brl >= 7 and h_hh is not None and h_hh >= 38: p = 1
         pts += p; max_pts += 2
 
-    # 4. Swing Plane Alignment (2 pts)
-    atk = safe(bt.get('attack_angle'), None) if bt else None
-    vaa_val = vaa
-    if atk is not None and vaa_val is not None:
-        gap = abs(atk - abs(vaa_val))
-        p = 2 if gap <= 3 else 1 if gap <= 7 else 0
-        pts += p; max_pts += 2
+    # 4. Physics Matchup (3 pts) — pitch geometry vs batter swing plane
+    #    Replaces: simple VAA gap (old component 4) + xwOBA arsenal vulnerability (old component 9)
+    #    Uses IVB, HB, VAA, arm_angle vs attack_angle, swing_path_tilt — no regression to mean
+    atk  = safe(bt.get('attack_angle'), None) if bt else None
+    tilt = safe(bt.get('swing_path_tilt'), None) if bt else None
+    if sp_arsenal_rows:
+        k_a, c_a = _physics_matchup(sp_arsenal_rows, atk, tilt, sp_arm_angle)
+        # physics_difficulty: 0.0 = perfect alignment (easy for batter), 1.0 = extreme mismatch
+        physics_difficulty = ((k_a - 1.0) / 0.08 + (1.0 - c_a) / 0.05) / 2.0
+        p = 3 if physics_difficulty >= 0.55 else 2 if physics_difficulty >= 0.35 else 1 if physics_difficulty >= 0.15 else 0
+        pts += p; max_pts += 3
 
     # 5. K Environment (2 pts)
     k_raw = safe(p_split.get('k_pct') if p_split else None, None) or safe(pd.get('k_pct'), None)
@@ -308,11 +373,17 @@ def fetch_data(target_date, slate_filter=None):
         for i in range(0, len(sp_ids), 150):
             batch = sp_ids[i:i+150]
             rows = sb.table('pitcher_stats').select(
-                'player_id,season,xfip,siera,k_pct,bb_pct,swstr_pct,stuff_plus,pitching_plus,barrel_pct,hard_hit_pct'
+                'player_id,season,xfip,siera,k_pct,bb_pct,swstr_pct,stuff_plus,pitching_plus,location_plus,barrel_pct,hard_hit_pct'
             ).in_('player_id', batch).order('season', desc=True).execute().data or []
             for r in rows:
-                if r['player_id'] not in pitcher_stats:
-                    pitcher_stats[r['player_id']] = r
+                pid = r['player_id']
+                if pid not in pitcher_stats:
+                    pitcher_stats[pid] = dict(r)
+                else:
+                    # Fill nulls from older seasons
+                    for k, v in r.items():
+                        if k != 'season' and pitcher_stats[pid].get(k) is None and v is not None:
+                            pitcher_stats[pid][k] = v
 
     # Pitcher splits (xwOBA, K%, BB%, hard_hit% by hand) for individual PMS
     pitcher_splits = {}  # sp_id → { 'L': row, 'R': row }
@@ -355,11 +426,17 @@ def fetch_data(target_date, slate_filter=None):
         for i in range(0, len(all_hitter_ids), 150):
             batch = all_hitter_ids[i:i+150]
             rows = sb.table('batter_stats').select(
-                'player_id,barrel_pct,hard_hit_pct,xwoba,o_swing_pct,swstr_pct,k_pct,season'
+                'player_id,barrel_pct,hard_hit_pct,xwoba,o_swing_pct,swstr_pct,k_pct,wrc_plus,iso,season'
             ).in_('player_id', batch).order('season', desc=True).execute().data or []
             for r in rows:
-                if r['player_id'] not in batter_stats:
-                    batter_stats[r['player_id']] = r
+                pid = r['player_id']
+                if pid not in batter_stats:
+                    batter_stats[pid] = dict(r)  # copy so we can merge
+                else:
+                    # Fill nulls from older seasons (frontend does this via select('*'))
+                    for k, v in r.items():
+                        if k != 'season' and batter_stats[pid].get(k) is None and v is not None:
+                            batter_stats[pid][k] = v
 
     # Batter splits (xwOBA by pitcher hand)
     batter_splits = {}  # pid → { 'L': row, 'R': row }
@@ -415,6 +492,17 @@ def fetch_data(target_date, slate_filter=None):
                 if len(recent) >= 2:
                     l7_map[pid] = sum(safe(g['xwoba'], 0) for g in recent) / len(recent)
 
+    # Pitcher arsenal rows (pitch mix + physics: IVB, HB, release_height, extension, arm_angle)
+    arsenal_rows_by_sp = {}   # {sp_id: [row, ...]}
+    if sp_ids:
+        for i in range(0, len(sp_ids), 150):
+            batch = sp_ids[i:i+150]
+            rows = sb.table('pitch_arsenal').select(
+                'player_id,pitch_type,usage_pct,xwoba,ivb,hb,release_height,extension,arm_angle,season'
+            ).in_('player_id', batch).eq('season', SEASON).execute().data or []
+            for r in rows:
+                arsenal_rows_by_sp.setdefault(r['player_id'], []).append(r)
+
     # Park factors
     venue_ids = list(set(g.get('venue_id') for g in games if g.get('venue_id')))
     park_factors = {}
@@ -441,6 +529,7 @@ def fetch_data(target_date, slate_filter=None):
         'pitcher_splits': pitcher_splits, 'pitcher_vaa': pitcher_vaa,
         'batter_stats': batter_stats, 'batter_splits': batter_splits,
         'bat_tracking': bat_tracking, 'bats_map': bats_map, 'l7_map': l7_map,
+        'arsenal_rows_by_sp': arsenal_rows_by_sp,
     }
 
 
@@ -573,6 +662,18 @@ def build_player_pool(data):
                 gpk_abbr_to_id[(gpk, t)] = away_id
                 assigned.add(away_id)
 
+    # Pre-compute arsenal matchup mult per opposing SP (each SP faces exactly one team per day)
+    # Build confirmed batter IDs per team_id from the pool
+    _team_batter_ids = defaultdict(list)
+    for p in deduped:
+        if not p['is_pitcher']:
+            bo = (data['lineup_map'].get(p['player_id']) or {}).get('batting_order')
+            if bo and bo >= 1:
+                t = gpk_abbr_to_id.get((p.get('game_pk'), p.get('team')))
+                if t:
+                    _team_batter_ids[t].append(p['player_id'])
+
+
     # Individual PMS per hitter using all available data
     for p in deduped:
         gpk = p.get('game_pk')
@@ -597,9 +698,27 @@ def build_player_pool(data):
         b_splits = data['batter_splits'].get(p['player_id'])
         bat_hand = data['bats_map'].get(p['player_id'])
         l7form = data['l7_map'].get(p['player_id'])
+        sp_rows = data['arsenal_rows_by_sp'].get(opp_sp_id, [])
+        arm_angles = [safe(r.get('arm_angle')) for r in sp_rows if safe(r.get('arm_angle')) is not None]
+        sp_arm = sum(arm_angles) / len(arm_angles) if arm_angles else None
 
         p['pms'] = compute_pms(opp_pd, opp_splits, bt, b_stats, bat_hand,
-                               b_splits, opp_vaa, l7form)
+                               b_splits, opp_vaa, l7form,
+                               sp_arsenal_rows=sp_rows, sp_arm_angle=sp_arm)
+
+    # Attach talent stats for leverage scoring (from analyze_leverage.py findings)
+    for p in deduped:
+        pid = p['player_id']
+        if p['is_pitcher']:
+            ps = data['pitcher_stats'].get(pid) or {}
+            p['stuff_plus'] = safe(ps.get('stuff_plus'), 100)
+            p['k_pct_raw'] = safe(ps.get('k_pct'), 0.22)
+            p['xfip'] = safe(ps.get('xfip'), 4.0)
+        else:
+            bs = data['batter_stats'].get(pid) or {}
+            p['wrc_plus'] = safe(bs.get('wrc_plus'), 100)
+            p['iso'] = safe(bs.get('iso'), 0.150)
+            p['k_pct_raw'] = safe(bs.get('k_pct'), 0.22)
 
     # Log individual PMS per team (shows spread, not just avg)
     team_pms = defaultdict(list)
@@ -807,7 +926,8 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                 pick = fallback[-1]  # cheapest
             else:
                 # Tighter selection for SP (quality matters more), wider for hitters
-                top_k = 3 if pos == 'SP' else 5  # wider pool for ceiling access
+                # SP: tighter on big slates for pitcher conviction, wider on small slates
+                top_k = (2 if game_count >= 10 else 3) if pos == 'SP' else 5
                 top = candidates[:top_k]
                 weights = np.array([max(s, 0.1) for _, s, _ in top])
                 weights /= weights.sum()
@@ -932,6 +1052,28 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
             pms_edge = 1.0 + (pms_val - 5) * 0.02  # PMS 7 → 1.04x, PMS 3 → 0.96x
             scores[i] *= pms_edge
 
+            # Talent-based scoring signal (data-driven from analyze_leverage.py,
+            # 3,301 player-contest rows across 26 GPPs)
+            # Pure talent boost — no ownership-based penalties (ownership model not reliable enough)
+            if p['is_pitcher']:
+                # K% (r=+0.320) and Stuff+ (r=+0.179) predict pitcher outperformance
+                # Holmes (K%=.196, Stuff+=92) → ~0.95x  vs  Skenes (K%=.261, Stuff+=101) → ~1.05x
+                raw_k = p.get('k_pct_raw', 0.22)
+                if raw_k < 0.05:  # missing/zero K% — default to neutral
+                    raw_k = 0.22
+                k_z = (raw_k - 0.22) / 0.06
+                stuff_z = (p.get('stuff_plus', 100) - 100) / 15
+                talent_z = k_z * 0.6 + stuff_z * 0.4
+                talent_mult = max(0.80, min(1.20, 1.0 + talent_z * 0.12))
+            else:
+                # wRC+ (r=+0.218) and ISO (r=+0.192) predict hitter outperformance
+                wrc_z = (p.get('wrc_plus', 100) - 100) / 30
+                iso_z = (p.get('iso', 0.150) - 0.150) / 0.080
+                talent_z = wrc_z * 0.5 + iso_z * 0.5
+                talent_mult = max(0.85, min(1.15, 1.0 + talent_z * 0.08))
+
+            scores[i] *= talent_mult
+
     return scores
 
 
@@ -1011,20 +1153,32 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         lev = ceiling_sum / max(own_sum, 5.0)
         gt = hitters[0].get('game_total', 8.5) if hitters else 8.5
         env = (gt / 8.5) ** 2.5  # 12.5 → 2.83x, 9.0 → 1.18x, 7.0 → 0.58x
-        # PMS removed from team weights — it was triple-counted (here + noisy scores + frontend sort).
-        # Team selection should be driven by game environment (Vegas total), not matchup quality.
-        team_leverage[t] = {'lev': lev, 'env': env, 'gt': gt}
+        # Team-avg PMS: opposing pitcher quality drives which stacks explode.
+        # BAL facing Bello (PMS 5.5) vs MIN facing a good SP (PMS 3.7) should
+        # meaningfully separate team weights. Exponent amplifies the gap.
+        pms_vals = [h.get('pms', 5) for h in hitters if h.get('pms')]
+        avg_pms = sum(pms_vals) / len(pms_vals) if pms_vals else 5.0
+        matchup = ((avg_pms / 5.0) ** 2.0)  # PMS 7 → 1.96x, PMS 5 → 1.0x, PMS 3 → 0.36x
+        team_leverage[t] = {'lev': lev, 'env': env, 'gt': gt, 'matchup': matchup, 'avg_pms': avg_pms}
     # Normalize each component independently, then blend
     levs = np.array([team_leverage[t]['lev'] for t in viable_teams])
     envs = np.array([team_leverage[t]['env'] for t in viable_teams])
+    mtch = np.array([team_leverage[t]['matchup'] for t in viable_teams])
     norm_lev = levs / levs.sum() if levs.sum() > 0 else np.ones(len(levs)) / len(levs)
     norm_env = envs / envs.sum() if envs.sum() > 0 else np.ones(len(envs)) / len(envs)
-    blended = norm_lev * 0.50 + norm_env * 0.50
+    norm_mtch = mtch / mtch.sum() if mtch.sum() > 0 else np.ones(len(mtch)) / len(mtch)
+    # 35% leverage + 35% environment + 30% matchup quality
+    blended = norm_lev * 0.35 + norm_env * 0.35 + norm_mtch * 0.30
     team_weights = blended / blended.sum()
     if mode == 'user':
-        min_weight = max(0.01, 1.0 / len(viable_teams))  # lowered from 2.5% to reduce weak-game exposure
+        min_weight = max(0.02, 0.5 / len(viable_teams))  # 14 teams → 3.6% floor (was 7.1%)
         team_weights = np.maximum(team_weights, min_weight)
         team_weights /= team_weights.sum()
+        # Log top/bottom teams by weight for diagnostics
+        tw_sorted = sorted(zip(viable_teams, team_weights), key=lambda x: -x[1])
+        top5 = ', '.join(f'{t}={w*100:.1f}%(pms={team_leverage[t]["avg_pms"]:.1f})' for t, w in tw_sorted[:5])
+        bot3 = ', '.join(f'{t}={w*100:.1f}%' for t, w in tw_sorted[-3:])
+        print(f"  Team weights: top={top5} | bot={bot3}")
     # Also compute for viable_5
     if viable_5:
         v5_idx = [viable_teams.index(t) for t in viable_5 if t in viable_teams]
@@ -1053,10 +1207,16 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
     base_cap_pct = 0.15
     team_cap_map = {}
     if mode == 'user':
+        # Rank teams by environment score to identify top games
+        env_ranked = sorted(viable_teams, key=lambda t: team_game_totals.get(t, 8.5), reverse=True)
+        top_env_teams = set(env_ranked[:6])  # top 3 games = 6 teams
         for t in viable_teams:
             gt = team_game_totals.get(t, 8.5)
-            # High-total games (10+) get up to 20% cap
-            cap_pct = base_cap_pct + clip((gt - 9.0) * 0.015, 0, 0.05)
+            if t in top_env_teams:
+                # Top games get 20% cap (from 15%) — more conviction on best spots
+                cap_pct = 0.20
+            else:
+                cap_pct = base_cap_pct
             team_cap_map[t] = int(n_lineups * cap_pct)
     team_cap = int(n_lineups * base_cap_pct) if mode == 'user' else None
 
@@ -1178,6 +1338,33 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         avg_pms = round(sum(hitter_pms) / len(hitter_pms), 2) if hitter_pms else 5.0
         avg_hes = round(sum(hitter_hes) / len(hitter_hes), 2) if hitter_hes else 5.0
 
+        # GPP fitness score (from contest data: 124K entries, 4 contests)
+        # Pitchers: 96% of top-1% had 25+ pitcher pts, avg ceiling ~50
+        p_ceil = sum(p['ceiling'] for p in lu_players if p['is_pitcher'])
+        gpp_pitcher = min(p_ceil / 50.0, 1.0)
+        # Booms: top-1% averages 3.7 hitters with 15+ pts (ceiling >= 18)
+        booms = sum(1 for p in lu_players if not p['is_pitcher'] and p['ceiling'] >= 18)
+        gpp_boom = min(booms / 4.0, 1.0)
+        # Busts: top-1% averages 0.8 busts (<3 pts from floor)
+        busts = sum(1 for p in lu_players if p['floor'] < 2)
+        gpp_bust = max(0, 1.0 - busts / 3.0)
+        # Ownership: sweet spot 100-150%
+        total_own = sum(p.get('ownership', 5) for p in lu_players)
+        gpp_own = 1.0 if 100 <= total_own <= 150 else max(0, 1.0 - abs(total_own - 125) / 75)
+        # Talent density (wRC+/ISO for hitters, K%/Stuff+ for pitchers)
+        talent_vals = []
+        for p in lu_players:
+            if p['is_pitcher']:
+                talent_vals.append((p.get('k_pct_raw', 0.22) - 0.22) / 0.06 * 0.6
+                                   + (p.get('stuff_plus', 100) - 100) / 15 * 0.4)
+            else:
+                talent_vals.append((p.get('wrc_plus', 100) - 100) / 30 * 0.5
+                                   + (p.get('iso', 0.150) - 0.150) / 0.08 * 0.5)
+        gpp_talent = min(max(np.mean(talent_vals) + 0.5, 0), 1.0) if talent_vals else 0.5
+
+        gpp_score = round(gpp_pitcher * 0.25 + gpp_boom * 0.30 + gpp_bust * 0.20
+                          + gpp_own * 0.10 + gpp_talent * 0.15, 3)
+
         lineups.append({
             'player_ids': list(lu),
             'salary': salary,
@@ -1188,6 +1375,7 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
             'sub_size': sub_s,
             'avg_pms': avg_pms,
             'avg_hes': avg_hes,
+            'gpp_score': gpp_score,
         })
         team_stack_counts[stack_team] += 1
         for pid in lu:
@@ -1220,9 +1408,9 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
                 main_size = config['main']
                 if main_size >= 5 and t not in viable_5:
                     main_size = 4
-                # For thin rosters (< 6 hitters), try 3-man stacks too
-                if n_hitters < 6 and main_size > 3:
-                    main_size = rng.choice([3, 4])
+                # Thin rosters: cap at 4-man minimum (3-man stacks don't win GPPs)
+                if n_hitters < 4:
+                    continue  # skip teams with fewer than 4 hitters
                 sub_cands = [st for st in viable_3sub if st != t]
                 sub_teams_tu = []
                 for ss in config['subs']:
@@ -1530,6 +1718,7 @@ def process_sd_request(req):
                 'sub_size': lu.get('sub_size', 0),
                 'avg_pms': lu.get('avg_pms'),
                 'avg_hes': lu.get('avg_hes'),
+                'gpp_score': lu.get('gpp_score'),
                 'computed_at': computed_at,
             } for lu in lineups]
 
@@ -1698,6 +1887,7 @@ def process_request(req):
                 'sub_size': lu.get('sub_size', 0),
                 'avg_pms': lu.get('avg_pms'),
                 'avg_hes': lu.get('avg_hes'),
+                'gpp_score': lu.get('gpp_score'),
                 'computed_at': computed_at,
             } for lu in lineups]
 
@@ -1857,6 +2047,7 @@ def run():
                 'sub_size': lu.get('sub_size', 0),
                 'avg_pms': lu.get('avg_pms'),
                 'avg_hes': lu.get('avg_hes'),
+                'gpp_score': lu.get('gpp_score'),
                 'computed_at': computed_at,
             } for lu in lineups]
 

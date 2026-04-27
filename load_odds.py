@@ -79,24 +79,28 @@ def run():
 
     print(f"  Games in DB: {len(db_games)}")
 
-    # Build lookup by team names (use both full name and mapped variants)
+    # Build lookup by (away, home, game_date) to avoid collisions when the
+    # same teams play on consecutive days (e.g. series games).
     db_lookup = {}
     for g in db_games:
         home = g["home_team"]
         away = g["away_team"]
-        db_lookup[(away, home)] = g
-        # Also index by reversed mapped names
+        gd   = g["game_date"]
+        db_lookup[(away, home, gd)] = g
         for k, v in TEAM_NAME_MAP.items():
             if home == v:
-                db_lookup[(away, k)] = g
+                db_lookup[(away, k, gd)] = g
             if away == v:
-                db_lookup[(k, home)] = g
+                db_lookup[(k, home, gd)] = g
 
     # Fetch ESPN scoreboard for today (and tomorrow for late UTC games)
+    # Tag each event with the request date so we can match to the right DB game
     all_events = []
     for d in [today, tomorrow]:
         try:
             events = fetch_espn_odds(d)
+            for ev in events:
+                ev["_request_date"] = d
             all_events.extend(events)
         except Exception as e:
             print(f"  ERROR fetching ESPN for {d}: {e}")
@@ -117,16 +121,16 @@ def run():
         away = next((t for t in competitors if t.get("homeAway") == "away"), {})
         home_name = home.get("team", {}).get("displayName", "")
         away_name = away.get("team", {}).get("displayName", "")
+        req_date = ev.get("_request_date", today)
 
-        # Match to our DB game
-        db_game = db_lookup.get((away_name, home_name))
+        # Match to our DB game using team names + date
+        db_game = db_lookup.get((away_name, home_name, req_date))
         if not db_game:
-            # Try mapped names
             mapped_home = TEAM_NAME_MAP.get(home_name, home_name)
             mapped_away = TEAM_NAME_MAP.get(away_name, away_name)
-            db_game = db_lookup.get((mapped_away, mapped_home))
+            db_game = db_lookup.get((mapped_away, mapped_home, req_date))
         if not db_game:
-            unmatched.append(f"{away_name} @ {home_name}")
+            unmatched.append(f"{away_name} @ {home_name} ({req_date})")
             continue
 
         game_pk = db_game["game_pk"]

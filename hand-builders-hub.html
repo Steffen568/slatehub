@@ -5538,18 +5538,31 @@ async function loadPlayerPool(date, slate) {
     pSplitMap[pid][hand] = bl;
   }
 
-  // 8c. Pitch arsenal — fastball release_height for VAA calculation
+  // 8c. Pitch arsenal — full per-pitch physics for VAA + physics matchup component
   const arsenalRaw = spIds.length
-    ? await batchIn('pitch_arsenal','player_id,pitch_type,release_height,velo,extension','player_id',spIds,
-        q => q.in('pitch_type',['FF','SI']).order('season',{ascending:false}))
+    ? await batchIn('pitch_arsenal','player_id,pitch_type,release_height,extension,velo,ivb,hb,arm_angle,usage_pct,season','player_id',spIds,
+        q => q.order('season',{ascending:false}))
     : [];
-  const vaaMap = {}; // spId → VAA (negative degrees)
+  // arsenalMap: spId → array of pitch rows (all pitch types, most recent season per pitcher)
+  const arsenalMap = {};
+  const _arsenalSeason = {};
   arsenalRaw.forEach(r => {
-    if (vaaMap[r.player_id] != null) return; // keep first (most recent season)
+    const pid = r.player_id;
+    const s = parseInt(r.season) || 0;
+    if (!_arsenalSeason[pid] || s > _arsenalSeason[pid]) {
+      _arsenalSeason[pid] = s;
+      arsenalMap[pid] = [];
+    }
+    if (s === _arsenalSeason[pid]) arsenalMap[pid].push(r);
+  });
+  // vaaMap: spId → VAA from primary fastball (FF or SI), kept for reference
+  const vaaMap = {};
+  arsenalRaw.forEach(r => {
+    if (!['FF','SI'].includes(r.pitch_type)) return;
+    if (vaaMap[r.player_id] != null) return;
     const rh = parseFloat(r.release_height);
     const ext = parseFloat(r.extension) || 5.5;
     if (rh > 0) {
-      // VAA = angle from release point to zone center (~2.5ft), over ~55ft distance
       const dist = 60.5 - ext;
       vaaMap[r.player_id] = -Math.atan((rh - 2.5) / dist) * (180 / Math.PI);
     }
@@ -5645,8 +5658,9 @@ async function loadPlayerPool(date, slate) {
     const batHand   = batsMap[s.player_id] || null;
     const l7form    = l7Map[s.player_id] ?? null;
 
+    const oppArsenal = oppSpId ? (arsenalMap[oppSpId] || null) : null;
     const pmsResult = oppPd
-      ? computePMS(oppPd, oppSplits, bt, bs, batHand, bSplit, oppVaa, l7form)
+      ? computePMS(oppPd, oppSplits, bt, bs, batHand, bSplit, oppVaa, l7form, oppArsenal)
       : null;
 
     allHitters.push({
@@ -8485,7 +8499,7 @@ async function loadPoolFromDB() {
     const userRes = [];
     for (let offset = 0; ; offset += 1000) {
       const { data } = await sb.from('sim_pool')
-        .select('player_ids,salary,proj,stack_team,stack_size,sub_team,sub_size')
+        .select('player_ids,salary,proj,stack_team,stack_size,sub_team,sub_size,avg_pms,gpp_score')
         .eq('game_date', today).eq('dk_slate', slate).eq('pool_type', 'user')
         .range(offset, offset + 999);
       if (!data || !data.length) break;
@@ -8600,8 +8614,9 @@ async function loadPoolFromDB() {
       }
 
       const metrics = scorePoolLineup(lineup);
+      metrics.avgPms = row.avg_pms ?? metrics.avgPms;
       const key = [...pids].sort((a,b) => a-b).join(',');
-      _poolCandidates.push({ lineup, metrics, dedupKey: key });
+      _poolCandidates.push({ lineup, metrics, dedupKey: key, dbGppScore: row.gpp_score });
     }
 
     // Store contest pool for sim
@@ -9971,6 +9986,10 @@ function updateGppScores() {
       : 0.50 * ((m.corrScore||0) / maxCorr) + 0.50 * ((m.ceil||0) / (m.proj||1));
 
     c.gppScore = +(sharpWt * sharpScore + levWt * levScore).toFixed(4);
+    // Use DB-computed GPP score as fallback when no sim data (leverage-aware from analyze_leverage.py)
+    if (!hasSim && c.dbGppScore != null) {
+      c.gppScore = Math.max(c.gppScore, c.dbGppScore);
+    }
   }
 
   // PMS Driven: sequential edge-diversity ranking
@@ -12190,7 +12209,53 @@ function computeSpGrade(pd) {
 // Weights reflect year-to-year predictive stability:
 //   Platoon splits (3) > Stuff/Barrel/Plane/K/Contact (2 each) > Discipline/Form (1 each)
 // Total max = 15. Score = (earned / available) * 10.
-function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba) {
+function computePhysicsMatchup(arsenalRows, attackAngle, swingPathTilt, pitcherArmAngle) {
+  const LEAGUE_ATTACK = 12.0;
+  const LEAGUE_ARM    = 45.0;
+  const clip = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  if (!arsenalRows || !arsenalRows.length) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0 };
+  if (attackAngle == null) attackAngle = LEAGUE_ATTACK;
+  if (swingPathTilt == null) swingPathTilt = 0.0;
+
+  const totalUsage = arsenalRows.reduce((s, r) => s + (parseFloat(r.usage_pct) || 0), 0);
+  if (totalUsage <= 0) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0 };
+
+  let weightedDiff = 0, weightSum = 0;
+  arsenalRows.forEach(r => {
+    const u = (parseFloat(r.usage_pct) || 0) / totalUsage;
+    if (u <= 0) return;
+    const rh  = parseFloat(r.release_height) || 6.0;
+    const ext = parseFloat(r.extension) || 6.5;
+    const dist = Math.max(60.5 - ext, 1.0);
+    const vaa  = -Math.atan((rh - 2.5) / dist) * (180 / Math.PI);
+    const ivb  = parseFloat(r.ivb) || 8.0;
+    const hb   = parseFloat(r.hb) || 0.0;
+
+    const vertGap   = Math.abs(attackAngle - Math.abs(vaa));
+    const vertScore = clip(vertGap / 15.0, 0, 1);
+    const ivbConflict = clip((ivb - 8.0) * (attackAngle - LEAGUE_ATTACK) * 0.004, 0, 1);
+    const latMismatch = clip((Math.abs(hb) - Math.abs(swingPathTilt) * 1.5) / 18.0, 0, 1);
+
+    weightedDiff += (vertScore * 0.45 + ivbConflict * 0.35 + latMismatch * 0.20) * u;
+    weightSum += u;
+  });
+
+  if (weightSum <= 0) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0 };
+  let raw = weightedDiff / weightSum;
+
+  if (pitcherArmAngle != null) {
+    const armConflict = clip(-(pitcherArmAngle - LEAGUE_ARM) * (attackAngle - LEAGUE_ATTACK) * 0.001, 0, 0.15);
+    raw = clip(raw + armConflict, 0, 1);
+  }
+
+  return {
+    kAdj:       clip(1.0 + raw * 0.08, 0.94, 1.10),
+    contactAdj: clip(1.0 - raw * 0.05, 0.92, 1.05),
+    difficulty: raw,  // 0-1 scale
+  };
+}
+
+function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, arsenalRows) {
   const components = [];
   const toD = v => (v == null ? null : v > 1 ? v / 100 : v);
   const toR = v => (v == null ? null : v > 1 ? v : v * 100);
@@ -12245,13 +12310,16 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba) {
     components.push({ name: 'Barrel Opportunity', pts: p, max: 2, pBrl, hBrl, hHH });
   }
 
-  // 4. Swing Plane Alignment (2 pts)
-  const atk = bt?.attack_angle ?? null;
-  const vaaVal = vaa ?? null;
-  if (atk != null && vaaVal != null) {
-    const absGap = Math.abs(atk - Math.abs(vaaVal));
-    const p = absGap <= 3 ? 2 : absGap <= 7 ? 1 : 0;
-    components.push({ name: 'Swing Plane Alignment', pts: p, max: 2, atk, vaa: vaaVal, gap: absGap });
+  // 4. Physics Matchup (3 pts) — pitch geometry vs swing plane
+  //    Replaces: simple VAA gap + xwOBA arsenal — uses IVB/HB/VAA/arm_angle vs attack_angle/tilt
+  if (arsenalRows && arsenalRows.length) {
+    const atk  = bt?.attack_angle ?? null;
+    const tilt = bt?.swing_path_tilt ?? null;
+    const armAngles = arsenalRows.map(r => parseFloat(r.arm_angle)).filter(v => !isNaN(v));
+    const spArm = armAngles.length ? armAngles.reduce((s,v)=>s+v,0)/armAngles.length : null;
+    const { kAdj, contactAdj, difficulty } = computePhysicsMatchup(arsenalRows, atk, tilt, spArm);
+    const p = difficulty >= 0.55 ? 3 : difficulty >= 0.35 ? 2 : difficulty >= 0.15 ? 1 : 0;
+    components.push({ name: 'Physics Matchup', pts: p, max: 3, difficulty, kAdj, contactAdj });
   }
 
   // 5. K Environment (2 pts)

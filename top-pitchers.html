@@ -422,7 +422,7 @@ async function loadAll(){
         : Promise.resolve({data:[]}),
       spIds.length
         ? sb.from('pitcher_stats')
-            .select('player_id,full_name,season,era,fip,xfip,siera,k_pct,bb_pct,swstr_pct,csw_pct,hard_hit_pct,barrel_pct,stuff_plus,pitching_plus,velo,arm_angle,ip,gs,throws')
+            .select('player_id,full_name,season,era,fip,xfip,siera,k_pct,bb_pct,swstr_pct,csw_pct,hard_hit_pct,barrel_pct,stuff_plus,pitching_plus,velo,arm_angle,ip,gs,throws,sb_per_9,sb_allowed,sb_pct')
             .eq('season',SEASON).in('player_id',spIds)
         : Promise.resolve({data:[]}),
       spIds.length
@@ -528,7 +528,7 @@ async function loadAll(){
           stuff_plus:spStats?.stuff_plus??null, k_pct:spStats?.k_pct??null,
           bb_pct:spStats?.bb_pct??null, swstr_pct:spStats?.swstr_pct??null,
           csw_pct:spStats?.csw_pct??null, velo:spStats?.velo??null,
-          arm_angle:spStats?.arm_angle??null,
+          arm_angle:spStats?.arm_angle??null, sb_per_9:spStats?.sb_per_9??null,
           weather, parkFactor:park?.park_factor||100, hrFactor:park?.hr_factor||100,
           venueId:game.venue_id,
           impliedTotal, oppImplied, gameTotal:odds.game_total||0,
@@ -762,6 +762,7 @@ function renderSidebar(p){
     ['BB%',    fmtPct(p.bb_pct),   p.bb_pct!=null?(p.bb_pct<=0.07?'var(--hi)':p.bb_pct<=0.10?'var(--mid)':'var(--lo)'):'var(--muted2)'],
     ['ERA',    p.era!=null?p.era.toFixed(2):'—',     p.era!=null?(p.era<=3.00?'var(--hi)':p.era<=4.00?'var(--mid)':'var(--lo)'):'var(--muted2)'],
     ['Velo',   p.velo?p.velo.toFixed(1)+' mph':'—',  'var(--muted2)'],
+    ['SB/9',   p.sb_per_9!=null?p.sb_per_9.toFixed(2):'—', p.sb_per_9!=null?(p.sb_per_9>=1.5?'var(--lo)':p.sb_per_9>=0.8?'var(--mid)':'var(--hi)'):'var(--muted2)'],
   ].map(([l,v,c])=>`<div class="stat-row"><span class="stat-lbl">${l}</span><span class="stat-val" style="color:${c}">${v}</span></div>`).join('');
 
   // Lineup quality rows

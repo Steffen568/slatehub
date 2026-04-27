@@ -667,3 +667,63 @@ requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leader
 ### Auto-fixed DK ID mismatches: Angel Martinez, Brandon Lowe, Carson Kelly, David Fry, David Hamilton, Ivan Herrera, Jacob Wilson, Jose Caballero, Jose Ramirez, Josh Smith, Juan Brito, Julio Rodriguez, Luis Garcia Jr., Miguel Vargas, Mike Yastrzemski, Vladimir Guerrero Jr., Will Smith
 **What happened:** Pipeline auto-fixed 17 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Angel Martinez, Brandon Lowe, Carson Kelly, David Fry, Ivan Herrera, Jacob Wilson, Jose Caballero, Jose Fernandez, Jose Ramirez, Josh Smith, Juan Brito, Julio Rodriguez, Luis Garcia Jr., Miguel Rojas, Mike Yastrzemski, Will Smith
+**What happened:** Pipeline auto-fixed 16 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Angel Martinez, Brandon Lowe, Carson Kelly, Cole Young, David Hamilton, Ivan Herrera, Jacob Wilson, Jose Caballero, Jose Fernandez, Jose Ramirez, Juan Brito, Julio Rodriguez, Lane Thomas, Luis Garcia Jr., Miguel Vargas, Mike Yastrzemski, Vladimir Guerrero Jr., Will Smith
+**What happened:** Pipeline auto-fixed 18 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Brandon Lowe, Carson Kelly, Cole Young, David Hamilton, Gary Sanchez, Jacob Wilson, Jose Caballero, Josh Smith, Julio Rodriguez, Luis Garcia Jr., Michael Massey, Miguel Vargas, Mike Yastrzemski, Vladimir Guerrero Jr., Will Smith
+**What happened:** Pipeline auto-fixed 15 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Session 45 — Platoon multiplier removed, hitter R/RBI rates corrected, pitcher variance widened
+**What happened:** Postgame reviews consistently showed platoon_mult r=0.000 (dead weight), hitters under-projected by -2.34 bias, and pitcher P10-P90 calibration at 65% (target 80%).
+**Rule:** (1) Individual batter talent already reflects platoon tendencies — a team-level platoon_adjust double-counts the split. (2) R scoring base rate should be 0.33 (MLB avg ~33% of baserunners score), not 0.30. RBI rate 0.21, not 0.18. (3) Pitcher stuff_sd base should be 0.22 (not 0.18) with wider clips (0.35-1.70) to capture more blowup/gem variance.
+
+### Session 45 — Reverse remap was backwards in sim_projections.py
+**What happened:** sim_projections.py built a `reverse_remap` (correct_stats_id -> wrong_lineup_id) but needed a `forward_remap` (wrong_lineup_id -> correct_stats_id). PLAYER_ID_REMAP maps wrong -> correct. The sim has lineup IDs (wrong) and needs stats IDs (correct), so it needs the forward direction. This caused Vlad Jr (115223) to get league-average fallback instead of his actual 158 wRC+ projection.
+**Rule:** Always use PLAYER_ID_REMAP directly (forward) when looking up stats from lineup IDs. The remap maps {wrong_id -> correct_stats_id}, which is exactly what the sim needs.
+
+### Session 45 — Phantom stat rows block remap fallback
+**What happened:** batter_stats had 34 rows with full_name=None and pa=None. When the sim looked up stats for a wrong player_id, it found these phantom rows and never fell through to the remap. Players got league-average projections.
+**Rule:** When checking if stats exist for a player, verify the rows are real (full_name and pa are not null). Skip phantom rows so the remap fallback triggers correctly.
+
+### Session 45 — SP quality formula was inverted in sim_full_game
+**What happened:** `sp_quality = LEAGUE_AVG_XFIP / opp_era` meant bad pitchers (high xFIP) produced sp_quality < 1, which *suppressed* the team_env_mean. Hitters facing a struggling pitcher like Luis Gil (6.88 xFIP) were getting penalized instead of boosted.
+**Rule:** The formula must be `opp_era / LEAGUE_AVG_XFIP` so that bad pitchers (high xFIP) produce sp_quality > 1, boosting the opposing hitters' team factor. Always verify the direction: bad opposing pitcher = good for hitters.
+
+### Session 45 — Flat league-average R/RBI/2B rates suppressed hitter projections
+**What happened:** The sim used flat rates (0.33 R, 0.21 RBI, 0.14 2B) for all hitters regardless of their actual production. Aaron Judge with 137 R and 114 RBI in 679 PA was getting the same R/RBI rates as a 9th-hole hitter. Doubles used a broken ISO formula that produced 0.05 2B/game vs 0.14 actual. Combined: hitters under-projected by ~2.3 DK pts.
+**Rule:** R/PA, RBI/PA, HR/PA, and 2B/H must be per-hitter, Marcel-weighted from batter_stats (r, rbi, hr, iso columns). Never use flat league averages for stats that vary significantly by hitter.
+
+### Auto-fixed DK ID mismatches: Cole Young, Gary Sanchez, Jacob Wilson, Jose Ramirez, Juan Brito, Julio Rodriguez, Luis Campusano, P.J. Higgins, Vladimir Guerrero Jr.
+**What happened:** Pipeline auto-fixed 9 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Session 47 — PMS triple-counted: team weights + noisy scores + frontend sort
+**What happened:** PMS (Pitcher Matchup Score) was applied three times: (1) team selection weights via pms_mult=(avg_pms/5)^1.5, (2) edge_mult up to +15% in sample_noisy_scores, (3) 30% weight in the frontend blendedScore sort. April 13 slate review showed projection rank vs actual rank had r=-0.128 (NEGATIVE). The top-20-by-projection averaged 69.8 actual pts vs 88.2 pool average — the sort was literally picking the worst lineups.
+**Rule:** PMS should live in ONE place only — the frontend pmsDriven sort where the user can optionally use it. Pool generation must use raw projections + correlated noise, not pre-filtered by matchup metrics that haven't proven predictive signal.
+
+### Session 47 — Park K factor double-dip on pitcher projections
+**What happened:** Pitcher K rate had park_k applied to talent_k_rate AND park_k_edge applied to the blended rate. At T-Mobile Park (K factor 117), this was 1.17 * 1.085 = 1.27x total K boost. Gilbert projected 7.3 Ks vs 5.5 PrizePicks line.
+**Rule:** Park K effect should be applied exactly once via park_k_edge on the blended rate. Talent K% already partially reflects home park from career stats.
+
+### Session 47 — Odds loader missed games when same teams play consecutive days
+**What happened:** load_odds.py used (away_team, home_team) as the lookup key. When the same teams played on consecutive days (e.g. LAD@COL Apr 17 and 18), the second day's game_pk overwrote the first. Glasnow got no odds, defaulting win_prob to 0.25 instead of ~0.65. Cost ~2.4 DK pts.
+**Rule:** Odds lookup must include game_date in the key: (away_team, home_team, game_date).
+
+### Session 47 — Park HR factor double-counted with ISO in hitter projections
+**What happened:** `_compute_pa_rates` applied `effective_park_hr` (full park_hr × park_sens) to ISO-derived hr_per_hit. But ISO already reflects the parks the batter played in (~50% home park). At Coors (HR factor 127), this was ~1.43x total HR lift instead of ~1.13x. Same issue with xb_per_hit getting full park_basic on top of ISO-derived doubles rate.
+**Rule:** When using ISO to derive HR/XB rates, apply only 50% of park deviation as an "edge" since ISO already partially captures park effects: `effective_park_hr = 1.0 + (park_hr - 1.0) * 0.50 * park_sens`.
+
+### Session 47 — Vegas implied runs double-counted in R distribution
+**What happened:** `sim_full_game` produced runs organically via the sim (HR/doubles/singles drive in runners, team_factor scaled by Vegas). Then AFTER the sim, a post-game R distribution took Vegas implied runs × team_factor and distributed 50% as additional "non-HR runs" to all batters by OBP weight. This piled Vegas-derived R points on top of already Vegas-influenced sim results.
+**Rule:** R scoring must come from the sim itself by tracking base runner identity (batter indices on bases instead of booleans). No post-game artificial R distribution. The sim naturally produces correlated R/RBI when runners are on base.
+
+### Auto-fixed DK ID mismatches: Carlos Cortes, Tyler O'Neill
+**What happened:** Pipeline auto-fixed 2 salary ID mismatch(es) in dk_salaries and added 0 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.

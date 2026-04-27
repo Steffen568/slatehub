@@ -148,6 +148,92 @@ def compute_arsenal_composite(pitch_rows: list) -> dict:
     }
 
 
+def compute_physics_matchup(pitcher_arsenal_rows: list, attack_angle, swing_path_tilt,
+                             pitcher_arm_angle) -> tuple:
+    """
+    Physics-based pitch geometry vs batter swing plane matchup.
+
+    Returns (k_adj, contact_adj):
+      k_adj >1.0 = pitcher's arsenal creates more whiff/K for this batter
+      contact_adj <1.0 = when contact is made, quality is lower (BABIP/HR suppressed)
+
+    No regression to mean. Uses stable physical measurements:
+      - Pitcher: IVB, HB, VAA (derived from release_height/extension), arm_angle
+      - Batter: attack_angle, swing_path_tilt
+
+    A Sale slider with 12" HB and low arm angle is unique — not averaged with all sliders.
+    """
+    LEAGUE_ATTACK = 12.0   # league avg batter attack angle (degrees)
+    LEAGUE_ARM    = 45.0   # league avg pitcher arm angle (degrees)
+
+    if not pitcher_arsenal_rows:
+        return 1.0, 1.0
+    if attack_angle is None:
+        attack_angle = LEAGUE_ATTACK
+    if swing_path_tilt is None:
+        swing_path_tilt = 0.0
+
+    total_usage = sum(safe(r.get('usage_pct'), 0) for r in pitcher_arsenal_rows)
+    if total_usage <= 0:
+        return 1.0, 1.0
+
+    weighted_difficulty = 0.0
+    weight_sum = 0.0
+
+    for r in pitcher_arsenal_rows:
+        u = safe(r.get('usage_pct'), 0) / total_usage
+        if u <= 0:
+            continue
+
+        # Derive VAA from release physics (same formula as generate_pool.py)
+        rh  = safe(r.get('release_height'), 6.0)
+        ext = safe(r.get('extension'), 6.5)
+        denom = max(60.5 - ext, 1.0)
+        vaa = -math.degrees(math.atan((rh - 2.5) / denom))  # negative = downward
+
+        ivb = safe(r.get('ivb'), 8.0)   # inches of induced vertical break
+        hb  = safe(r.get('hb'), 0.0)    # inches of horizontal break
+
+        # 1. Vertical plane mismatch: batter's attack angle vs pitch approach angle (VAA)
+        #    Small gap = swing plane meets pitch trajectory = easier to square up
+        #    Large gap = planes diverge = harder contact
+        vert_gap   = abs(attack_angle - abs(vaa))
+        vert_score = clip(vert_gap / 15.0, 0.0, 1.0)
+
+        # 2. IVB vs attack angle conflict
+        #    High IVB (rising fastball effect) + high attack angle: ball rides through uppercut
+        #    Low IVB (sinker) + low attack angle: ball drops below flat swing
+        #    Both = same-sign deviations from average → conflict
+        ivb_dev      = ivb - 8.0              # positive = more rise than avg
+        aa_dev       = attack_angle - LEAGUE_ATTACK
+        ivb_conflict = clip(ivb_dev * aa_dev * 0.004, 0.0, 1.0)
+
+        # 3. Horizontal break vs swing path tilt
+        #    Large HB with low swing tilt = batter can't adjust laterally
+        lat_mismatch = clip((abs(hb) - abs(swing_path_tilt) * 1.5) / 18.0, 0.0, 1.0)
+
+        pitch_difficulty = (vert_score * 0.45 + ivb_conflict * 0.35 + lat_mismatch * 0.20)
+        weighted_difficulty += pitch_difficulty * u
+        weight_sum += u
+
+    if weight_sum <= 0:
+        return 1.0, 1.0
+
+    raw = weighted_difficulty / weight_sum  # 0.0 = perfect alignment, ~0.6 = extreme mismatch
+
+    # Arm angle layer: low-slot pitchers (sidearm) disrupt high attack angle batters
+    if pitcher_arm_angle is not None:
+        arm_dev      = pitcher_arm_angle - LEAGUE_ARM   # negative = lower slot
+        arm_conflict = clip(-arm_dev * (attack_angle - LEAGUE_ATTACK) * 0.001, 0.0, 0.15)
+        raw = clip(raw + arm_conflict, 0.0, 1.0)
+
+    # Map raw difficulty to independent rate adjustments
+    # Max effect: +8% K rate, -5% contact quality at raw=1.0
+    k_adj       = clip(1.0 + raw * 0.08, 0.94, 1.10)
+    contact_adj = clip(1.0 - raw * 0.05, 0.92, 1.05)
+    return k_adj, contact_adj
+
+
 def stuff_tier_k(arsenal: dict) -> float:
     """Tier 1: Expected K% from pitch quality (Stuff+ and velo)."""
     stuff = arsenal.get('stuff_plus', 100.0)
@@ -630,8 +716,8 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
     # ── Step 2: Build priors from predictive metrics ──────────────────────
 
     # K% prior: Stuff+ and swing-and-miss drive strikeout ability
-    k_prior = clip(0.10 + (pitching_plus - 100) * 0.0035 + swstr_pct * 0.60, 0.10, 0.40)
-    # At avg (Pitch+=100, swstr=0.11): 0.10 + 0 + 0.066 = 0.166
+    k_prior = clip(0.10 + (pitching_plus - 100) * 0.005 + swstr_pct * 0.80, 0.10, 0.40)
+    # At avg (Pitch+=100, swstr=0.11): 0.10 + 0 + 0.088 = 0.188 (tuned: wider sensitivity)
 
     # BB% prior: Location+ (command) controls walks
     bb_prior = clip(0.12 - (location_plus - 100) * 0.0015 - (pitching_plus - 100) * 0.0005, 0.03, 0.15)
@@ -640,10 +726,10 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
     # xFIP prior: Pitching+ is the best single predictor of pitcher quality
     # Regressive prior: starts ABOVE league avg to prevent low-ER inflation.
     # Elite pitchers get pulled down by data, average pitchers stay regressed.
-    xfip_prior = clip(4.80 - (pitching_plus - 100) * 0.020 - (stuff_plus - 100) * 0.008, 3.00, 6.00)
+    xfip_prior = clip(4.80 - (pitching_plus - 100) * 0.030 - (stuff_plus - 100) * 0.008, 3.00, 6.00)
     # At avg (Pitch+=100, Stuff+=100): 4.80 (above 3.90 league avg — forces regression)
-    # Elite (Pitch+=120, Stuff+=115): 4.80 - 0.40 - 0.12 = 4.28
-    # Bad (Pitch+=80): 4.80 + 0.40 = 5.20
+    # Elite (Pitch+=120, Stuff+=115): 4.80 - 0.60 - 0.12 = 4.08 (tuned: wider sensitivity)
+    # Bad (Pitch+=80): 4.80 + 0.60 = 5.40
 
     # HR/9 prior: derive from Pitching+ (xFIP already handles HR normalization)
     hr9_prior = clip(1.30 - (pitching_plus - 100) * 0.005, 0.60, 2.00)
@@ -1051,7 +1137,10 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
                      vegas_ip: float = None,
                      vegas_ks: float = None,
                      pitcher_split_data: dict = None,
-                     opp_hand_pct: float = None) -> np.ndarray:
+                     opp_hand_pct: float = None,
+                     lineup_k_adj: float = 1.0,
+                     lineup_contact_adj: float = 1.0,
+                     is_opener: bool = False) -> np.ndarray:
     """
     Simulate n_sims starts for one pitcher. Returns array of DK points per sim.
 
@@ -1080,7 +1169,9 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # ── IP projection: blend Vegas + talent ─────────────────────────────────
     # Talent-based IP (raw — no matchup adjustment; Vegas already prices matchup)
     talent_ip = talent['ip_per_gs']
-    if vegas_ip:
+    if is_opener:
+        proj_ip = 1.0  # $4000 salary → hard 1 IP — no blending with talent
+    elif vegas_ip:
         proj_ip = vegas_ip * VEGAS_IP_WEIGHT + talent_ip * (1.0 - VEGAS_IP_WEIGHT)
     else:
         # No Vegas anchor — regress 50% toward league avg (5.0 IP/GS).
@@ -1138,14 +1229,18 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
         k_rate = clip(regressed_k * park_k_edge_p, 0.10, 0.45)
     # Pitching+ K adjustment REMOVED — Bayesian K% prior already incorporates
     # Pitching+ via the k_prior formula. Applying it again here was double-counting.
-    bb_rate = clip(split_bb * (1.0 + (opp_quality - 1.0) * 0.20) * park_bb, 0.03, 0.16)
+    # Physics matchup: K rate adjusted by swing plane geometry, contact quality by movement mismatch
+    k_rate = clip(k_rate * lineup_k_adj, 0.10, 0.45)
+    effective_opp_quality = clip(opp_quality / lineup_contact_adj, 0.65, 1.55)
+
+    bb_rate = clip(split_bb * (1.0 + (effective_opp_quality - 1.0) * 0.20) * park_bb, 0.03, 0.16)
     contact_rate = max(0.15, 1.0 - k_rate - bb_rate)
 
     # Hit rate when ball in play
     park_basic_edge_p = 1.0 + (park_basic - 1.0) * 0.50
-    hit_on_contact = clip(talent['babip'] * opp_quality * park_basic_edge_p, 0.22, 0.38)
+    hit_on_contact = clip(talent['babip'] * effective_opp_quality * park_basic_edge_p, 0.22, 0.38)
     # HR rate per batter faced
-    hr_rate = clip(talent['hr9'] / (PA_PER_IP * 9) * park_hr * wx_hr * opp_quality, 0.005, 0.060)
+    hr_rate = clip(talent['hr9'] / (PA_PER_IP * 9) * park_hr * wx_hr * effective_opp_quality, 0.005, 0.060)
 
     # Win probability
     win_prob = 0.25
@@ -1186,7 +1281,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
         era_anchor *= lob_adj
     # Park HR factor: dampen to ~45% effect on ER (HR accounts for ~35% of runs)
     park_er_adj = 1.0 + (park_hr - 1.0) * 0.45
-    er_per_ip = era_anchor / 9.0 * opp_quality * park_er_adj
+    er_per_ip = era_anchor / 9.0 * effective_opp_quality * park_er_adj
     er_per_ip *= 1.0 + (wx_hr - 1.0) * 0.45  # same dampening for weather HR effect
     # Pitching+ ER adjustment REMOVED — Bayesian xFIP prior already incorporates
     # Pitching+ quality. Applying it again here was double-counting.
@@ -1746,7 +1841,7 @@ def fetch_data(target_date: str) -> dict:
     for i in range(0, len(all_stat_ids), 500):
         chunk = all_stat_ids[i:i+500]
         rows = sb.table('bat_tracking').select(
-            'player_id,season,swing_length'
+            'player_id,season,swing_length,attack_angle,swing_path_tilt,bat_speed,squared_up_pct,blast_pct'
         ).in_('player_id', chunk).in_('season', [SEASON, SEASON-1]).execute().data or []
         for r in rows:
             if r['player_id'] not in bat_tracking:  # prefer current season (fetched first)
@@ -1780,20 +1875,24 @@ def fetch_data(target_date: str) -> dict:
 
     # Pitch arsenal (for three-tier pitcher model + arm angle)
     arsenal_data = {}
+    arsenal_rows_by_pitcher = {}
     if sp_ids:
         arsenal_rows = []
         sp_list = list(sp_ids)
         for i in range(0, len(sp_list), 150):
             chunk = sp_list[i:i+150]
             rows = sb.table('pitch_arsenal').select(
-                'player_id,season,pitch_type,usage_pct,stuff_plus,velo,arm_angle,whiff_pct,k_pct,xwoba'
+                'player_id,season,pitch_type,usage_pct,stuff_plus,velo,arm_angle,whiff_pct,k_pct,xwoba,ivb,hb,release_height,extension'
             ).in_('player_id', chunk).in_('season', [SEASON, SEASON-1]).execute().data or []
             arsenal_rows.extend(rows)
         # Group by (player_id, season) and compute usage-weighted composites
         from collections import defaultdict
         grouped = defaultdict(list)
+        arsenal_rows_by_pitcher = defaultdict(list)  # pid -> current-season pitch rows
         for r in arsenal_rows:
             grouped[(r['player_id'], r['season'])].append(r)
+            if r['season'] == SEASON:
+                arsenal_rows_by_pitcher[r['player_id']].append(r)
         for (pid, season), pitch_rows in grouped.items():
             composite = compute_arsenal_composite(pitch_rows)
             if composite:
@@ -1801,6 +1900,9 @@ def fetch_data(target_date: str) -> dict:
                 if pid not in arsenal_data or season == SEASON:
                     arsenal_data[pid] = composite
         print(f"  Pitch arsenal: {len(arsenal_data)} pitchers with composites")
+
+    # (batter_pitch_type_splits removed — replaced by physics-based matchup using
+    #  IVB/HB/VAA/arm_angle vs batter attack_angle/swing_path_tilt from bat_tracking)
 
     # Batter splits (also include reverse-remapped IDs)
     # Load both seasons with season key, then blend PA-weighted
@@ -1997,6 +2099,7 @@ def fetch_data(target_date: str) -> dict:
         'pitcher_props': pitcher_props,
         'bullpen_quality': bullpen_quality,
         'arsenal_data': arsenal_data,
+        'arsenal_rows_by_pitcher': arsenal_rows_by_pitcher,
         'bat_tracking': bat_tracking,
         'sp_salaries': sp_salaries,
         'catcher_poptime': catcher_poptime,
@@ -2420,14 +2523,36 @@ def run():
                 opp_team_id, sp_hand, odds_row, is_home
             )
 
+            # Physics matchup: pitch geometry vs opposing lineup swing planes
+            sp_arsenal_rows = data.get('arsenal_rows_by_pitcher', {}).get(sp_id, [])
+            sp_arm_angle = talent.get('arm_angle')
+            opp_lineup_ids = [
+                lu['player_id'] for lu in data['lineups']
+                if lu.get('team_id') == opp_team_id and lu.get('batting_order')
+            ]
+            k_adjs, contact_adjs = [], []
+            for pid in opp_lineup_ids:
+                bt = data.get('bat_tracking', {}).get(pid, {})
+                k_a, c_a = compute_physics_matchup(
+                    sp_arsenal_rows, bt.get('attack_angle'), bt.get('swing_path_tilt'), sp_arm_angle
+                )
+                k_adjs.append(k_a)
+                contact_adjs.append(c_a)
+            lineup_k_adj       = sum(k_adjs) / len(k_adjs) if k_adjs else 1.0
+            lineup_contact_adj = sum(contact_adjs) / len(contact_adjs) if contact_adjs else 1.0
+            if lineup_k_adj != 1.0 or lineup_contact_adj != 1.0:
+                print(f"    Physics matchup {pitcher_team} sp={sp_id}: k_adj={lineup_k_adj:.3f} contact_adj={lineup_contact_adj:.3f}")
+
             # Vegas pitcher props (IP and K lines)
             props = data.get('pitcher_props', {}).get(sp_id)
             v_ip = safe(props.get('implied_ip')) if props else None
             v_ks = safe(props.get('implied_ks')) if props else None
             # $4000 opener detection: reliever-priced SP defaults to 1 IP
+            is_opener = False
             if not v_ip and data.get('sp_salaries', {}).get(sp_id, 99999) <= 4000:
                 v_ip = 1.0
                 v_ks = v_ks or 1.0
+                is_opener = True  # hard cap — real props override this flag above
 
             # Opposing lineup handedness composition for pitcher splits
             p_splits = data['pitcher_splits'].get(sp_id)
@@ -2459,7 +2584,9 @@ def run():
                 talent, opp_qual, park_row, wx_row, odds_row,
                 is_home, n_sims, rng,
                 vegas_ip=v_ip, vegas_ks=v_ks,
-                pitcher_split_data=p_splits, opp_hand_pct=opp_hand_pct
+                pitcher_split_data=p_splits, opp_hand_pct=opp_hand_pct,
+                lineup_k_adj=lineup_k_adj, lineup_contact_adj=lineup_contact_adj,
+                is_opener=is_opener
             )
 
             mean   = float(np.mean(dk_dist))
@@ -2476,26 +2603,70 @@ def run():
             # Sim still used for distribution (P10, P50, P90, SD).
             PA_PER_IP = 4.3
             talent_ip = talent['ip_per_gs']
-            # IP: regress 50% toward 5.0 league avg (no Vegas props available)
-            exp_ip = talent_ip * 0.50 + 5.0 * 0.50
+            # IP: opener hard cap takes priority. Real Vegas props blend with talent.
+            # Otherwise regress toward 5.0 league avg based on career IP sample.
+            if is_opener:
+                exp_ip = 1.0  # $4000 salary → hard 1 IP cap, no blending
+            elif v_ip:
+                VEGAS_IP_WEIGHT = 0.50
+                exp_ip = v_ip * VEGAS_IP_WEIGHT + talent_ip * (1.0 - VEGAS_IP_WEIGHT)
+            else:
+                career_ip = sum(safe((p_stats.get(yr) or {}).get('ip'), 0) for yr in [SEASON, SEASON-1, SEASON-2])
+                ip_reg = clip(0.50 - (career_ip - 100) * 0.001, 0.25, 0.50)
+                exp_ip = talent_ip * (1.0 - ip_reg) + 5.0 * ip_reg
             exp_bf = exp_ip * PA_PER_IP
 
-            # K rate: talent with park adjustment and 15% league-avg regression
+            # K rate: Bayesian talent with current-season pull.
+            # The Bayesian model under-weights current season early on (27 IP vs 151 IP prior year).
+            # Blend in current-season observed K% when available — pulls bad K pitchers
+            # down and good K pitchers up, proportional to current-season sample.
             park_k = safe(park_row.get('k_factor'), 100) / 100.0 if park_row else 1.0
-            regressed_k = talent['k_pct'] * 0.75 + LEAGUE_AVG_K_PCT * 0.25
             park_k_edge_dc = 1.0 + (park_k - 1.0) * 0.50
-            exp_k_rate = clip(regressed_k * park_k_edge_dc, 0.10, 0.45)
+            bayesian_k = talent['k_pct']
+            curr_row = p_stats.get(SEASON)
+            curr_k = safe(curr_row.get('k_pct')) if curr_row else None
+            curr_ip_k = safe(curr_row.get('ip'), 0) if curr_row else 0
+            if curr_k and curr_k > 0.05 and curr_ip_k >= 15:
+                # Asymmetric blend: pull DOWN more aggressively than UP.
+                # A pitcher with career K%=0.30 showing 0.22 early → could be real decline.
+                # A pitcher with career K%=0.30 showing 0.35 early → likely noise/opponent quality.
+                # Weight declines at full strength, improvements at half strength.
+                curr_k_wt = clip(curr_ip_k / (curr_ip_k + 50.0), 0.15, 0.70)
+                if curr_k < bayesian_k:
+                    # Decline: full weight — declining K% is sticky (fatigue, stuff loss, etc.)
+                    blended_k = bayesian_k * (1.0 - curr_k_wt) + curr_k * curr_k_wt
+                else:
+                    # Improvement: half weight — early-season K spikes are often schedule-driven
+                    blended_k = bayesian_k * (1.0 - curr_k_wt * 0.5) + curr_k * curr_k_wt * 0.5
+            else:
+                blended_k = bayesian_k
+            exp_k_rate = clip(blended_k * park_k_edge_dc, 0.08, 0.45)
+            exp_ks = exp_bf * exp_k_rate
+
+            # Pitcher quality factor: dampens matchup effect for mediocre pitchers.
+            # Elite pitchers (high K%, low xFIP) get full matchup benefit.
+            # Bad pitchers get a muted version — they can't capitalize on weak lineups.
+            # Uses the blended K rate (includes current-season pull) for more responsive signal.
+            k_ratio = exp_k_rate / LEAGUE_AVG_K_PCT  # <1 = below avg K rate
+            xfip_ratio = LEAGUE_AVG_XFIP / max(talent['xfip'], 2.5)  # <1 = worse than avg xFIP
+            pitcher_quality = clip(k_ratio * 0.6 + xfip_ratio * 0.4, 0.2, 1.0)
+            # Physics matchup: contact quality adjustment (contact_adj < 1.0 = pitcher advantage)
+            opp_qual_with_physics = clip(opp_qual / lineup_contact_adj, 0.65, 1.55)
+            # Dampen opp_qual deviation: bad pitcher → opp_qual pushed toward 1.0
+            eff_opp_qual = 1.0 + (opp_qual_with_physics - 1.0) * pitcher_quality
+            # K rate: physics swing plane mismatch boosts strikeout rate
+            exp_k_rate = clip(exp_k_rate * lineup_k_adj, 0.08, 0.45)
             exp_ks = exp_bf * exp_k_rate
 
             # BB rate: talent with park and matchup adjustment
             park_bb = safe(park_row.get('bb_factor'), 100) / 100.0 if park_row else 1.0
-            exp_bb_rate = clip(talent['bb_pct'] * clip(1.0 + (opp_qual - 1.0) * 0.20, 0.88, 1.15) * park_bb, 0.03, 0.16)
+            exp_bb_rate = clip(talent['bb_pct'] * clip(1.0 + (eff_opp_qual - 1.0) * 0.20, 0.88, 1.15) * park_bb, 0.03, 0.16)
             exp_bb = exp_bf * exp_bb_rate
 
             # Hit rate: BABIP adjusted for matchup and park
             park_basic = safe(park_row.get('basic_factor'), 100) / 100.0 if park_row else 1.0
             park_basic_edge = 1.0 + (park_basic - 1.0) * 0.50
-            exp_hit_rate = clip(talent['babip'] * opp_qual * park_basic_edge, 0.22, 0.38)
+            exp_hit_rate = clip(talent['babip'] * eff_opp_qual * park_basic_edge, 0.22, 0.38)
             contact_rate = max(0.15, 1.0 - exp_k_rate - exp_bb_rate)
             exp_h = exp_bf * contact_rate * exp_hit_rate
 
@@ -2512,7 +2683,7 @@ def run():
             wx_hr = weather_hr_mult(wx_row)
             park_er_adj = 1.0 + (park_hr_f - 1.0) * 0.45
             wx_er_adj = 1.0 + (wx_hr - 1.0) * 0.45
-            exp_er = era_anchor * exp_ip / 9.0 * opp_qual * park_er_adj * wx_er_adj
+            exp_er = era_anchor * exp_ip / 9.0 * eff_opp_qual * park_er_adj * wx_er_adj
 
             # Win probability
             exp_win = 0.25
