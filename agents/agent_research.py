@@ -44,8 +44,8 @@ def run(logger: RunLogger) -> RunLogger:
     print(f"  Agent 4 — Post-Contest Research")
     print(f"{'='*55}")
 
-    # Ensure actuals are loaded
-    _run_script('load_actuals.py', 'Load Actual DK Points', logger)
+    # Ensure actuals are loaded — use 3-day window to catch any missed dates
+    _run_script('load_actuals.py --days 3', 'Load Actual DK Points', logger)
 
     # Run research analysis with 7-day range for stronger backtesting sample
     today = date.today()

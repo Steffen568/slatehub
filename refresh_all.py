@@ -185,7 +185,7 @@ if POSTGAME:
     run_script('load_game_logs.py --days 3', "Game Logs — today's results",  logger)
     run_script('load_contest_data.py', 'DK Contest Data — final counts', logger)
     run_script('load_actual_ownership.py',  'Actual Ownership — post-lock',  logger)
-    run_script('load_actuals.py',           'Actual DK Points — boxscores',  logger)
+    run_script('load_actuals.py --days 3',  'Actual DK Points — boxscores',  logger)
     # Post-contest research (projection accuracy, ownership accuracy, recommendations)
     try:
         from agents.agent_research import run as run_research

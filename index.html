@@ -9004,7 +9004,43 @@ function updateLineupStatusForTeam(data, teamId) {
 //   Platoon splits (3) > Stuff/Barrel/Plane/K/Contact (2 each) > Discipline/Form (1 each)
 // Total max = 15. Score = (earned / available) * 10.
 // Extra params (bSplits, vaa, l7xwoba) are optional — score adapts to available data.
-function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba) {
+function computePhysicsMatchup(arsenalRows, attackAngle, swingPathTilt, pitcherArmAngle) {
+  const LEAGUE_ATTACK = 12.0, LEAGUE_ARM = 45.0;
+  const clip = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const safe = (v, fb) => (v != null && isFinite(v)) ? v : (fb ?? 0);
+  if (!arsenalRows || !arsenalRows.length) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0 };
+  if (attackAngle == null) attackAngle = LEAGUE_ATTACK;
+  if (swingPathTilt == null) swingPathTilt = 0.0;
+  const totalUsage = arsenalRows.reduce((s, r) => s + safe(r.usage_pct, 0), 0);
+  if (totalUsage <= 0) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0 };
+  let weightedDifficulty = 0, weightSum = 0;
+  for (const r of arsenalRows) {
+    const u = safe(r.usage_pct, 0) / totalUsage;
+    if (u <= 0) continue;
+    const rh = safe(r.release_height, 6.0), ext = safe(r.extension, 6.5);
+    const vaa = -(Math.atan((rh - 2.5) / Math.max(60.5 - ext, 1.0)) * 180 / Math.PI);
+    const ivb = safe(r.ivb, 8.0), hb = safe(r.hb, 0.0);
+    const vertGap = Math.abs(attackAngle - Math.abs(vaa));
+    const vertScore = clip(vertGap / 15.0, 0, 1);
+    const ivbConflict = clip((ivb - 8.0) * (attackAngle - LEAGUE_ATTACK) * 0.004, 0, 1);
+    const latMismatch = clip((Math.abs(hb) - Math.abs(swingPathTilt) * 1.5) / 18.0, 0, 1);
+    weightedDifficulty += (vertScore * 0.45 + ivbConflict * 0.35 + latMismatch * 0.20) * u;
+    weightSum += u;
+  }
+  if (weightSum <= 0) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0 };
+  let raw = weightedDifficulty / weightSum;
+  if (pitcherArmAngle != null) {
+    const armDev = pitcherArmAngle - LEAGUE_ARM;
+    raw = clip(raw + clip(-armDev * (attackAngle - LEAGUE_ATTACK) * 0.001, 0, 0.15), 0, 1);
+  }
+  return {
+    kAdj:       clip(1.0 + raw * 0.08, 0.94, 1.10),
+    contactAdj: clip(1.0 - raw * 0.05, 0.92, 1.05),
+    difficulty: raw,
+  };
+}
+
+function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, arsenalRows) {
   const components = [];
   const toD = v => (v == null ? null : v > 1 ? v / 100 : v);
   const toR = v => (v == null ? null : v > 1 ? v : v * 100);
@@ -9068,13 +9104,14 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba) {
     components.push({ name: 'Barrel Opportunity', pts: p, max: 2, pBrl, hBrl, hHH });
   }
 
-  // 4. Swing Plane Alignment (2 pts) — mechanically grounded
+  // 4. Physics Matchup (3 pts) — pitch geometry vs swing plane
   const atk = bt?.attack_angle ?? null;
-  const vaaVal = vaa ?? currentPitcherVAA ?? null;
-  if (atk != null && vaaVal != null) {
-    const absGap = Math.abs(atk - Math.abs(vaaVal));
-    const p = absGap <= 3 ? 2 : absGap <= 7 ? 1 : 0;
-    components.push({ name: 'Swing Plane Alignment', pts: p, max: 2, atk, vaa: vaaVal, gap: absGap });
+  const tilt = bt?.swing_path_tilt ?? null;
+  const spArm = pd?.arm_angle ?? null;
+  if (arsenalRows && arsenalRows.length) {
+    const { kAdj, contactAdj, difficulty } = computePhysicsMatchup(arsenalRows, atk, tilt, spArm);
+    const p = difficulty >= 0.55 ? 3 : difficulty >= 0.35 ? 2 : difficulty >= 0.15 ? 1 : 0;
+    components.push({ name: 'Physics Matchup', pts: p, max: 3, difficulty, kAdj, contactAdj, atk, tilt, spArm });
   }
 
   // 5. K Environment (2 pts) — K% stabilizes after ~150 BF
@@ -9177,7 +9214,7 @@ function renderAllPMS() {
       ? form.games.slice(0, 7).reduce((s, g) => s + (g.xwoba || 0), 0) / Math.min(form.games.length, 7)
       : null;
 
-    const { score, grade, cls, pSplit } = computePMS(pd, _activeSplits, bt, bStats, batHand, bSplits, null, l7xwoba);
+    const { score, grade, cls, pSplit } = computePMS(pd, _activeSplits, bt, bStats, batHand, bSplits, null, l7xwoba, _activeArsenal);
 
     // Update main row badge
     const badge = rowEl.querySelector('.br-matchup .matchup-badge');
@@ -9548,7 +9585,7 @@ function computeStackGrade() {
     const bt      = cachedBatTracking[pid]  || cachedBatTracking[String(pid)]  || null;
     const bStats  = _cachedBatterStats[pid] || _cachedBatterStats[String(pid)] || null;
     const batHand = rowEl.querySelector('.br-hand')?.textContent?.trim() || null;
-    const { score } = computePMS(_activePd, _activeSplits, bt, bStats, batHand);
+    const { score } = computePMS(_activePd, _activeSplits, bt, bStats, batHand, null, null, null, _activeArsenal);
     pmsTotal += score;
     pmsCount++;
     if (i <= 4 && score >= 7) topOrderElite++;
@@ -9757,7 +9794,7 @@ function renderEnvironmentBreakdown() {
     const bt      = cachedBatTracking[pid]  || cachedBatTracking[String(pid)]  || null;
     const bStats  = _cachedBatterStats[pid] || _cachedBatterStats[String(pid)] || null;
     const batHand = rowEl.querySelector('.br-hand')?.textContent?.trim() || null;
-    const { score } = computePMS(_activePd, _activeSplits, bt, bStats, batHand);
+    const { score } = computePMS(_activePd, _activeSplits, bt, bStats, batHand, null, null, null, _activeArsenal);
     pmsTotal += score; pmsCount++;
     if (i <= 4 && score >= 7) topOrderElite++;
   }
@@ -10535,7 +10572,7 @@ function renderPMSBreakdown(rowId) {
   const toR = v => (v == null ? null : v > 1 ? v : v * 100);
 
   // computePMS now returns { score, grade, cls, pSplit, components, totalPts, maxPts }
-  const result = computePMS(pd, pSplits, bt, bStats, batHand, bSplits, null, l7xwoba);
+  const result = computePMS(pd, pSplits, bt, bStats, batHand, bSplits, null, l7xwoba, _activeArsenal);
   const { score, grade, cls: gradeCls, pSplit, components: comps, totalPts, maxPts } = result;
 
   // Build display descriptors for each component
@@ -10565,11 +10602,15 @@ function renderPMSBreakdown(rowId) {
              : 'Low barrel rate on both ends — power upside is limited';
         break;
       }
-      case 'Swing Plane Alignment': {
-        value = `Attack ${c.atk}° · VAA ${c.vaa?.toFixed(1)}° · Gap ${c.gap?.toFixed(1)}°`;
-        desc = c.pts === 2 ? `${c.gap?.toFixed(1)}° gap — swing is on-plane with this delivery, maximizing the hard-contact window`
-             : c.pts === 1 ? `${c.gap?.toFixed(1)}° gap — slight mismatch, solid contact possible but the window is narrower`
-             : `${c.gap?.toFixed(1)}° gap — significant plane mismatch, structurally limits hard contact`;
+      case 'Physics Matchup': {
+        const atkStr = c.atk != null ? `Attack ${c.atk.toFixed(1)}°` : '';
+        const armStr = c.spArm != null ? ` · Arm ${c.spArm.toFixed(0)}°` : '';
+        const kStr   = c.kAdj != null ? ` · K-adj ${c.kAdj.toFixed(3)}` : '';
+        value = [atkStr + armStr + kStr].filter(Boolean).join('') || 'Physics geometry';
+        desc = c.pts >= 3 ? 'Severe pitch geometry mismatch — IVB/HB/arm angle creates structural contact difficulty for this hitter'
+             : c.pts === 2 ? 'Moderate physics mismatch — pitch shape conflicts with this swing plane'
+             : c.pts === 1 ? 'Slight plane mismatch — pitcher has minor geometry edge'
+             : 'Neutral physics matchup — pitch geometry aligns well with this swing plane';
         break;
       }
       case 'K Environment': {

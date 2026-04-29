@@ -189,13 +189,16 @@ df_bb = read_sheet('BattedBall')
 df_pit_plus = read_sheet('Pitching+')
 df_stuff = read_sheet('Stuff+')
 df_loc = read_sheet('Location+')
+df_adv = read_sheet('Pitcehr Advanced')
+df_disc = read_sheet('Plate Discipline')
 
 # Merge pitching sheets by Name+Team
 pitcher_data = {}  # mlbam_id -> dict of updates
 
 for sheet_name, df in [('Dash', df_dash), ('BattedBall', df_bb),
                         ('Pitching+', df_pit_plus), ('Stuff+', df_stuff),
-                        ('Location+', df_loc)]:
+                        ('Location+', df_loc), ('Advanced', df_adv),
+                        ('PlateDiscipline', df_disc)]:
     if df.empty:
         continue
     matched = 0
@@ -238,6 +241,19 @@ for sheet_name, df in [('Dash', df_dash), ('BattedBall', df_bb),
             d['stuff_plus'] = get(row, df, 'Stuff+')
             d['location_plus'] = get(row, df, 'Location+')
             d['pitching_plus'] = get(row, df, 'Pitching+')
+
+        elif sheet_name == 'Advanced':
+            d['siera'] = get(row, df, 'SIERA')
+            d['k_pct'] = get(row, df, 'K%')
+            d['bb_pct'] = get(row, df, 'BB%')
+            d['whip'] = get(row, df, 'WHIP')
+
+        elif sheet_name == 'PlateDiscipline':
+            # Derive SwStr% from Swing% and Contact% — SwStr% = Swing% * (1 - Contact%)
+            swing = get(row, df, 'Swing%')
+            contact = get(row, df, 'Contact%')
+            if swing is not None and contact is not None:
+                d['swstr_pct'] = round(swing * (1.0 - contact), 4)
 
     print(f"  {sheet_name}: matched {matched} pitchers")
 
