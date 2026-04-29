@@ -246,7 +246,7 @@ def compute_pms(pd, p_splits, bt, b_stats, bat_hand, b_splits=None, vaa=None, l7
         k_a, c_a = _physics_matchup(sp_arsenal_rows, atk, tilt, sp_arm_angle)
         # physics_difficulty: 0.0 = perfect alignment (easy for batter), 1.0 = extreme mismatch
         physics_difficulty = ((k_a - 1.0) / 0.08 + (1.0 - c_a) / 0.05) / 2.0
-        p = 3 if physics_difficulty >= 0.55 else 2 if physics_difficulty >= 0.35 else 1 if physics_difficulty >= 0.15 else 0
+        p = 3 if physics_difficulty <= 0.15 else 2 if physics_difficulty <= 0.35 else 1 if physics_difficulty <= 0.55 else 0
         pts += p; max_pts += 3
 
     # 5. K Environment (2 pts)

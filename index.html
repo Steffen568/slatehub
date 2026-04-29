@@ -9110,7 +9110,7 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
   const spArm = pd?.arm_angle ?? null;
   if (arsenalRows && arsenalRows.length) {
     const { kAdj, contactAdj, difficulty } = computePhysicsMatchup(arsenalRows, atk, tilt, spArm);
-    const p = difficulty >= 0.55 ? 3 : difficulty >= 0.35 ? 2 : difficulty >= 0.15 ? 1 : 0;
+    const p = difficulty <= 0.15 ? 3 : difficulty <= 0.35 ? 2 : difficulty <= 0.55 ? 1 : 0;
     components.push({ name: 'Physics Matchup', pts: p, max: 3, difficulty, kAdj, contactAdj, atk, tilt, spArm });
   }
 
@@ -10607,10 +10607,10 @@ function renderPMSBreakdown(rowId) {
         const armStr = c.spArm != null ? ` · Arm ${c.spArm.toFixed(0)}°` : '';
         const kStr   = c.kAdj != null ? ` · K-adj ${c.kAdj.toFixed(3)}` : '';
         value = [atkStr + armStr + kStr].filter(Boolean).join('') || 'Physics geometry';
-        desc = c.pts >= 3 ? 'Severe pitch geometry mismatch — IVB/HB/arm angle creates structural contact difficulty for this hitter'
-             : c.pts === 2 ? 'Moderate physics mismatch — pitch shape conflicts with this swing plane'
-             : c.pts === 1 ? 'Slight plane mismatch — pitcher has minor geometry edge'
-             : 'Neutral physics matchup — pitch geometry aligns well with this swing plane';
+        desc = c.pts >= 3 ? 'Favorable physics — pitch geometry aligns with this swing plane, maximizing the hard-contact window'
+             : c.pts === 2 ? 'Slight hitter edge — pitch shape is manageable for this swing plane'
+             : c.pts === 1 ? 'Moderate mismatch — pitcher\'s geometry creates some contact difficulty'
+             : 'Severe geometry mismatch — IVB/HB/arm angle structurally limits hard contact for this hitter';
         break;
       }
       case 'K Environment': {

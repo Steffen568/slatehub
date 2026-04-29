@@ -12318,7 +12318,7 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
     const armAngles = arsenalRows.map(r => parseFloat(r.arm_angle)).filter(v => !isNaN(v));
     const spArm = armAngles.length ? armAngles.reduce((s,v)=>s+v,0)/armAngles.length : null;
     const { kAdj, contactAdj, difficulty } = computePhysicsMatchup(arsenalRows, atk, tilt, spArm);
-    const p = difficulty >= 0.55 ? 3 : difficulty >= 0.35 ? 2 : difficulty >= 0.15 ? 1 : 0;
+    const p = difficulty <= 0.15 ? 3 : difficulty <= 0.35 ? 2 : difficulty <= 0.55 ? 1 : 0;
     components.push({ name: 'Physics Matchup', pts: p, max: 3, difficulty, kAdj, contactAdj });
   }
 
