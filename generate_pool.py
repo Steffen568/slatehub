@@ -114,6 +114,16 @@ def compute_sp_grade(ps):
         if a >= thresh: return letter
     return 'F'
 
+def _get_stack_implied(lu_players, stack_team):
+    """Return approx implied runs for the stack team's game using game_total / 2."""
+    stack_hitter = next((p for p in lu_players if p['team'] == stack_team
+                         and not p['is_pitcher']), None)
+    if not stack_hitter:
+        return 4.5
+    gt = stack_hitter.get('game_total', 9.0)
+    return gt / 2.0
+
+
 def _physics_matchup(pitcher_rows, attack_angle, swing_path_tilt, pitcher_arm_angle):
     """
     Physics-based pitch geometry vs batter swing plane matchup.
@@ -1022,10 +1032,27 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
 
         H_W_GAME, H_W_TEAM, H_W_INDIV = 0.387, 0.447, 0.806
         P_W_GAME, P_W_TEAM, P_W_INDIV = -0.30, 0.15, 0.94
+        # Empirical PA opportunity by batting order slot (MLB.com batting order analysis)
+        BAT_ORDER_PA = {1: 1.13, 2: 1.10, 3: 1.07, 4: 1.03, 5: 1.00,
+                        6: 0.97, 7: 0.97, 8: 0.95, 9: 0.93}
 
         for i, p in enumerate(pool):
-            # Blend toward ceiling for GPP upside
-            mean = p['proj'] * (1 - UPSIDE_BLEND) + p['ceiling'] * UPSIDE_BLEND
+            # Resolve PMS: default to neutral (5) when missing or low-confidence
+            pms_val = p.get('pms') or p.get('avg_pms') or 5.0
+            pms_confidence = p.get('pms_confidence', 1.0)
+            if pms_confidence < 0.5 or not pms_val:
+                pms_val = 5.0
+
+            if p['is_pitcher']:
+                # Pitcher mean: ceiling drives upside; no PA-slot adjustment
+                mean = p['ceiling']
+            else:
+                # Hitter mean: ceiling × matchup quality × batting-order PA opportunity
+                # PMS 5 (neutral) = 1.0x, PMS 10 = 2.0x, PMS 1 = 0.2x
+                pms_norm = pms_val / 5.0
+                bo = int(p.get('batting_order') or 5)
+                mean = p['ceiling'] * pms_norm * BAT_ORDER_PA.get(bo, 1.0)
+
             sd = (p['ceiling'] - p['floor']) / 3.3 if p['ceiling'] > p['floor'] else max(mean * 0.20, 0.5)
             sd = max(sd, 0.5)
 
@@ -1039,18 +1066,6 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
                 noise = H_W_GAME * zg + H_W_TEAM * zt + H_W_INDIV * zi
 
             scores[i] = max(0, mean + sd * noise)
-
-            # Light PMS edge: postgame shows PMS is the best strategy for actual outcomes.
-            # Apply as a mild multiplier (±4%) — enough to differentiate matchup quality
-            # without dominating the scoring. Default to neutral (5) when PMS is missing
-            # or based on a small-sample opposing pitcher (avoids penalizing hitters
-            # facing unknown/rookie pitchers with incomplete data).
-            pms_val = p.get('pms') or p.get('avg_pms') or 5
-            pms_confidence = p.get('pms_confidence', 1.0)  # 0-1 scale, low = unreliable
-            if pms_confidence < 0.5 or pms_val is None or pms_val == 0:
-                pms_val = 5  # neutral — don't penalize for missing data
-            pms_edge = 1.0 + (pms_val - 5) * 0.02  # PMS 7 → 1.04x, PMS 3 → 0.96x
-            scores[i] *= pms_edge
 
             # Talent-based scoring signal (data-driven from analyze_leverage.py,
             # 3,301 player-contest rows across 26 GPPs)
@@ -1141,55 +1156,49 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
     # Teams that can support 3-man sub stacks
     viable_3sub = [t for t, hs in team_hitters.items() if len(hs) >= 3]
 
-    # Team weighting: blend of leverage (ceiling/ownership) and game environment.
-    # Leverage alone over-indexes on low-owned teams regardless of game quality.
-    # Environment must be a strong independent factor so high-total games
-    # (e.g. Wrigley 12.5) aren't starved of exposure.
+    # Team weighting: matchup-adjusted ceiling × game environment for top-6 hitters.
+    # Answers: "What is the total matchup-adjusted ceiling in this game environment
+    # for the best 6 hitters on this team?" All three signals multiply — no arbitrary blend.
+    # Research: Vegas implied r>0.30, PMS drives individual matchup quality (Sloan/RotoGrinders).
     team_leverage = {}
+    team_stack_scores = {}
     for t in viable_teams:
         hitters = team_hitters[t]
-        ceiling_sum = sum(h.get('ceiling', h['proj'] * 1.5) for h in hitters)
-        own_sum = sum(h.get('ownership', 5.0) for h in hitters)
-        lev = ceiling_sum / max(own_sum, 5.0)
         gt = hitters[0].get('game_total', 8.5) if hitters else 8.5
-        env = (gt / 8.5) ** 2.5  # 12.5 → 2.83x, 9.0 → 1.18x, 7.0 → 0.58x
-        # Team-avg PMS: opposing pitcher quality drives which stacks explode.
-        # BAL facing Bello (PMS 5.5) vs MIN facing a good SP (PMS 3.7) should
-        # meaningfully separate team weights. Exponent amplifies the gap.
-        pms_vals = [h.get('pms', 5) for h in hitters if h.get('pms')]
+        vegas_mult = gt / 4.5  # 4.5 = league avg runs per team (9.0 total / 2)
+        pms_vals = [h.get('pms', 5.0) for h in hitters if h.get('pms')]
         avg_pms = sum(pms_vals) / len(pms_vals) if pms_vals else 5.0
-        matchup = ((avg_pms / 5.0) ** 2.0)  # PMS 7 → 1.96x, PMS 5 → 1.0x, PMS 3 → 0.36x
-        team_leverage[t] = {'lev': lev, 'env': env, 'gt': gt, 'matchup': matchup, 'avg_pms': avg_pms}
-    # Normalize each component independently, then blend
-    levs = np.array([team_leverage[t]['lev'] for t in viable_teams])
-    envs = np.array([team_leverage[t]['env'] for t in viable_teams])
-    mtch = np.array([team_leverage[t]['matchup'] for t in viable_teams])
-    norm_lev = levs / levs.sum() if levs.sum() > 0 else np.ones(len(levs)) / len(levs)
-    norm_env = envs / envs.sum() if envs.sum() > 0 else np.ones(len(envs)) / len(envs)
-    norm_mtch = mtch / mtch.sum() if mtch.sum() > 0 else np.ones(len(mtch)) / len(mtch)
-    # 35% leverage + 35% environment + 30% matchup quality
-    blended = norm_lev * 0.35 + norm_env * 0.35 + norm_mtch * 0.30
-    team_weights = blended / blended.sum()
+        # Score = sum of (ceiling × pms_norm × vegas_mult) for top 6 hitters by ceiling×pms
+        sorted_h = sorted(hitters,
+                          key=lambda h: h.get('ceiling', h['proj'] * 1.5) * (h.get('pms', 5.0) / 5.0),
+                          reverse=True)[:6]
+        stack_score = sum(
+            h.get('ceiling', h['proj'] * 1.5) * (h.get('pms', 5.0) / 5.0) * vegas_mult
+            for h in sorted_h
+        )
+        team_stack_scores[t] = stack_score
+        team_leverage[t] = {'gt': gt, 'avg_pms': avg_pms, 'stack_score': stack_score}
+
+    # Softmax over stack scores → team selection probabilities
+    scores_arr = np.array([team_stack_scores[t] for t in viable_teams])
+    scores_arr = scores_arr / scores_arr.sum() if scores_arr.sum() > 0 else np.ones(len(scores_arr)) / len(scores_arr)
+    team_weights = scores_arr
     if mode == 'user':
-        min_weight = max(0.02, 0.5 / len(viable_teams))  # 14 teams → 3.6% floor (was 7.1%)
-        team_weights = np.maximum(team_weights, min_weight)
-        team_weights /= team_weights.sum()
         # Log top/bottom teams by weight for diagnostics
         tw_sorted = sorted(zip(viable_teams, team_weights), key=lambda x: -x[1])
-        top5 = ', '.join(f'{t}={w*100:.1f}%(pms={team_leverage[t]["avg_pms"]:.1f})' for t, w in tw_sorted[:5])
+        top5 = ', '.join(f'{t}={w*100:.1f}%(pms={team_leverage[t]["avg_pms"]:.1f},gt={team_leverage[t]["gt"]:.1f})' for t, w in tw_sorted[:5])
         bot3 = ', '.join(f'{t}={w*100:.1f}%' for t, w in tw_sorted[-3:])
         print(f"  Team weights: top={top5} | bot={bot3}")
     # Also compute for viable_5
     if viable_5:
-        v5_idx = [viable_teams.index(t) for t in viable_5 if t in viable_teams]
-        lev_5_arr = blended[v5_idx] if v5_idx else None
-        team_5_weights = lev_5_arr / lev_5_arr.sum() if lev_5_arr is not None and len(lev_5_arr) else None
+        v5_scores = np.array([team_stack_scores[t] for t in viable_5])
+        team_5_weights = v5_scores / v5_scores.sum() if v5_scores.sum() > 0 else np.ones(len(v5_scores)) / len(v5_scores)
     else:
         team_5_weights = None
 
     # Log team weights
     tw_sorted = sorted(zip(viable_teams, team_weights), key=lambda x: x[1], reverse=True)
-    print(f"    Team weights (lev+env): {', '.join(f'{t}={w*100:.1f}%' for t, w in tw_sorted[:10])}")
+    print(f"    Team weights (stack_score): {', '.join(f'{t}={w*100:.1f}%' for t, w in tw_sorted[:10])}")
 
     lineups = []
     seen = set()
@@ -1258,14 +1267,21 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         for ss in sub_sizes:
             cands = [t for t in sub_candidates if t not in used_sub and len(team_hitters.get(t, [])) >= ss]
             if cands:
-                # Weight sub-stack selection toward high-environment teams
-                sub_wts = np.array([team_leverage.get(t, {}).get('env', 1.0) for t in cands])
-                # Mild bring-back preference: opponent of main stack gets 1.2x
-                if main_team and game_teams:
-                    for idx_t, t in enumerate(cands):
-                        opp = game_teams.get(main_team)
-                        if opp and t == opp:
-                            sub_wts[idx_t] *= 1.2
+                # Weight sub-stack selection by opponent stack score (matchup quality)
+                sub_wts = np.array([team_stack_scores.get(t, 1.0) for t in cands])
+                # Bring-back (game stack): only when game total >= 9.0 AND opponent
+                # quality >= slate avg — both conditions required (data-derived threshold:
+                # 9.0+ = ~4.5 runs per team projected, both offenses meaningfully involved)
+                slate_avg_score = sum(team_stack_scores.values()) / len(team_stack_scores) if team_stack_scores else 1.0
+                main_gt = team_leverage.get(main_team, {}).get('gt', 8.5) if main_team else 8.5
+                if main_team and game_teams and main_gt >= 9.0:
+                    opp = game_teams.get(main_team)
+                    if opp and opp in team_stack_scores:
+                        opp_score = team_stack_scores[opp]
+                        if opp_score >= slate_avg_score:
+                            for idx_t, t in enumerate(cands):
+                                if t == opp:
+                                    sub_wts[idx_t] *= (opp_score / slate_avg_score)
                 sub_wts = sub_wts / sub_wts.sum()
                 st = rng.choice(cands, p=sub_wts)
                 sub_teams.append(st)
@@ -1348,22 +1364,14 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         # Busts: top-1% averages 0.8 busts (<3 pts from floor)
         busts = sum(1 for p in lu_players if p['floor'] < 2)
         gpp_bust = max(0, 1.0 - busts / 3.0)
-        # Ownership: sweet spot 100-150%
-        total_own = sum(p.get('ownership', 5) for p in lu_players)
-        gpp_own = 1.0 if 100 <= total_own <= 150 else max(0, 1.0 - abs(total_own - 125) / 75)
-        # Talent density (wRC+/ISO for hitters, K%/Stuff+ for pitchers)
-        talent_vals = []
-        for p in lu_players:
-            if p['is_pitcher']:
-                talent_vals.append((p.get('k_pct_raw', 0.22) - 0.22) / 0.06 * 0.6
-                                   + (p.get('stuff_plus', 100) - 100) / 15 * 0.4)
-            else:
-                talent_vals.append((p.get('wrc_plus', 100) - 100) / 30 * 0.5
-                                   + (p.get('iso', 0.150) - 0.150) / 0.08 * 0.5)
-        gpp_talent = min(max(np.mean(talent_vals) + 0.5, 0), 1.0) if talent_vals else 0.5
+        # Game environment: implied runs of stacked team's game (Vegas-derived, no ownership)
+        stack_implied = _get_stack_implied(lu_players, stack_team)
+        gpp_env = min(max((stack_implied - 3.5) / 2.0, 0.0), 1.0)
+        # Matchup quality: PMS (physics-based) + HES (park/weather/Vegas) — already computed above
+        gpp_matchup = min(max(avg_pms / 10.0 * 0.6 + avg_hes / 10.0 * 0.4, 0.0), 1.0)
 
-        gpp_score = round(gpp_pitcher * 0.25 + gpp_boom * 0.30 + gpp_bust * 0.20
-                          + gpp_own * 0.10 + gpp_talent * 0.15, 3)
+        gpp_score = round(gpp_pitcher * 0.25 + gpp_boom * 0.20 + gpp_bust * 0.15
+                          + gpp_env * 0.15 + gpp_matchup * 0.25, 3)
 
         lineups.append({
             'player_ids': list(lu),
@@ -2017,7 +2025,6 @@ def run():
 
         rng = np.random.default_rng(seed=42)
 
-        # Generate user pool
         print(f"\n  Generating USER pool ({u_size:,} target)...")
         user_lineups = generate_lineups(pool, u_size, mode='user', rng=rng, game_count=game_count)
 

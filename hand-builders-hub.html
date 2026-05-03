@@ -4346,8 +4346,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     <input type="number" placeholder="Min Win%" style="width:58px;" class="opto-input" data-pool-filter="minWin">
     <input type="number" placeholder="Min Cash%" style="width:62px;" class="opto-input" data-pool-filter="minCash">
     <input type="number" placeholder="Min ROI" style="width:55px;" class="opto-input" data-pool-filter="minROI">
-    <input type="number" placeholder="Max Own" style="width:58px;" class="opto-input" data-pool-filter="maxOwn" title="Max total lineup ownership %">
-    <input type="number" placeholder="Min Lev" style="width:52px;" class="opto-input" data-pool-filter="minLeverage" title="Min leverage (ceil/own)">
+    <input type="number" placeholder="Max Own" style="width:58px;" class="opto-input" data-pool-filter="maxOwn" title="Max total lineup ownership % (projected — may be inaccurate, use as rough reference only)">
+    <input type="number" placeholder="Min Lev" style="width:52px;" class="opto-input" data-pool-filter="minLeverage" title="Env leverage: (ceil/proj upside) × matchup quality — no ownership used">
     <input type="number" placeholder="Min Boom" style="width:58px;" class="opto-input" data-pool-filter="minBoom" title="Min boom% (top 5% of sims)">
     <input type="number" placeholder="Max Bust" style="width:58px;" class="opto-input" data-pool-filter="maxBust" title="Max bust% (bottom 30% of sims)">
     <input type="number" placeholder="Min Sharpe" style="width:62px;" class="opto-input" data-pool-filter="minSharpe">
@@ -4358,10 +4358,10 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
     <button class="opto-input" onclick="applyPoolFilters()" style="font-weight:700;cursor:pointer;padding:2px 10px;background:var(--hi);color:#fff;border:none;border-radius:4px;">Apply</button>
     <span style="color:var(--border);margin:0 2px;">|</span>
     <label style="color:var(--muted);font-weight:700;">Sort:</label>
-    <select class="opto-input" style="width:80px;" onchange="setPoolSort(this.value)">
-      <option value="blendedScore">Blended</option>
+    <select class="opto-input" style="width:80px;" onchange="setPoolSort(this.value)" id="pool-sort-select">
+      <option value="blendedScore" selected>Blended</option>
       <option value="gppScore">GPP Score</option>
-      <option value="proj" selected>Proj</option>
+      <option value="proj">Proj</option>
       <option value="leverage">Leverage</option>
       <option value="totalOwn">Own (low)</option>
       <option value="winPct">Win%</option>
@@ -4373,11 +4373,22 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;min-
       <option value="avgPms">PMS</option>
       <option value="avgHes">HES</option>
       <option value="pmsDriven">PMS Driven</option>
+      <option value="portfolioScore">Portfolio</option>
     </select>
+    <span style="color:var(--border);margin:0 4px;">|</span>
+    <label style="color:var(--muted);font-weight:700;">Portfolio:</label>
+    <select class="opto-input" id="portfolio-contest-type" style="width:68px;" title="Contest type controls diversity aggressiveness">
+      <option value="large">Large GPP</option>
+      <option value="mid">Mid GPP</option>
+      <option value="small">Small Field</option>
+      <option value="single">Single Entry</option>
+    </select>
+    <input type="number" id="portfolio-k" value="20" min="1" max="500" style="width:44px;" class="opto-input" title="Number of entries to optimize for">
+    <button onclick="applyPortfolioRank()" style="font-weight:700;cursor:pointer;padding:2px 8px;background:rgba(167,139,250,.2);color:#a78bfa;border:1px solid rgba(167,139,250,.4);border-radius:4px;font-size:10px;" title="Rank lineups for portfolio selection — maximize E[max score across K lineups]">Portfolio Rank</button>
     <span id="gpp-slider-wrap" style="display:inline-flex;align-items:center;gap:3px;margin-left:4px;">
-      <span style="font-size:8px;color:var(--muted);font-weight:700;">Sharp</span>
-      <input type="range" id="gpp-leverage-wt" min="0" max="100" value="40" style="width:120px;height:16px;" oninput="debouncedGppUpdate()" title="0=Pure Sharp (proj/cash/Sharpe) ← → 100=Pure Leverage (win%/boom/variance)">
-      <span style="font-size:8px;color:var(--muted);font-weight:700;">Lev</span>
+      <span style="font-size:8px;color:var(--muted);font-weight:700;">Stack</span>
+      <input type="range" id="gpp-leverage-wt" min="0" max="100" value="50" style="width:120px;height:16px;" oninput="debouncedGppUpdate()" title="0=Stack structure (gpp_score: ceiling/boom/bust/implied runs) ← → 100=Matchup quality (win%/boom/variance)">
+      <span style="font-size:8px;color:var(--muted);font-weight:700;">Upside</span>
     </span>
     <span id="blend-slider-wrap" style="display:inline-flex;align-items:center;gap:3px;margin-left:6px;">
       <span style="font-size:8px;color:var(--muted);font-weight:700;">Quality</span>
@@ -8371,7 +8382,7 @@ function scorePoolLineup(lineupObj) {
     });
   }
 
-  // Pitcher ownership (SP slots) — chalk pitchers drag leverage down
+  // Pitcher ownership (SP slots) — still tracked for display, not used for leverage
   let pitcherOwn = 0;
   players.forEach(([k, p]) => {
     if (p.positions && p.positions.some(pos => ['SP','RP','P'].includes(pos))) {
@@ -8379,36 +8390,7 @@ function scorePoolLineup(lineupObj) {
     }
   });
 
-  // GPP metrics
-  const leverage = totalOwn > 0 ? +(ceil / totalOwn * 100).toFixed(1) : 0;
-  // Correlation quality: stack size + bring-back + sub-stack
-  const mainSize = stackEntries[0]?.[1] || 0;
-  const subSize = stackEntries[1]?.[1] || 0;
-  const corrScore = +(
-    (mainSize >= 5 ? 4 : mainSize >= 4 ? 3 : mainSize >= 3 ? 1.5 : 0) +
-    (bringBacks >= 2 ? 1.0 : bringBacks >= 1 ? 0.5 : 0) +
-    (subSize >= 2 ? 1 : 0)
-  ).toFixed(1);
-
-  // Stack leverage: opposing pitcher ownership × game environment
-  // When a high-ownership pitcher fails, lineups stacking against him gain massive leverage
-  let stackLeverage = 0;
-  if (stackEntries[0]) {
-    const mainTeam = stackEntries[0][0];
-    // Find a hitter from the main stack to get the opposing pitcher info
-    const stackHitter = hitterSlots.map(k => lineupObj[k]).find(p => p?.team === mainTeam);
-    if (stackHitter) {
-      // Opposing pitcher ownership = leverage when that pitcher busts
-      const oppPitcherOwn = allPitchers.find(sp =>
-        sp.game_pk === stackHitter.game_pk && sp.team !== mainTeam
-      )?.proj_ownership || 0;
-      // Scale by implied runs (higher implied = more leverage)
-      const gameImplied = stackHitter.implied_runs || 4.5;
-      stackLeverage = +(oppPitcherOwn * (gameImplied / 4.5)).toFixed(1);
-    }
-  }
-
-  // PMS/HES game edge map: track which high-PMS games this lineup accesses
+  // PMS/HES — computed first so they can feed leverage calculation
   const gameEdgeMap = {};
   let totalPms = 0, totalPmsN = 0, totalHes = 0, totalHesN = 0;
   players.forEach(([k, p]) => {
@@ -8425,6 +8407,39 @@ function scorePoolLineup(lineupObj) {
   const edgeGames = new Set();
   for (const [gpk, e] of Object.entries(gameEdgeMap)) {
     if (e.pmsN > 0 && (e.pmsSum / e.pmsN) >= 5) edgeGames.add(+gpk);
+  }
+
+  // GPP metrics
+  // Environment leverage: (ceil/proj upside) × matchup quality — no ownership used
+  const ceilRatio = proj > 0 ? ceil / proj : 1.0;
+  const pmsVal = avgPms ?? 5.0;
+  const hesVal = avgHes ?? 5.0;
+  const leverage = +((ceilRatio - 1.0) * (pmsVal * 0.6 + hesVal * 0.4) * 5).toFixed(1);
+  // Correlation quality: stack size + bring-back + sub-stack
+  const mainSize = stackEntries[0]?.[1] || 0;
+  const subSize = stackEntries[1]?.[1] || 0;
+  const corrScore = +(
+    (mainSize >= 5 ? 4 : mainSize >= 4 ? 3 : mainSize >= 3 ? 1.5 : 0) +
+    (bringBacks >= 2 ? 1.0 : bringBacks >= 1 ? 0.5 : 0) +
+    (subSize >= 2 ? 1 : 0)
+  ).toFixed(1);
+
+  // Stack leverage: opposing pitcher quality × game environment — no ownership used
+  let stackLeverage = 0;
+  if (stackEntries[0]) {
+    const mainTeam = stackEntries[0][0];
+    const stackHitter = hitterSlots.map(k => lineupObj[k]).find(p => p?.team === mainTeam);
+    if (stackHitter) {
+      const oppPitcher = allPitchers.find(sp =>
+        sp.game_pk === stackHitter.game_pk && sp.team !== mainTeam
+      );
+      // Pitcher difficulty for hitters: higher xFIP = easier (more hittable)
+      // Clamp xFIP deviation to ±2 runs, invert so hittable = high stack leverage
+      const xfip = oppPitcher?.xfip ?? 3.90;
+      const pitcherDiff = 5.0 - Math.max(-2, Math.min(2, (xfip - 3.90) / 0.5));
+      const gameImplied = stackHitter.implied_runs || 4.5;
+      stackLeverage = +(pitcherDiff * (gameImplied / 4.5)).toFixed(1);
+    }
   }
 
   return {
@@ -8897,7 +8912,7 @@ function _deadCode_renderPortfolioCards() {
   if (f.minBoom && filtered[0]?.contest) filtered = filtered.filter(c => (c.contest?.boomPct || 0) >= f.minBoom);
 
   const sc = _poolSortCol, dir = _poolSortDir;
-  const getVal = (c) => { if (sc === 'gppScore') return c.gppScore||0; if (sc === 'pmsDriven') return c.pmsDriven||0; if (sc === 'blendedScore') return c.blendedScore||0; if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
+  const getVal = (c) => { if (sc === 'gppScore') return c.gppScore||0; if (sc === 'pmsDriven') return c.pmsDriven||0; if (sc === 'blendedScore') return c.blendedScore||0; if (sc === 'portfolioScore') return c.portfolioScore||0; if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
   const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
   if (lowerIsBetter) {
     filtered.sort((a,b) => (getVal(a) - getVal(b)) * dir || b.metrics.proj - a.metrics.proj);
@@ -9199,6 +9214,7 @@ function renderPoolCards() {
     if (sc === 'gppScore') return c.gppScore || 0;
     if (sc === 'pmsDriven') return c.pmsDriven || 0;
     if (sc === 'blendedScore') return c.blendedScore || 0;
+    if (sc === 'portfolioScore') return c.portfolioScore || 0;
     if (c.contest && sc in c.contest) return c.contest[sc] || 0;
     if (sc in (c.metrics || {})) return c.metrics[sc] || 0;
     return c.metrics?.proj || 0;
@@ -10423,7 +10439,7 @@ function exportPoolDK() {
   // Get the filtered pool (same as what's displayed)
   let pool = filterPoolCandidates();
   const sc = _poolSortCol, dir = _poolSortDir;
-  const getVal = (c) => { if (sc === 'gppScore') return c.gppScore||0; if (sc === 'blendedScore') return c.blendedScore||0; if (sc === 'pmsDriven') return c.pmsDriven||0; if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
+  const getVal = (c) => { if (sc === 'gppScore') return c.gppScore||0; if (sc === 'blendedScore') return c.blendedScore||0; if (sc === 'pmsDriven') return c.pmsDriven||0; if (sc === 'portfolioScore') return c.portfolioScore||0; if (c.contest && sc in c.contest) return c.contest[sc]||0; if (sc in (c.metrics||{})) return c.metrics[sc]||0; return c.metrics?.proj||0; };
   const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
   if (lowerIsBetter) {
     pool.sort((a,b) => (getVal(a) - getVal(b)) * dir || b.metrics.proj - a.metrics.proj);
@@ -10476,6 +10492,110 @@ function setPoolSort(col) {
   renderPoolCards();
   renderPoolExposure();
 }
+
+// ── Portfolio Optimizer ───────────────────────────────────────────────────────
+// Selects K lineups that maximize E[max(V_1,...,V_K)] using a greedy algorithm.
+// Does NOT require ownership projections. Diversity is enforced via variance-
+// weighted player overlap: sharing boom-or-bust players couples lineup fates.
+//
+// Contest type controls diversity aggressiveness (correlation discount):
+//   large GPP (100k+): full penalty  mid GPP: 0.8x  small field: 0.5x  single: 0x
+const PORTFOLIO_DISC = { large: 1.0, mid: 0.8, small: 0.5, single: 0.0 };
+
+function _lineupCorr(pidsA, pidsB, playerVar) {
+  // Variance-weighted Jaccard overlap. Returns 0 (nothing shared) → 1 (identical).
+  let sharedVar = 0, totalVar = 0;
+  const union = new Set([...pidsA, ...pidsB]);
+  union.forEach(pid => {
+    const v = playerVar[pid] || 1.0;
+    totalVar += v;
+    if (pidsA.has(pid) && pidsB.has(pid)) sharedVar += v;
+  });
+  return totalVar > 0 ? sharedVar / totalVar : 0;
+}
+
+function _marginalGain(candidate, selected, playerVar, disc) {
+  const ev = candidate.metrics?.proj || 0;
+  if (!selected.length || disc === 0) return ev;
+  const pidsC = candidate._portfolioPids;
+  const avgCorr = selected.reduce((sum, s) => sum + _lineupCorr(pidsC, s._portfolioPids, playerVar), 0) / selected.length;
+  return ev * (1.0 - disc * avgCorr);
+}
+
+function applyPortfolioRank() {
+  const k    = Math.max(1, +(document.getElementById('portfolio-k')?.value || 20));
+  const ctype = document.getElementById('portfolio-contest-type')?.value || 'large';
+  const disc  = PORTFOLIO_DISC[ctype] ?? 1.0;
+
+  // Work on the currently filtered pool (respects team excludes, proj filters, etc.)
+  const pool = filterPoolCandidates();
+  if (!pool.length) { showToast('No lineups in pool — adjust filters first'); return; }
+
+  // Build player variance map: (proj_ceiling - proj_floor)^2 per player
+  const playerVar = {};
+  pool.forEach(c => {
+    Object.values(c.lineup).forEach(p => {
+      if (p?.player_id) {
+        const v = ((p.proj_ceiling || 0) - (p.proj_floor || 0)) ** 2;
+        playerVar[p.player_id] = Math.max(v, 0.01);
+      }
+    });
+  });
+
+  // Pre-compute pid sets for each lineup
+  pool.forEach(c => {
+    c._portfolioPids = new Set(Object.values(c.lineup).map(p => p?.player_id).filter(Boolean));
+  });
+
+  // Greedy Max-E[max] selection
+  const selected = [];
+  const remaining = [...pool];
+  const t0 = Date.now();
+
+  while (selected.length < k && remaining.length) {
+    let bestIdx = 0, bestGain = -Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const gain = _marginalGain(remaining[i], selected, playerVar, disc);
+      if (gain > bestGain) { bestGain = gain; bestIdx = i; }
+    }
+    const chosen = remaining.splice(bestIdx, 1)[0];
+    chosen._portfolioRank = selected.length + 1;
+    selected.push(chosen);
+  }
+
+  // Assign portfolioScore: rank K down to 1 for selected, 0 for rest
+  const selectedSet = new Set(selected);
+  pool.forEach(c => { c.portfolioScore = 0; });
+  selected.forEach(c => { c.portfolioScore = k - c._portfolioRank + 1; });
+  // Also apply to unfiltered candidates that are in the selected set
+  _poolCandidates.forEach(c => {
+    if (!selectedSet.has(c)) c.portfolioScore = 0;
+  });
+
+  // Diversity stats
+  let overlapSum = 0, overlapCount = 0, overlapMax = 0;
+  for (let i = 0; i < selected.length; i++) {
+    for (let j = i + 1; j < selected.length; j++) {
+      const ov = _lineupCorr(selected[i]._portfolioPids, selected[j]._portfolioPids, playerVar);
+      overlapSum += ov; overlapCount++;
+      if (ov > overlapMax) overlapMax = ov;
+    }
+  }
+  const avgOverlap = overlapCount ? (overlapSum / overlapCount * 100).toFixed(1) : '0';
+  const maxOverlap = (overlapMax * 100).toFixed(1);
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+
+  // Switch to portfolio sort and re-render
+  _poolSortCol = 'portfolioScore';
+  _poolSortDir = 1;
+  const sortSel = document.getElementById('pool-sort-select');
+  if (sortSel) sortSel.value = 'portfolioScore';
+  renderPoolCards();
+  renderPoolExposure();
+
+  showToast(`Portfolio: ${selected.length} lineups ranked | avg overlap ${avgOverlap}% | max ${maxOverlap}% | ${elapsed}s`);
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 function setPoolShowN(val) {
   _poolCardsShown = val ? Math.max(1, +val) : Infinity;

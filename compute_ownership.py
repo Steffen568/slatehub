@@ -44,13 +44,17 @@ sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
 
 
 # ── Signal weights ─────────────────────────────────────────────────────────────
-W_VALUE        = 0.35   # proj_dk_pts per $1000 salary
-W_SALARY_RANK  = 0.20   # salary rank within position group
-W_PROJ_PTS     = 0.12   # raw projection magnitude (star power)
-W_BAT_ORDER    = 0.13   # batting order position
-W_VEGAS        = 0.10   # team implied runs
-W_PARK         = 0.05   # park factor
-W_WEATHER      = 0.05   # weather suppression
+# NOTE: All signals are now [0-1] normalized (value uses group min-max normalization).
+# Weights reflect actual DFS ownership drivers: game environment + star power dominate,
+# value efficiency is one factor but no longer the sole driver.
+W_VALUE        = 0.20   # pts per $1k salary (normalized within position group)
+W_SALARY_RANK  = 0.10   # salary rank within position group
+W_PROJ_PTS     = 0.25   # raw projection magnitude (star power / ceiling)
+W_BAT_ORDER    = 0.15   # batting order position
+W_VEGAS        = 0.25   # team implied runs (game environment signal)
+W_PARK         = 0.03   # park factor
+W_WEATHER      = 0.02   # weather suppression
+# Total: 1.00
 
 LEAGUE_AVG_IMPLIED = 4.5  # baseline implied runs, same as compute_projections.py
 
@@ -73,8 +77,9 @@ SLATE_MEDIUM_MAX = 7   # ≤ 7 games → medium; > 7 → large
 # Softmax temperature — controls distribution sharpness
 # Lower = more concentrated at top; higher = more uniform
 # Position-specific temps used in normalize_position_group()
-SOFTMAX_TEMP_SP     = 0.8    # SPs: very sharp — top SP dominates (40-50%)
-SOFTMAX_TEMP_HITTER = 1.4    # Hitters: moderately sharp
+SOFTMAX_TEMP_SP     = 0.55   # SPs: sharp — concentrates on top-value pitcher
+SOFTMAX_TEMP_HITTER = 0.80   # Hitters: moderately sharp — allows stars to separate
+STACK_BOOST_STRENGTH = 1.5   # team stack multiplier strength for high-implied teams
 
 # DK lineup slot counts per position.
 # Ownership across all players in a group must sum to (slots × 100%).
@@ -175,13 +180,26 @@ def canonical_pos(dk_position_str):
 
 # ── Signal component functions ─────────────────────────────────────────────────
 
-def compute_value_score(proj_dk_pts, salary):
-    """Value = projected DK points per $1,000 salary. Clipped to [0, 15]."""
+def compute_value_score(proj_dk_pts, salary, all_values_in_group=None):
+    """
+    Value = pts per $1k salary, normalized to [0–1] within the position group.
+    Top-value player in the group → 1.0, bottom → 0.0.
+    Group normalization keeps this on the same scale as all other signals,
+    so W_VALUE is properly balanced against W_VEGAS, W_PROJ_PTS, etc.
+    """
     pts = safe(proj_dk_pts, 0)
     sal = safe(salary, 0)
     if sal <= 0 or pts <= 0:
         return 0.0
-    return clip((pts / sal) * 1000, 0.0, 15.0)
+    raw_val = (pts / sal) * 1000
+    if not all_values_in_group:
+        # Fallback: fixed-scale normalization (1.0→0.0, 5.0→1.0)
+        return clip((raw_val - 1.0) / 4.0, 0.0, 1.0)
+    max_v = max(all_values_in_group) or 1.0
+    min_v = min(all_values_in_group) or 0.0
+    if max_v <= min_v:
+        return 0.5
+    return clip((raw_val - min_v) / (max_v - min_v), 0.0, 1.0)
 
 
 def compute_salary_rank_score(salary, all_salaries_in_group):
@@ -274,12 +292,12 @@ def compute_weather_score(weather_mult, precip_pct, wind_dir, is_outdoor):
 
 # ── Core scoring ───────────────────────────────────────────────────────────────
 
-def compute_raw_score(row, salary_group_sals, proj_pts_group):
+def compute_raw_score(row, salary_group_sals, proj_pts_group, value_group=None):
     """
     Weighted sum of all signals + confirmation modifier.
     All component scores are in [0, 1] before weighting.
     """
-    v_val   = compute_value_score(row.get('proj_dk_pts'), row.get('salary'))
+    v_val   = compute_value_score(row.get('proj_dk_pts'), row.get('salary'), value_group)
     v_sal   = compute_salary_rank_score(row.get('salary'), salary_group_sals)
     v_proj  = compute_proj_pts_score(row.get('proj_dk_pts'), proj_pts_group)
     v_order = compute_bat_order_score(row.get('batting_order'), row.get('is_pitcher'))
@@ -351,7 +369,27 @@ def normalize_position_group(raw_scores, pos_key):
 
     shares     = softmax(raw_scores, temperature=temp)
     ownerships = [s * pool for s in shares]
-    ownerships = [min(o, max_own) for o in ownerships]
+
+    # Cap-and-redistribute: players above max_own are capped and excess is
+    # redistributed proportionally to uncapped players until the pool is conserved.
+    for _ in range(20):   # iterate until stable (usually 2-3 passes)
+        capped   = [min(o, max_own) for o in ownerships]
+        excess   = sum(o - max_own for o in ownerships if o > max_own)
+        if excess < 0.001:
+            ownerships = capped
+            break
+        uncapped_total = sum(o for o in ownerships if o <= max_own)
+        if uncapped_total <= 0:
+            ownerships = capped
+            break
+        # Scale uncapped players up to absorb excess, proportionally
+        ownerships = [
+            min(o + excess * (o / uncapped_total), max_own) if o <= max_own else max_own
+            for o in ownerships
+        ]
+    else:
+        ownerships = [min(o, max_own) for o in ownerships]
+
     ownerships = [clip(o, 0.0, 100.0) for o in ownerships]
     return ownerships
 
@@ -624,9 +662,28 @@ def run_single_slate(target_date, slate_filter=None, game_pk_filter=None):
                 })
             continue
 
-        group_sals = [safe(r.get('salary'), 0) for r in group]
-        group_proj = [safe(r.get('proj_dk_pts'), 0) for r in group]
-        raw_scores = [compute_raw_score(r, group_sals, group_proj) for r in group]
+        group_sals   = [safe(r.get('salary'), 0) for r in group]
+        group_proj   = [safe(r.get('proj_dk_pts'), 0) for r in group]
+        sal = lambda r: safe(r.get('salary'), 1)
+        group_values = [(safe(r.get('proj_dk_pts'), 0) / sal(r)) * 1000 for r in group]
+        raw_scores = [compute_raw_score(r, group_sals, group_proj, group_values) for r in group]
+
+        # Team stack multiplier: lift all players on above-average-implied teams.
+        # DFS public stacks high-implied teams collectively — this replicates that behavior.
+        # Applied only to hitters; pitchers have sharp softmax already.
+        if pos_key != 'SP':
+            team_mults = defaultdict(list)
+            for r in group:
+                team_mults[r.get('team', '')].append(safe(r.get('vegas_mult'), 1.0))
+            team_avg = {t: sum(v) / len(v) for t, v in team_mults.items()}
+            all_team_mults = [m for v in team_mults.values() for m in v]
+            slate_avg_mult = sum(all_team_mults) / len(all_team_mults) if all_team_mults else 1.0
+            raw_scores = [
+                rs * max(0.5, 1.0 + (team_avg.get(r.get('team', ''), slate_avg_mult) - slate_avg_mult)
+                                  / max(slate_avg_mult, 0.01) * STACK_BOOST_STRENGTH)
+                for rs, r in zip(raw_scores, group)
+            ]
+
         ownerships = normalize_position_group(raw_scores, pos_key)
 
         for row, raw, own in zip(group, raw_scores, ownerships):
