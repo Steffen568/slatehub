@@ -9337,14 +9337,31 @@ function renderPoolCards() {
       ? `<span style="font-size:8px;color:${ct.boomPct >= 10 ? '#4ade80' : 'var(--muted)'};" title="Boom% (top 5% of sims)">${ct.boomPct}%boom</span>`
       : '';
 
-    return `<div class="lc-chip" style="border-color:${borderClr};" onclick="loadPoolLineup(${idx})">
+    // Portfolio badges — shown when sorted by portfolio score
+    const isPortfolioSort = _poolSortCol === 'portfolioScore';
+    const portRank = c._portfolioRank;
+    const portOverlap = c._portfolioOverlap;
+    const ceilVal = m.ceil != null ? Math.round(m.ceil) : null;
+    const floorVal = m.floor != null ? Math.round(m.floor) : null;
+    const portfolioBadges = isPortfolioSort && portRank != null
+      ? `<span style="font-size:8px;font-weight:800;padding:1px 5px;border-radius:3px;background:rgba(167,139,250,.2);color:#a78bfa;" title="Portfolio pick #${portRank}">P${portRank}</span>`
+        + (ceilVal != null ? `<span style="font-size:8px;color:#63b3ed;font-weight:700;" title="Lineup ceiling (sum of P90 projections)">${ceilVal}ceil</span>` : '')
+        + (floorVal != null ? `<span style="font-size:8px;color:var(--muted);font-weight:600;" title="Lineup floor (sum of P10 projections)">${floorVal}flr</span>` : '')
+        + (portRank > 1 && portOverlap != null ? `<span style="font-size:8px;color:${portOverlap <= 15 ? '#4ade80' : portOverlap <= 30 ? '#fbbf24' : '#f87171'};font-weight:700;" title="Avg player overlap with already-selected portfolio lineups (lower = more unique)">${portOverlap}%ovlp</span>` : '')
+      : (ceilVal != null ? `<span style="font-size:8px;color:#63b3ed;font-weight:600;" title="Lineup ceiling">${ceilVal}ceil</span>` : '');
+
+    const cardBorder = isPortfolioSort && portRank != null
+      ? (portRank <= 3 ? '#a78bfa' : portRank <= 10 ? 'rgba(167,139,250,.4)' : borderClr)
+      : borderClr;
+
+    return `<div class="lc-chip" style="border-color:${cardBorder};" onclick="loadPoolLineup(${idx})">
       <div class="lc-chip-hd">
         <span class="lc-chip-name">#${i+1}</span>
         <span class="lc-chip-pts">${m.proj} pts</span>
         <span class="lc-chip-sal">$${m.salary.toLocaleString()}</span>
         <span class="stack-size-badge" style="margin-left:4px;">${m.stack}</span>
         ${m.sub !== '—' ? `<span class="stack-size-badge">${m.sub}</span>` : ''}
-        ${staticBadges} ${simBadges}
+        ${portfolioBadges} ${staticBadges} ${simBadges}
         ${contestBadge}
         <button onclick="event.stopPropagation();savePoolLineupToBuild(${idx});" style="margin-left:auto;font-size:8px;padding:1px 6px;background:rgba(74,222,128,.15);color:#4ade80;border:1px solid rgba(74,222,128,.3);border-radius:3px;cursor:pointer;" title="Save to active build">Save</button>
       </div>
@@ -10560,6 +10577,13 @@ function applyPortfolioRank() {
     }
     const chosen = remaining.splice(bestIdx, 1)[0];
     chosen._portfolioRank = selected.length + 1;
+    // Store avg overlap with previously selected lineups for display
+    if (selected.length > 0) {
+      const avgOv = selected.reduce((s, x) => s + _lineupCorr(chosen._portfolioPids, x._portfolioPids, playerVar), 0) / selected.length;
+      chosen._portfolioOverlap = Math.round(avgOv * 100);
+    } else {
+      chosen._portfolioOverlap = 0;
+    }
     selected.push(chosen);
   }
 
