@@ -20,9 +20,7 @@ from supabase import create_client
 
 sb = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'])
 
-CONTEST_DIR = os.path.join(os.path.dirname(__file__), '..', 'Contest_CSVs')
-if not os.path.exists(CONTEST_DIR):
-    CONTEST_DIR = r"C:\Users\Steffen's PC\Desktop\WebDev\Contest_CSVs"
+CONTEST_DIR = os.path.dirname(os.path.abspath(__file__))  # CSVs live in repo root
 
 MIN_ENTRIES = 1000  # only large-field GPPs (avoids small-field skew)
 
@@ -133,11 +131,30 @@ for nk, (pname, pval) in proj_norm.items():
             'n_contests': len(actual_own.get(aname, [])),
         })
 
-print(f"  Matched players: {len(matched)}")
+# Filter out ghost matches: players projected on dates not in our contest CSVs
+# appear as "actual=0%" even though they weren't in those contests.
+# These inflate apparent bias and corrupt tier analysis.
+matched_all = matched
+matched = [m for m in matched if m['actual_own'] > 0]
+ghost_count = len(matched_all) - len(matched)
+
+print(f"  Matched players: {len(matched_all)} ({ghost_count} filtered as 0%-actual ghosts → {len(matched)} usable)")
 
 if not matched:
-    print("  No matches found — check name normalization")
+    print("  No matches found — check name normalization or CSV coverage")
     sys.exit(1)
+
+
+def pearson_r(xs, ys):
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    mx, my = sum(xs) / n, sum(ys) / n
+    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / n
+    sx = math.sqrt(sum((x - mx) ** 2 for x in xs) / n)
+    sy = math.sqrt(sum((y - my) ** 2 for y in ys) / n)
+    return cov / (sx * sy) if sx > 0 and sy > 0 else 0.0
+
 
 # ── Step 4: Compute calibration metrics ─────────────────────────────────
 deltas = [m['delta'] for m in matched]
@@ -147,15 +164,7 @@ actual_vals = [m['actual_own'] for m in matched]
 
 mean_bias = sum(deltas) / len(deltas)
 mae = sum(abs_deltas) / len(abs_deltas)
-
-# Correlation
-n = len(matched)
-mean_p = sum(proj_vals) / n
-mean_a = sum(actual_vals) / n
-cov = sum((p - mean_p) * (a - mean_a) for p, a in zip(proj_vals, actual_vals)) / n
-std_p = math.sqrt(sum((p - mean_p) ** 2 for p in proj_vals) / n)
-std_a = math.sqrt(sum((a - mean_a) ** 2 for a in actual_vals) / n)
-corr = cov / (std_p * std_a) if std_p > 0 and std_a > 0 else 0
+corr = pearson_r(proj_vals, actual_vals)
 
 print(f"\n{'=' * 60}")
 print(f"  Ownership Calibration Results")
@@ -165,8 +174,7 @@ print(f"  Bias: {mean_bias:+.2f}% (positive = we over-project ownership)")
 print(f"  MAE:  {mae:.2f}%")
 print(f"  Correlation: r={corr:.3f}")
 
-# ── Step 5: Archetype analysis ──────────────────────────────────────────
-# Bucket by ownership tier
+# ── Step 5: Tier + position breakdown ───────────────────────────────────
 tiers = {
     'Chalk (>20% actual)': [m for m in matched if m['actual_own'] > 20],
     'Mid (5-20% actual)': [m for m in matched if 5 <= m['actual_own'] <= 20],
@@ -178,16 +186,43 @@ for label, group in tiers.items():
     if group:
         tier_bias = sum(m['delta'] for m in group) / len(group)
         tier_mae = sum(abs(m['delta']) for m in group) / len(group)
-        print(f"    {label}: n={len(group)}, bias={tier_bias:+.2f}%, MAE={tier_mae:.2f}%")
+        tier_r = pearson_r([m['proj_own'] for m in group], [m['actual_own'] for m in group])
+        print(f"    {label:<25}: n={len(group):3d}, bias={tier_bias:+.2f}%, MAE={tier_mae:.2f}%, r={tier_r:.3f}")
 
-# ── Step 6: Biggest misses ─────────────────────────────────────────────
+# SP vs hitter breakdown — load position data from slate_ownership + dk_salaries
+print(f"\n  By player type (SP vs hitter):")
+sal_pos = {}
+offset = 0
+while True:
+    rows = sb.table('dk_salaries').select('player_id,name,position').range(offset, offset + 999).execute().data or []
+    for r in rows:
+        if r.get('name') and r.get('position'):
+            sal_pos[norm(r['name'])] = r['position']
+    if len(rows) < 1000:
+        break
+    offset += 1000
+
+for pname, m in zip([m['name'] for m in matched], matched):
+    pos_str = sal_pos.get(norm(pname), '')
+    m['is_sp'] = 'SP' in pos_str or pos_str == 'P'
+
+sps = [m for m in matched if m['is_sp']]
+hitters = [m for m in matched if not m['is_sp']]
+for label, group in [('SPs', sps), ('Hitters', hitters)]:
+    if group:
+        gb = sum(m['delta'] for m in group) / len(group)
+        gm = sum(abs(m['delta']) for m in group) / len(group)
+        gr = pearson_r([m['proj_own'] for m in group], [m['actual_own'] for m in group])
+        print(f"    {label:<10}: n={len(group):3d}, bias={gb:+.2f}%, MAE={gm:.2f}%, r={gr:.3f}")
+
+# ── Step 6: Biggest misses (excluding 0%-actual ghosts already filtered) ──
 print(f"\n  Biggest over-projections (we said high, actual was low):")
-over = sorted(matched, key=lambda m: m['delta'], reverse=True)[:5]
+over = sorted(matched, key=lambda m: m['delta'], reverse=True)[:8]
 for m in over:
     print(f"    {m['name']:25s} proj={m['proj_own']:5.1f}%  actual={m['actual_own']:5.1f}%  delta={m['delta']:+.1f}%")
 
 print(f"\n  Biggest under-projections (we said low, actual was high):")
-under = sorted(matched, key=lambda m: m['delta'])[:5]
+under = sorted(matched, key=lambda m: m['delta'])[:8]
 for m in under:
     print(f"    {m['name']:25s} proj={m['proj_own']:5.1f}%  actual={m['actual_own']:5.1f}%  delta={m['delta']:+.1f}%")
 
@@ -195,19 +230,20 @@ for m in under:
 findings_path = os.path.join(os.path.dirname(__file__), 'tasks', 'research_findings.md')
 with open(findings_path, 'a', encoding='utf-8') as f:
     f.write(f"\n\n## Ownership Calibration — {contest_count} large-field contests (≥{MIN_ENTRIES} entries)\n\n")
-    f.write(f"- **Matched players**: {len(matched)}\n")
+    f.write(f"- **Matched players**: {len(matched)} ({ghost_count} 0%-actual ghosts excluded)\n")
     f.write(f"- **Bias**: {mean_bias:+.2f}% (positive = over-project ownership)\n")
     f.write(f"- **MAE**: {mae:.2f}%\n")
     f.write(f"- **Correlation**: r={corr:.3f}\n\n")
     for label, group in tiers.items():
         if group:
             tier_bias = sum(m['delta'] for m in group) / len(group)
-            f.write(f"- {label}: n={len(group)}, bias={tier_bias:+.2f}%\n")
-    f.write(f"\n**Over-projected ownership:**\n")
-    for m in over:
+            tier_mae = sum(abs(m['delta']) for m in group) / len(group)
+            f.write(f"- {label}: n={len(group)}, bias={tier_bias:+.2f}%, MAE={tier_mae:.2f}%\n")
+    f.write(f"\n**Over-projected:**\n")
+    for m in over[:5]:
         f.write(f"- {m['name']}: proj={m['proj_own']:.1f}% actual={m['actual_own']:.1f}%\n")
-    f.write(f"\n**Under-projected ownership:**\n")
-    for m in under:
+    f.write(f"\n**Under-projected:**\n")
+    for m in under[:5]:
         f.write(f"- {m['name']}: proj={m['proj_own']:.1f}% actual={m['actual_own']:.1f}%\n")
 
 print(f"\n  Results appended to tasks/research_findings.md")

@@ -43,17 +43,19 @@ W_ENV       = 0.20   # game environment (Vegas total) — public heavily targets
 W_VALUE     = 0.05   # pts per $1k — near-zero correlation but kept
 
 # Pitcher gets a multiplicative boost — calibrated from actual contest data.
-# Was 5.0 but ownership calibration showed pitchers over-projected by +34% (Luzardo).
+# Was 5.0, then 3.0 — kept at 3.0 since pitcher magnitude is right; SP temp handles concentration.
 PITCHER_BOOST = 3.0
 
 # Confirmed/unconfirmed modifiers
 CONFIRMED_BOOST = 1.5
 UNCONFIRMED_PENALTY = 0.4
 
-# Softmax temperature per position — lower = sharper (more concentrated)
-# Calibration showed +5.11% systematic over-projection — raised temps to spread ownership.
-SOFTMAX_TEMP = {'SP': 0.55, 'C': 0.65, '1B': 0.65, '2B': 0.65,
-                '3B': 0.65, 'SS': 0.65, 'OF': 0.65}
+# Softmax temperature per position — lower = sharper (more concentrated at top players)
+# 2026-05-04 calibration: bias=+5.70%, MAE=6.72%, r=0.580.
+# Tier analysis: chalk -2.13% (under-proj), mid +4.97%, low +6.31% (over-proj).
+# Classic "too flat" distribution — sharpened both SP and hitter temps to concentrate at top.
+SOFTMAX_TEMP = {'SP': 0.38, 'C': 0.50, '1B': 0.50, '2B': 0.50,
+                '3B': 0.50, 'SS': 0.50, 'OF': 0.50}
 
 # Per-position ownership cap (large slate)
 POSITION_MAX_OWN = {'SP': 55.0, 'C': 30.0, '1B': 30.0, '2B': 30.0,
