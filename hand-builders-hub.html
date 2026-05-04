@@ -8549,7 +8549,7 @@ async function loadPoolFromDB() {
     const [salRows, projRows] = await Promise.all([
       batchIn('dk_salaries', 'player_id,name,position,salary,team,dk_slate', 'player_id', allPoolPids,
         q => q.eq('dk_slate', slate)),
-      batchIn('player_projections', 'player_id,full_name,team,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,is_pitcher,batting_order,proj_ip,proj_ks,proj_er,win_prob,game_pk', 'player_id', allPoolPids,
+      batchIn('player_projections', 'player_id,full_name,team,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,is_pitcher,batting_order,proj_ip,proj_ks,proj_er,win_prob,game_pk,context_mult', 'player_id', allPoolPids,
         q => q.eq('game_date', today)),
     ]);
 
@@ -8583,6 +8583,7 @@ async function loadPoolFromDB() {
         proj_er: proj?.proj_er ?? null,
         win_prob: proj?.win_prob ?? null,
         game_pk: proj?.game_pk ?? null,
+        context_mult: proj?.context_mult ?? null,
       };
     }
     console.warn(`[loadPoolFromDB] playerMap: ${Object.keys(playerMap).length} players from ${allPoolPids.length} unique IDs (sal=${salRows.length}, proj=${projRows.length})`);
@@ -10515,46 +10516,51 @@ function setPoolSort(col) {
 // Does NOT require ownership projections. Diversity is enforced via variance-
 // weighted player overlap: sharing boom-or-bust players couples lineup fates.
 //
-// Contest type controls diversity aggressiveness (correlation discount):
-//   large GPP (100k+): full penalty  mid GPP: 0.8x  small field: 0.5x  single: 0x
-const PORTFOLIO_DISC = { large: 1.0, mid: 0.8, small: 0.5, single: 0.0 };
+// Contest type controls coverage reward strength:
+//   large GPP (100k+): maximize coverage of all boom candidates  single: pure gpp_score
+const COVERAGE_ALPHA = { large: 0.30, mid: 0.20, small: 0.10, single: 0.00 };
 
-function _lineupCorr(pidsA, pidsB, playerVar) {
-  // Variance-weighted Jaccard overlap. Returns 0 (nothing shared) → 1 (identical).
-  let sharedVar = 0, totalVar = 0;
+function _lineupCorr(pidsA, pidsB, playerQuality) {
+  // Quality-weighted Jaccard overlap for diversity reporting. Returns 0 (nothing shared) -> 1 (identical).
+  let sharedQ = 0, totalQ = 0;
   const union = new Set([...pidsA, ...pidsB]);
   union.forEach(pid => {
-    const v = playerVar[pid] || 1.0;
-    totalVar += v;
-    if (pidsA.has(pid) && pidsB.has(pid)) sharedVar += v;
+    const q = playerQuality[pid] || 1.0;
+    totalQ += q;
+    if (pidsA.has(pid) && pidsB.has(pid)) sharedQ += q;
   });
-  return totalVar > 0 ? sharedVar / totalVar : 0;
+  return totalQ > 0 ? sharedQ / totalQ : 0;
 }
 
-function _marginalGain(candidate, selected, playerVar, disc) {
-  const ev = candidate.metrics?.proj || 0;
-  if (!selected.length || disc === 0) return ev;
-  const pidsC = candidate._portfolioPids;
-  const avgCorr = selected.reduce((sum, s) => sum + _lineupCorr(pidsC, s._portfolioPids, playerVar), 0) / selected.length;
-  return ev * (1.0 - disc * avgCorr);
+function _marginalGain(candidate, selected, playerQuality, alpha) {
+  // Coverage-based gain: gpp_score + alpha x quality of new players not yet in portfolio.
+  const ev = candidate.dbGppScore || candidate.metrics?.proj || 0;
+  if (!selected.length || alpha === 0) return ev;
+  const alreadyCovered = new Set(selected.flatMap(lu => [...(lu._portfolioPids || [])]));
+  let newQuality = 0;
+  candidate._portfolioPids.forEach(pid => {
+    if (!alreadyCovered.has(pid)) newQuality += playerQuality[pid] || 0;
+  });
+  // Normalize: 10 players x avg quality ~18 pts = 180 per full lineup
+  return ev + alpha * (newQuality / 180.0);
 }
 
 function applyPortfolioRank() {
   const k    = Math.max(1, +(document.getElementById('portfolio-k')?.value || 20));
   const ctype = document.getElementById('portfolio-contest-type')?.value || 'large';
-  const disc  = PORTFOLIO_DISC[ctype] ?? 1.0;
+  const alpha = COVERAGE_ALPHA[ctype] ?? 0.30;
 
   // Work on the currently filtered pool (respects team excludes, proj filters, etc.)
   const pool = filterPoolCandidates();
   if (!pool.length) { showToast('No lineups in pool — adjust filters first'); return; }
 
-  // Build player variance map: (proj_ceiling - proj_floor)^2 per player
-  const playerVar = {};
+  // Build player quality map: proj_ceiling x context_mult (game-adjusted boom potential)
+  const playerQuality = {};
   pool.forEach(c => {
     Object.values(c.lineup).forEach(p => {
       if (p?.player_id) {
-        const v = ((p.proj_ceiling || 0) - (p.proj_floor || 0)) ** 2;
-        playerVar[p.player_id] = Math.max(v, 0.01);
+        const q = (p.proj_ceiling || 0) * (p.context_mult || 1.0);
+        playerQuality[p.player_id] = Math.max(q, 0.01);
       }
     });
   });
@@ -10564,7 +10570,7 @@ function applyPortfolioRank() {
     c._portfolioPids = new Set(Object.values(c.lineup).map(p => p?.player_id).filter(Boolean));
   });
 
-  // Greedy Max-E[max] selection
+  // Greedy coverage-maximizing selection
   const selected = [];
   const remaining = [...pool];
   const t0 = Date.now();
@@ -10572,14 +10578,14 @@ function applyPortfolioRank() {
   while (selected.length < k && remaining.length) {
     let bestIdx = 0, bestGain = -Infinity;
     for (let i = 0; i < remaining.length; i++) {
-      const gain = _marginalGain(remaining[i], selected, playerVar, disc);
+      const gain = _marginalGain(remaining[i], selected, playerQuality, alpha);
       if (gain > bestGain) { bestGain = gain; bestIdx = i; }
     }
     const chosen = remaining.splice(bestIdx, 1)[0];
     chosen._portfolioRank = selected.length + 1;
     // Store avg overlap with previously selected lineups for display
     if (selected.length > 0) {
-      const avgOv = selected.reduce((s, x) => s + _lineupCorr(chosen._portfolioPids, x._portfolioPids, playerVar), 0) / selected.length;
+      const avgOv = selected.reduce((s, x) => s + _lineupCorr(chosen._portfolioPids, x._portfolioPids, playerQuality), 0) / selected.length;
       chosen._portfolioOverlap = Math.round(avgOv * 100);
     } else {
       chosen._portfolioOverlap = 0;
@@ -10600,7 +10606,7 @@ function applyPortfolioRank() {
   let overlapSum = 0, overlapCount = 0, overlapMax = 0;
   for (let i = 0; i < selected.length; i++) {
     for (let j = i + 1; j < selected.length; j++) {
-      const ov = _lineupCorr(selected[i]._portfolioPids, selected[j]._portfolioPids, playerVar);
+      const ov = _lineupCorr(selected[i]._portfolioPids, selected[j]._portfolioPids, playerQuality);
       overlapSum += ov; overlapCount++;
       if (ov > overlapMax) overlapMax = ov;
     }

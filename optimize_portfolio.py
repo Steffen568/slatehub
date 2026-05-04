@@ -32,14 +32,15 @@ load_dotenv()
 sb = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'])
 
 
-# ── Correlation discount by contest type ─────────────────────────────────────
-# How aggressively to penalize correlation between lineups.
-# Large GPP (100k+ field): full diversity. Small field: less aggressive.
-CONTEST_DISC = {
-    'large':  1.0,   # large GPP — full correlation penalty
-    'mid':    0.8,   # mid-size GPP (1k–10k entries)
-    'small':  0.5,   # small field (20–100 players)
-    'single': 0.0,   # single-entry — no diversity, just highest EV+ceiling
+# ── Coverage reward weight by contest type ───────────────────────────────────
+# How aggressively to reward covering new high-upside players not yet in the portfolio.
+# Large GPP (100k+ field): maximize coverage of all boom opportunities.
+# Single entry: no coverage incentive — just pick the highest gpp_score lineup.
+COVERAGE_ALPHA = {
+    'large':  0.30,   # large GPP — strong coverage incentive
+    'mid':    0.20,   # mid-size GPP (1k–10k entries)
+    'small':  0.10,   # small field (20–100 players)
+    'single': 0.00,   # single-entry — pure gpp_score, no diversification
 }
 
 
@@ -62,51 +63,56 @@ def load_pool(game_date: str, slate: str) -> list[dict]:
     return rows
 
 
-def load_player_variance(game_date: str, player_ids: list[int]) -> dict[int, float]:
-    """Load per-player variance proxy = (proj_ceiling - proj_floor)^2."""
-    player_var = {}
-    # Batch in chunks of 500
+def load_player_quality(game_date: str, player_ids: list[int]) -> dict[int, float]:
+    """Load per-player quality score = proj_ceiling × context_mult (game-adjusted boom potential).
+    High quality = high ceiling AND favorable game environment (Vegas/park/weather).
+    Used as both coverage reward weights in selection and overlap weights in diversity reporting."""
+    quality = {}
     for i in range(0, len(player_ids), 500):
         chunk_ids = player_ids[i:i + 500]
         rows = (sb.table('player_projections')
-                  .select('player_id,proj_ceiling,proj_floor')
+                  .select('player_id,proj_ceiling,context_mult')
                   .eq('game_date', game_date)
                   .in_('player_id', chunk_ids)
                   .execute())
         for r in rows.data:
             ceil_ = r.get('proj_ceiling') or 0.0
-            flr = r.get('proj_floor') or 0.0
-            player_var[r['player_id']] = max((ceil_ - flr) ** 2, 0.01)
-    return player_var
+            ctx   = r.get('context_mult') or 1.0
+            quality[r['player_id']] = max(ceil_ * ctx, 0.01)
+    return quality
 
 
-def lineup_corr(pids_a: set, pids_b: set, player_var: dict) -> float:
-    """Variance-weighted Jaccard overlap between two lineups.
+def lineup_corr(pids_a: set, pids_b: set, player_quality: dict) -> float:
+    """Quality-weighted Jaccard overlap between two lineups for diversity reporting.
     Returns 0 (nothing shared) to 1 (identical lineups).
-    High-variance boom-bust players count more when shared."""
+    High-quality boom players count more when shared."""
     shared = pids_a & pids_b
     all_p  = pids_a | pids_b
-    shared_var = sum(player_var.get(p, 1.0) for p in shared)
-    total_var  = sum(player_var.get(p, 1.0) for p in all_p)
-    return shared_var / total_var if total_var > 0 else 0.0
+    shared_q = sum(player_quality.get(p, 1.0) for p in shared)
+    total_q  = sum(player_quality.get(p, 1.0) for p in all_p)
+    return shared_q / total_q if total_q > 0 else 0.0
 
 
 def marginal_gain(candidate: dict, selected: list[dict],
-                  player_var: dict, disc: float) -> float:
-    """Marginal E[max] gain from adding candidate to selected set.
-    Discounts EV by average correlation with already-selected lineups.
-    disc=1.0 → full diversity penalty; disc=0.0 → pure EV sort."""
-    ev = candidate['proj'] or 0.0
-    if not selected or disc == 0.0:
+                  player_quality: dict, alpha: float) -> float:
+    """Coverage-based marginal gain from adding candidate to selected set.
+    Rewards covering high-quality players not yet represented in the portfolio.
+    Signal: gpp_score (ceiling-weighted). Diversity: coverage of boom opportunities.
+    alpha=0.30 → strong coverage reward; alpha=0.0 → pure gpp_score sort."""
+    ev = candidate.get('gpp_score') or candidate.get('proj') or 0.0
+    if not selected or alpha == 0.0:
         return ev
-    pids_c = candidate['_pids']
-    avg_corr = np.mean([lineup_corr(pids_c, s['_pids'], player_var) for s in selected])
-    return ev * (1.0 - disc * avg_corr)
+    already_covered = {pid for lu in selected for pid in lu['_pids']}
+    new_quality = sum(player_quality.get(pid, 0.0)
+                      for pid in candidate['_pids']
+                      if pid not in already_covered)
+    # Normalize: 10 players × avg quality ~18 pts ≈ 180 per full lineup
+    return ev + alpha * (new_quality / 180.0)
 
 
-def greedy_portfolio(pool: list[dict], player_var: dict,
-                     k: int, disc: float) -> list[dict]:
-    """Greedy Max-E[max] selection. O(K × N) time.
+def greedy_portfolio(pool: list[dict], player_quality: dict,
+                     k: int, alpha: float) -> list[dict]:
+    """Greedy coverage-maximizing selection. O(K × N) time.
     Returns list of K selected lineup dicts, ordered by selection round."""
     selected = []
     remaining = list(pool)
@@ -115,13 +121,13 @@ def greedy_portfolio(pool: list[dict], player_var: dict,
     for lu in remaining:
         lu['_pids'] = set(lu['player_ids'])
 
-    print(f"  Running greedy portfolio selection (K={k}, disc={disc:.1f}) "
+    print(f"  Running greedy portfolio selection (K={k}, alpha={alpha:.2f}) "
           f"over {len(remaining):,} candidates...")
 
     while len(selected) < k and remaining:
         best_idx, best_gain = 0, -1.0
         for i, cand in enumerate(remaining):
-            g = marginal_gain(cand, selected, player_var, disc)
+            g = marginal_gain(cand, selected, player_quality, alpha)
             if g > best_gain:
                 best_gain = g
                 best_idx = i
@@ -134,15 +140,15 @@ def greedy_portfolio(pool: list[dict], player_var: dict,
     return selected
 
 
-def diversity_stats(selected: list[dict], player_var: dict) -> dict:
-    """Compute avg and max pairwise player overlap for selected portfolio."""
+def diversity_stats(selected: list[dict], player_quality: dict) -> dict:
+    """Compute avg and max pairwise quality-weighted player overlap for selected portfolio."""
     n = len(selected)
     if n < 2:
         return {'avg_overlap_pct': 0.0, 'max_overlap_pct': 0.0, 'pairs': 0}
     overlaps = []
     for i in range(n):
         for j in range(i + 1, n):
-            overlaps.append(lineup_corr(selected[i]['_pids'], selected[j]['_pids'], player_var))
+            overlaps.append(lineup_corr(selected[i]['_pids'], selected[j]['_pids'], player_quality))
     return {
         'avg_overlap_pct': round(np.mean(overlaps) * 100, 1),
         'max_overlap_pct': round(np.max(overlaps) * 100, 1),
@@ -157,12 +163,12 @@ def main():
     parser.add_argument('--k',      type=int, default=20, help='Number of lineups to select')
     parser.add_argument('--contest', default='large',
                         choices=['large', 'mid', 'small', 'single'],
-                        help='Contest type: large/mid/small/single (controls diversity aggressiveness)')
+                        help='Contest type: large/mid/small/single (controls coverage reward strength)')
     args = parser.parse_args()
 
-    disc = CONTEST_DISC[args.contest]
+    alpha = COVERAGE_ALPHA[args.contest]
     print(f"\nPortfolio Optimizer — {args.date} / {args.slate} / K={args.k} / "
-          f"contest={args.contest} (disc={disc:.1f})")
+          f"contest={args.contest} (alpha={alpha:.2f})")
     print('=' * 65)
 
     # Load pool
@@ -175,15 +181,15 @@ def main():
 
     # Collect all unique player IDs
     all_pids = list({p for lu in pool for p in (lu['player_ids'] or [])})
-    print(f"  Loading player variance for {len(all_pids):,} players...")
-    player_var = load_player_variance(args.date, all_pids)
-    print(f"  Variance loaded for {len(player_var):,} players")
+    print(f"  Loading player quality for {len(all_pids):,} players...")
+    player_quality = load_player_quality(args.date, all_pids)
+    print(f"  Quality loaded for {len(player_quality):,} players")
 
     # Run optimizer
-    selected = greedy_portfolio(pool, player_var, args.k, disc)
+    selected = greedy_portfolio(pool, player_quality, args.k, alpha)
 
     # Diversity stats
-    stats = diversity_stats(selected, player_var)
+    stats = diversity_stats(selected, player_quality)
 
     # Report
     print(f"\n{'='*65}")
