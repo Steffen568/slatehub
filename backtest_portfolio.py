@@ -32,14 +32,16 @@ from supabase import create_client
 
 # Reuse portfolio core functions
 from optimize_portfolio import (
-    lineup_corr, greedy_portfolio, diversity_stats, COVERAGE_ALPHA
+    lineup_corr, greedy_portfolio, diversity_stats, COVERAGE_ALPHA,
+    load_player_sim_data, simulate_scenarios, score_lineups_scenarios,
+    sim_greedy_portfolio, N_SIMS,
 )
 
 load_dotenv()
 sb = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'])
 
-GPP_LINE  = 147.0   # avg top-1% threshold from research_findings
-CASH_LINE = 94.0    # avg cash line from research_findings
+GPP_LINE  = 148.0   # avg top-1% threshold from 4 real contest standings (133–172 range)
+CASH_LINE = 111.0   # avg cash line (~top 22%) from 4 real contest standings (103–129 range)
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────
@@ -139,7 +141,8 @@ def random_k(pool: list[dict], k: int, seed: int = 42) -> list[dict]:
 
 # ── Per-date backtest ─────────────────────────────────────────────────────────
 
-def backtest_date(game_date: str, slate: str, k: int, alpha: float) -> dict | None:
+def backtest_date(game_date: str, slate: str, k: int, alpha: float,
+                  n_sims: int = N_SIMS) -> dict | None:
     pool = load_pool_for_date(game_date, slate)
     if not pool:
         return None
@@ -161,8 +164,17 @@ def backtest_date(game_date: str, slate: str, k: int, alpha: float) -> dict | No
     pool_best = max(score_lineup(lu, actual_by_pid) for lu in pool)
     pool_avg  = np.mean([score_lineup(lu, actual_by_pid) for lu in pool])
 
-    # Run all strategies
+    # Coverage-based portfolio (existing approach)
     port_picks = greedy_portfolio(pool, player_quality, k, alpha)
+
+    # Simulation-based portfolio (new approach)
+    player_sim_data  = load_player_sim_data(game_date, all_pids)
+    scenario_scores  = simulate_scenarios(player_sim_data, n_sims=n_sims,
+                                          seed=hash(game_date + slate) % (2**31))
+    score_lineups_scenarios(pool, scenario_scores, n_sims=n_sims)
+    sim_picks = sim_greedy_portfolio(pool, k, verbose=False)
+
+    # Baseline strategies
     gpp_picks  = top_k_by(pool, 'gpp_score', k)
     proj_picks = top_k_by(pool, 'proj', k)
     rand_picks = random_k(pool, k)
@@ -174,6 +186,7 @@ def backtest_date(game_date: str, slate: str, k: int, alpha: float) -> dict | No
         'pool_best':  round(pool_best, 1),
         'pool_avg':   round(pool_avg, 1),
         'portfolio':  score_strategy(port_picks, actual_by_pid, player_quality, pool),
+        'sim_port':   score_strategy(sim_picks,  actual_by_pid, player_quality, pool),
         'gpp_score':  score_strategy(gpp_picks,  actual_by_pid, player_quality, pool),
         'projection': score_strategy(proj_picks, actual_by_pid, player_quality, pool),
         'random':     score_strategy(rand_picks, actual_by_pid, player_quality, pool),
@@ -184,15 +197,15 @@ def backtest_date(game_date: str, slate: str, k: int, alpha: float) -> dict | No
 # ── Reporting ─────────────────────────────────────────────────────────────────
 
 def print_summary(all_results: list[dict], k: int) -> None:
-    strategies = ['portfolio', 'gpp_score', 'projection', 'random']
-    labels     = ['Portfolio', 'GPP Score', 'Projection', 'Random  ']
+    strategies = ['portfolio', 'sim_port', 'gpp_score', 'projection', 'random']
+    labels     = ['Portfolio ', 'SimPort   ', 'GPP Score ', 'Projection', 'Random    ']
 
-    print(f"\n{'='*72}")
+    print(f"\n{'='*80}")
     print(f"  Portfolio Backtest — {len(all_results)} slate-days, K={k}")
-    print(f"{'='*72}")
+    print(f"{'='*80}")
     print(f"  {'Strategy':<12} {'MaxActual':>10} {'AvgActual':>10} "
           f"{'GPP_hits':>9} {'Cash_hits':>10} {'AvgOverlap':>11} {'BestRank':>9}")
-    print(f"  {'-'*70}")
+    print(f"  {'-'*72}")
 
     for strat, label in zip(strategies, labels):
         vals = [r[strat] for r in all_results if r.get(strat)]
@@ -213,33 +226,36 @@ def print_summary(all_results: list[dict], k: int) -> None:
 
     # Per-date breakdown
     print(f"\n  Per-date breakdown (max_actual per strategy):")
-    print(f"  {'Date':<12} {'Slate':<8} {'Port':>6} {'GPP':>6} {'Proj':>6} "
+    print(f"  {'Date':<12} {'Slate':<8} {'Port':>6} {'Sim':>6} {'GPP':>6} {'Proj':>6} "
           f"{'Rand':>6} {'Oracle':>8} {'PoolSz':>7}")
-    print(f"  {'-'*65}")
+    print(f"  {'-'*72}")
     for r in sorted(all_results, key=lambda x: x['date']):
         port = r['portfolio'].get('max_actual', 0) if r.get('portfolio') else 0
+        sim  = r['sim_port'].get('max_actual', 0) if r.get('sim_port') else 0
         gpp  = r['gpp_score'].get('max_actual', 0) if r.get('gpp_score') else 0
         proj = r['projection'].get('max_actual', 0) if r.get('projection') else 0
         rand = r['random'].get('max_actual', 0) if r.get('random') else 0
-        # Highlight winner per row
-        best_s = max(port, gpp, proj)
-        pf = f'*{port:.0f}' if port == best_s else f' {port:.0f}'
-        gf = f'*{gpp:.0f}' if gpp == best_s else f' {gpp:.0f}'
+        best_s = max(port, sim, gpp, proj)
+        pf  = f'*{port:.0f}' if port == best_s else f' {port:.0f}'
+        sf  = f'*{sim:.0f}'  if sim  == best_s else f' {sim:.0f}'
+        gf  = f'*{gpp:.0f}'  if gpp  == best_s else f' {gpp:.0f}'
         prf = f'*{proj:.0f}' if proj == best_s else f' {proj:.0f}'
-        print(f"  {r['date']:<12} {r['slate']:<8} {pf:>6} {gf:>6} {prf:>6} "
+        print(f"  {r['date']:<12} {r['slate']:<8} {pf:>6} {sf:>6} {gf:>6} {prf:>6} "
               f"{rand:>6.0f} {r['pool_best']:>8.0f} {r['pool_size']:>7,}")
 
-    # Win count per strategy (how many dates each strategy had the highest max_actual)
-    wins = {s: 0 for s in strategies[:-1]}  # exclude random
+    # Win counts (excluding random)
+    scored_strats = strategies[:-1]
+    wins = {s: 0 for s in scored_strats}
     for r in all_results:
-        vals_s = {s: r[s].get('max_actual', 0) if r.get(s) else 0 for s in strategies[:-1]}
+        vals_s = {s: r[s].get('max_actual', 0) if r.get(s) else 0 for s in scored_strats}
         best_val = max(vals_s.values())
         for s, v in vals_s.items():
             if v == best_val:
                 wins[s] += 1
     total = len(all_results)
     print(f"\n  Wins (highest max_actual): "
-          + ' | '.join(f'{labels[i].strip()}={wins[s]}/{total}' for i, s in enumerate(strategies[:-1])))
+          + ' | '.join(f'{labels[i].strip()}={wins[s]}/{total}'
+                       for i, s in enumerate(scored_strats)))
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

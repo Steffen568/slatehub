@@ -2,21 +2,20 @@
 """
 optimize_portfolio.py — DFS Portfolio Optimizer
 
-Selects the optimal K lineups from the generated user pool using a
-greedy Max-E[max(V_1,...,V_K)] algorithm. No contest simulation or
-ownership data required.
+Two selection strategies:
 
-Mathematical basis:
-  E[max(V_1,...,V_K)] is maximized by selecting lineups with high
-  individual EV AND low correlation with already-selected lineups.
-  Correlation is measured as variance-weighted player overlap (Jaccard).
-  High-variance (boom-or-bust) players count more when shared — sharing
-  them tightly couples lineup fates, reducing portfolio ceiling.
+1. Coverage-based (greedy_portfolio): rewards lineups that cover new high-upside
+   players not yet represented. Fast. Uses gpp_score + context_mult as signal.
+
+2. Simulation-based (sim_greedy_portfolio): generates N game-outcome scenarios
+   from player distributions, then greedily maximizes E[max score across portfolio].
+   No arbitrary parameters — diversity emerges from the math.
+   Backed by Hunter/Vielma/Zaman (2016) and Mlcoch (2024, 34% ROI in production).
 
 Usage:
     py -3.12 optimize_portfolio.py --date 2026-05-01 --slate main --k 20
+    py -3.12 optimize_portfolio.py --date 2026-05-01 --slate main --k 20 --mode sim
     py -3.12 optimize_portfolio.py --date 2026-05-01 --slate main --k 150
-    py -3.12 optimize_portfolio.py --date 2026-05-01 --slate all --k 20
 
 Outputs: selected lineup IDs + diversity stats (avg pairwise overlap %).
 """
@@ -140,6 +139,148 @@ def greedy_portfolio(pool: list[dict], player_quality: dict,
     return selected
 
 
+# ── Simulation-based portfolio selection ──────────────────────────────────────
+# Implements Max-E[max(V_1,...,V_K)] via scenario simulation.
+# No alpha/disc parameters — lineup diversity emerges from the math:
+# a lineup correlated with already-selected ones adds near-zero expected improvement.
+
+N_SIMS       = 1000   # scenarios per slate (increase for less variance, decrease for speed)
+TEAM_VAR_SHARE = 0.30  # 30% of player score variance is shared within a team
+TEAM_SD_FACTOR = 0.15  # team boost sd = 15% of avg slate projection
+
+
+def load_player_sim_data(game_date: str, player_ids: list[int]) -> dict[int, dict]:
+    """Load per-player simulation parameters: proj, sd, team, game_pk, ceiling, ctx.
+    SD is derived from (proj_ceiling - proj_floor) / 4 — treating ceiling/floor as ~2-sigma bounds.
+    Falls back to proj_dk_pts * 0.45 if ceiling/floor are missing.
+    """
+    data = {}
+    for i in range(0, len(player_ids), 500):
+        chunk = player_ids[i:i + 500]
+        rows = (sb.table('player_projections')
+                  .select('player_id,proj_dk_pts,proj_floor,proj_ceiling,team,game_pk,context_mult')
+                  .eq('game_date', game_date)
+                  .in_('player_id', chunk)
+                  .execute())
+        for r in rows.data:
+            proj  = r.get('proj_dk_pts') or 0.0
+            ceil_ = r.get('proj_ceiling') or 0.0
+            floor_ = r.get('proj_floor') or 0.0
+            # Derive SD from ceiling-floor spread; fallback to 45% of projection
+            if ceil_ > floor_:
+                sd = (ceil_ - floor_) / 4.0
+            else:
+                sd = proj * 0.45
+            data[r['player_id']] = {
+                'proj':  proj,
+                'sd':    sd,
+                'team':  r.get('team') or '',
+                'ceil':  ceil_,
+                'ctx':   r.get('context_mult') or 1.0,
+            }
+    return data
+
+
+def simulate_scenarios(player_sim_data: dict[int, dict],
+                       n_sims: int = N_SIMS,
+                       seed: int = 42) -> dict[int, np.ndarray]:
+    """
+    Generate n_sims game-outcome scenarios using stored player distributions.
+    Models team-level correlation: 30% of variance is shared within a team
+    (when the Cubs score 8 runs, all Cubs batters benefit).
+
+    Returns: {player_id: np.array(n_sims,)} — one score per scenario.
+    """
+    rng = np.random.default_rng(seed)
+
+    # Avg proj across all players for team boost scaling
+    projs = [d['proj'] for d in player_sim_data.values() if d['proj'] > 0]
+    avg_proj = float(np.mean(projs)) if projs else 8.0
+
+    # Draw one team-level boost per team per scenario
+    teams = list({d['team'] for d in player_sim_data.values() if d['team']})
+    team_boosts = {t: rng.normal(0, TEAM_SD_FACTOR * avg_proj, n_sims) for t in teams}
+
+    scenario_scores = {}
+    for pid, d in player_sim_data.items():
+        proj = d['proj']
+        sd   = d['sd'] if d['sd'] > 0 else proj * 0.5
+        team = d['team']
+
+        # Individual variance (after removing team-level share)
+        ind_sd = sd * np.sqrt(max(1 - TEAM_VAR_SHARE, 0.0))
+        individual = rng.normal(proj, ind_sd, n_sims)
+        boost = team_boosts.get(team, np.zeros(n_sims))
+        scenario_scores[pid] = np.maximum(0.0, individual + boost)
+
+    return scenario_scores
+
+
+def score_lineups_scenarios(pool: list[dict],
+                            scenario_scores: dict[int, np.ndarray],
+                            n_sims: int = N_SIMS) -> None:
+    """
+    Adds '_sim_scores' (np.array, shape n_sims) to each lineup dict in-place.
+    Vectorized across players for speed.
+    """
+    # Build score matrix (n_players, n_sims) for fast indexing
+    all_pids   = list(scenario_scores.keys())
+    pid_to_idx = {pid: i for i, pid in enumerate(all_pids)}
+    score_mat  = np.stack([scenario_scores[pid] for pid in all_pids])  # (n_players, n_sims)
+    zeros      = np.zeros(n_sims)
+
+    for lu in pool:
+        pids    = lu.get('player_ids') or []
+        indices = [pid_to_idx[pid] for pid in pids if pid in pid_to_idx]
+        lu['_sim_scores'] = score_mat[indices].sum(axis=0) if indices else zeros.copy()
+
+
+def sim_greedy_portfolio(pool: list[dict], k: int,
+                         verbose: bool = True) -> list[dict]:
+    """
+    Greedy Max-E[max(V_1,...,V_K)] using simulated scenarios.
+    Fully vectorized — fast even for 25k lineups × 1k sims.
+
+    At each round: picks the lineup with highest Expected Improvement
+    over the current portfolio ceiling across all scenarios:
+        E[max(0, candidate_score[s] - current_max[s])]
+
+    Diversity is automatic: a lineup correlated with already-selected ones
+    wins in the same scenarios → near-zero marginal improvement → not picked.
+    """
+    n_sims = len(pool[0]['_sim_scores']) if pool else N_SIMS
+
+    # Build score matrix (n_pool, n_sims) for vectorized ops
+    sim_matrix   = np.stack([lu['_sim_scores'] for lu in pool])  # (n_pool, n_sims)
+    remaining_idx = list(range(len(pool)))
+    current_max  = np.zeros(n_sims)
+    selected     = []
+
+    if verbose:
+        print(f"  Running sim-greedy portfolio (K={k}, n_sims={n_sims:,}) "
+              f"over {len(pool):,} candidates...")
+
+    while len(selected) < k and remaining_idx:
+        # Vectorized expected improvement for all remaining candidates
+        rem_sims     = sim_matrix[remaining_idx]          # (n_rem, n_sims)
+        improvements = np.maximum(0.0, rem_sims - current_max)  # broadcast
+        exp_imp      = improvements.mean(axis=1)           # (n_rem,)
+
+        best_local  = int(exp_imp.argmax())
+        best_global = remaining_idx[best_local]
+
+        chosen = pool[best_global]
+        chosen['_rank'] = len(selected) + 1
+        current_max = np.maximum(current_max, sim_matrix[best_global])
+        remaining_idx.pop(best_local)
+        selected.append(chosen)
+
+        if verbose and len(selected) % 10 == 0:
+            print(f"    Selected {len(selected)}/{k}...")
+
+    return selected
+
+
 def diversity_stats(selected: list[dict], player_quality: dict) -> dict:
     """Compute avg and max pairwise quality-weighted player overlap for selected portfolio."""
     n = len(selected)
@@ -164,11 +305,15 @@ def main():
     parser.add_argument('--contest', default='large',
                         choices=['large', 'mid', 'small', 'single'],
                         help='Contest type: large/mid/small/single (controls coverage reward strength)')
+    parser.add_argument('--mode', default='coverage', choices=['coverage', 'sim'],
+                        help='Selection mode: coverage (fast) or sim (simulation-based)')
+    parser.add_argument('--sims', type=int, default=N_SIMS,
+                        help=f'Number of scenarios for sim mode (default: {N_SIMS})')
     args = parser.parse_args()
 
     alpha = COVERAGE_ALPHA[args.contest]
     print(f"\nPortfolio Optimizer — {args.date} / {args.slate} / K={args.k} / "
-          f"contest={args.contest} (alpha={alpha:.2f})")
+          f"mode={args.mode} / contest={args.contest} (alpha={alpha:.2f})")
     print('=' * 65)
 
     # Load pool
@@ -181,12 +326,22 @@ def main():
 
     # Collect all unique player IDs
     all_pids = list({p for lu in pool for p in (lu['player_ids'] or [])})
-    print(f"  Loading player quality for {len(all_pids):,} players...")
-    player_quality = load_player_quality(args.date, all_pids)
-    print(f"  Quality loaded for {len(player_quality):,} players")
 
-    # Run optimizer
-    selected = greedy_portfolio(pool, player_quality, args.k, alpha)
+    if args.mode == 'sim':
+        print(f"  Loading player sim data for {len(all_pids):,} players...")
+        player_sim_data = load_player_sim_data(args.date, all_pids)
+        print(f"  Simulating {args.sims:,} game scenarios...")
+        scenario_scores = simulate_scenarios(player_sim_data, n_sims=args.sims)
+        score_lineups_scenarios(pool, scenario_scores, n_sims=args.sims)
+        selected = sim_greedy_portfolio(pool, args.k)
+        # Still need player_quality for diversity_stats reporting
+        player_quality = {pid: d['ceil'] * d['ctx']
+                          for pid, d in player_sim_data.items()}
+    else:
+        print(f"  Loading player quality for {len(all_pids):,} players...")
+        player_quality = load_player_quality(args.date, all_pids)
+        print(f"  Quality loaded for {len(player_quality):,} players")
+        selected = greedy_portfolio(pool, player_quality, args.k, alpha)
 
     # Diversity stats
     stats = diversity_stats(selected, player_quality)
