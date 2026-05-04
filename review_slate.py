@@ -5,8 +5,14 @@ sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
 Slate Review — Post-game diagnostic for lineup pool performance
 
 Scores every sim_pool lineup against actual DK points and produces a
-5-section report diagnosing what went right, wrong, and whether
+6-section report diagnosing what went right, wrong, and whether
 different sort strategies would have helped.
+
+Section 6 (Ownership Accuracy) runs automatically if actual ownership
+has been loaded. To include it, run after games lock:
+
+  py -3.12 load_actual_ownership.py --csv contest-standings-XXXXXX.csv --date YYYY-MM-DD
+  py -3.12 review_slate.py --date YYYY-MM-DD
 
 Run:
   py -3.12 review_slate.py                           # latest date with actuals
@@ -473,6 +479,94 @@ def review(dates, slate_filter=None, top_n=20):
                 else:
                     print(f"    >> Correctly identified {actual_best_team} as the best stack")
 
+            # ══════════════════════════════════════════════════════════
+            # SECTION 6: Ownership Accuracy (if actual ownership loaded)
+            # ══════════════════════════════════════════════════════════
+            own_stats = None
+            try:
+                # Load actual ownership for this date/slate from actual_ownership table
+                # (populated by: py -3.12 load_actual_ownership.py --csv <file> --date <date>)
+                actual_own_rows = sb.table('actual_ownership').select(
+                    'player_id, dk_name, ownership_pct, position'
+                ).eq('game_date', game_date).eq('contest_type', 'classic').execute().data or []
+
+                if actual_own_rows:
+                    # Deduplicate — keep highest ownership_pct per player_id
+                    actual_own_map = {}
+                    for r in actual_own_rows:
+                        pid = r['player_id']
+                        pct_val = r.get('ownership_pct') or 0.0
+                        if pid and (pid not in actual_own_map or pct_val > actual_own_map[pid]['pct']):
+                            actual_own_map[pid] = {
+                                'pct': pct_val,
+                                'name': r.get('dk_name', ''),
+                                'pos': r.get('position', ''),
+                            }
+
+                    # Load projected ownership for this date/slate from slate_ownership
+                    proj_own_rows = sb.table('slate_ownership').select(
+                        'player_id, proj_ownership'
+                    ).eq('game_date', game_date).eq('dk_slate', slate).execute().data or []
+                    proj_own_map = {r['player_id']: r['proj_ownership'] for r in proj_own_rows
+                                    if r.get('proj_ownership') is not None}
+
+                    # Match on player_id
+                    own_matched = []
+                    for pid, arow in actual_own_map.items():
+                        if pid in proj_own_map:
+                            actual_pct = arow['pct']
+                            proj_pct = proj_own_map[pid]
+                            own_matched.append({
+                                'pid': pid,
+                                'name': arow['name'],
+                                'pos': arow['pos'],
+                                'actual': actual_pct,
+                                'proj': proj_pct,
+                                'delta': proj_pct - actual_pct,
+                            })
+
+                    if len(own_matched) >= 5:
+                        a_vals = [m['actual'] for m in own_matched]
+                        p_vals = [m['proj'] for m in own_matched]
+                        own_bias = float(np.mean([m['delta'] for m in own_matched]))
+                        own_mae = float(np.mean([abs(m['delta']) for m in own_matched]))
+                        own_r = float(np.corrcoef(p_vals, a_vals)[0, 1]) if len(own_matched) > 2 else 0.0
+
+                        # Tier breakdown
+                        chalk = [m for m in own_matched if m['actual'] > 20]
+                        mid = [m for m in own_matched if 5 <= m['actual'] <= 20]
+                        low = [m for m in own_matched if m['actual'] < 5 and m['actual'] > 0]
+
+                        print(f"\n  SECTION 6: Ownership Accuracy ({len(own_matched)} matched players)")
+                        print(f"  {'═'*52}")
+                        print(f"    Overall: r={own_r:.3f}  bias={own_bias:+.2f}%  MAE={own_mae:.2f}%")
+                        for label, grp in [('Chalk >20%', chalk), ('Mid 5-20%', mid), ('Low <5%', low)]:
+                            if grp:
+                                gb = float(np.mean([m['delta'] for m in grp]))
+                                gm = float(np.mean([abs(m['delta']) for m in grp]))
+                                print(f"    {label:<12}: n={len(grp):3d}  bias={gb:+.2f}%  MAE={gm:.2f}%")
+
+                        over = sorted(own_matched, key=lambda m: m['delta'], reverse=True)[:5]
+                        under = sorted(own_matched, key=lambda m: m['delta'])[:5]
+                        print(f"\n    Over-projected (we too high):")
+                        for m in over:
+                            if m['delta'] > 1:
+                                print(f"      {m['name']:<25} proj={m['proj']:5.1f}%  actual={m['actual']:5.1f}%  delta={m['delta']:+.1f}%")
+                        print(f"    Under-projected (we too low):")
+                        for m in under:
+                            if m['delta'] < -1:
+                                print(f"      {m['name']:<25} proj={m['proj']:5.1f}%  actual={m['actual']:5.1f}%  delta={m['delta']:+.1f}%")
+
+                        own_stats = {'r': own_r, 'bias': own_bias, 'mae': own_mae, 'n': len(own_matched)}
+                    else:
+                        print(f"\n  SECTION 6: Ownership — insufficient matched players ({len(own_matched)})")
+                        print(f"    Run: py -3.12 load_actual_ownership.py --csv <contest-standings-*.csv> --date {game_date}")
+                else:
+                    print(f"\n  SECTION 6: Ownership — no actual ownership data for {game_date}")
+                    print(f"    Run: py -3.12 load_actual_ownership.py --csv <contest-standings-*.csv> --date {game_date}")
+            except Exception as e:
+                print(f"\n  SECTION 6: Ownership — error: {e}")
+
             # ── Write to findings MD ──────────────────────────────────
             lines = [f"\n## Slate Review — {game_date} / {slate}\n"]
             lines.append(f"- **Pool**: {len(scored)} lineups, avg actual={pool_avg:.1f}, "
@@ -489,6 +583,8 @@ def review(dates, slate_filter=None, top_n=20):
             if opps:
                 o = opps[0]
                 lines.append(f"- **Biggest missed opp**: {o['name']} (actual={o['actual']:.1f}, {o['exposure']:.1f}% exp)")
+            if own_stats:
+                lines.append(f"- **Ownership accuracy**: r={own_stats['r']:.3f}, MAE={own_stats['mae']:.2f}%, bias={own_stats['bias']:+.2f}% (n={own_stats['n']})")
             lines.append("")
 
             with open(FINDINGS_PATH, 'a', encoding='utf-8') as f:
