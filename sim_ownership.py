@@ -246,12 +246,12 @@ def build_pool(data, slate=None):
 
         if is_pitcher and odds_row:
             # Pitchers: low opponent implied = favorable matchup = higher ownership.
-            # Direction is INVERTED vs hitters — a 7.5-total game is good for the pitcher.
+            # Normalize against league average (4.5): avg opp → 0.5, low opp → >0.5, high opp → <0.5.
+            # The implied total already prices in all factors (team quality, pitcher, park, weather).
             game_row = games_by_pk.get(p.get('game_pk'), {})
             pitcher_is_home = (p.get('team') == game_row.get('home_team'))
             opp_imp = safe(odds_row.get('away_implied' if pitcher_is_home else 'home_implied')) or (game_total / 2.0)
-            # opp_implied=3.0 (great) → 1.0 | opp_implied=5.0 (avg) → 0.5 | opp_implied=7.0 (bad) → 0.0
-            env_score = clip(1.0 - (opp_imp - 3.0) / 4.0, 0.0, 1.0)
+            env_score = clip(1.5 - opp_imp / 4.5, 0.0, 1.0)
         else:
             env_score = (game_total / 8.5) ** 2.0  # hitters: high total = more ownership
 
@@ -332,7 +332,7 @@ def build_pool(data, slate=None):
             game_row = games_by_pk.get(best.get('game_pk'), {})
             pit_is_home = (best.get('team') == game_row.get('home_team'))
             opp_imp = safe(odds_row.get('away_implied' if pit_is_home else 'home_implied')) or (gt / 2.0)
-            es = clip(1.0 - (opp_imp - 3.0) / 4.0, 0.0, 1.0)
+            es = clip(1.5 - opp_imp / 4.5, 0.0, 1.0)
         else:
             es = (gt / 8.5) ** 2.0
         best['base_score'] = (ps * W_PROJ + ss * W_SALARY + vs * W_VALUE +
