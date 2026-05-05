@@ -675,6 +675,10 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
     seasons_to_scan = ([current_season] if use_current else []) + \
                       [current_season - 1, current_season - 2]
 
+    # Physical metrics (stuff+, SwStr%, velo) are meaningful even with tiny samples —
+    # always scan current season for these regardless of IP threshold.
+    seasons_to_scan_predictive = [current_season, current_season - 1, current_season - 2]
+
     # Total career IP for small-sample scaling
     total_career_ip = sum(
         safe(stats_by_season.get(yr, {}).get('ip'), 0)
@@ -689,7 +693,7 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
     csw_pct = None
     velo = None
     lob_pct = None
-    for yr in seasons_to_scan:
+    for yr in seasons_to_scan_predictive:
         row = stats_by_season.get(yr)
         if not row:
             continue
@@ -830,8 +834,10 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
     # across recent seasons), they're likely an opener — cap IP projection low.
     # EXCEPTION: if current season shows starter role (GS/G >= 50%), trust the
     # role change (e.g. reliever-to-starter conversion like Matz 2026).
+    # Check curr_is_starter from raw current-season data, independent of use_current —
+    # a pitcher with 2/2 GS is clearly a starter even if below the IP threshold.
     curr_is_starter = False
-    if use_current and curr:
+    if curr:
         curr_g = safe(curr.get('g'), 0)
         curr_gs = safe(curr.get('gs'), 0)
         if curr_g >= 2 and curr_gs / curr_g >= 0.50:
@@ -1178,6 +1184,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
         # Modern MLB starters average ~5.0 IP/GS. Without Vegas workload signal,
         # regress heavily to prevent inflated career IP/GS from dominating.
         proj_ip = talent_ip * 0.50 + 5.0 * 0.50
+
 
     # ── Pitcher splits adjustment ──────────────────────────────────────────
     # Blend split-specific K%, BB%, xFIP based on opposing lineup handedness
@@ -2641,6 +2648,19 @@ def run():
             else:
                 blended_k = bayesian_k
             exp_k_rate = clip(blended_k * park_k_edge_dc, 0.08, 0.45)
+
+            # IP quality adjustment: elite K pitchers go deeper, bad pitchers get pulled.
+            # Uses blended_k (already incorporates current-season pull) — avoids xFIP noise.
+            # Asymmetric: declines penalized harder (sticky) vs improvements (could be schedule).
+            if not is_opener:
+                k_ip_factor = blended_k / LEAGUE_AVG_K_PCT
+                if k_ip_factor >= 1.0:
+                    ip_quality_adj = clip(1.0 + (k_ip_factor - 1.0) * 0.30, 1.0, 1.12)
+                else:
+                    ip_quality_adj = clip(1.0 + (k_ip_factor - 1.0) * 0.55, 0.84, 1.0)
+                exp_ip = clip(exp_ip * ip_quality_adj, 2.0, 8.0)
+                exp_bf = exp_ip * PA_PER_IP
+
             exp_ks = exp_bf * exp_k_rate
 
             # Pitcher quality factor: dampens matchup effect for mediocre pitchers.
@@ -2679,6 +2699,12 @@ def run():
                 era_anchor = talent['xfip'] * (1.0 - siera_wt) + talent['siera'] * siera_wt
             else:
                 era_anchor = talent['xfip'] * 0.50 + talent['siera'] * 0.50
+            # ERA anchor direct blend: pull toward current-season xFIP when sample is meaningful.
+            # Mirrors the K blend pattern — Bayesian xFIP has only ~2% current-season weight.
+            curr_xfip_val = safe(curr_row.get('xfip')) if curr_row else None
+            if curr_xfip_val and curr_ip_k >= 13:
+                curr_xfip_wt = clip(curr_ip_k / (curr_ip_k + 80.0), 0.10, 0.50)
+                era_anchor = era_anchor * (1.0 - curr_xfip_wt) + curr_xfip_val * curr_xfip_wt
             park_hr_f = safe(park_row.get('hr_factor'), 100) / 100.0 if park_row else 1.0
             wx_hr = weather_hr_mult(wx_row)
             park_er_adj = 1.0 + (park_hr_f - 1.0) * 0.45
@@ -2707,6 +2733,26 @@ def run():
             gb_adj = clip(1.0 - (gb_pct_val - 0.43) * 0.15, 0.92, 1.04)
             bb_adj = clip(1.0 - (talent['bb_pct'] - LEAGUE_AVG_BB_PCT) * 1.5, 0.92, 1.04)
             direct_dk *= gb_adj * bb_adj
+
+            # Pitcher context_mult — analogous to hitter formula but inverted:
+            # low opp_implied (hard matchup) → mult > 1.0 (favorable for pitcher DFS)
+            # hitter-friendly park inverts (bad for pitcher) | weather same direction
+            _pit_opp_implied = None
+            if odds_row:
+                _pit_opp_implied = safe(odds_row.get('away_implied' if is_home else 'home_implied'))
+                if not _pit_opp_implied:
+                    _gt = safe(odds_row.get('game_total'))
+                    _pit_opp_implied = _gt / 2.0 if _gt else None
+            _pit_vegas_mult = round2(clip((LEAGUE_AVG_IMPLIED / _pit_opp_implied)
+                                         if _pit_opp_implied else 1.0, 0.70, 1.45))
+            _pit_park_mult  = round2(park_hr_f)  # already computed above
+            _pit_wx_mult    = round2(wx_hr)       # already computed above
+            _pitcher_context_mult = round2(
+                1.0 + (_pit_vegas_mult - 1.0) * 0.80
+                    + (1.0 / _pit_park_mult - 1.0) * 0.05
+                    + (_pit_wx_mult - 1.0) * 0.15
+            )
+            _pitcher_context_mult = round2(clip(_pitcher_context_mult, 0.5, 2.0))
 
             curr = p_stats.get(SEASON) or p_stats.get(SEASON-1) or p_stats.get(SEASON-2)
             full_name = (curr or {}).get('full_name') or '?'
@@ -2738,7 +2784,7 @@ def run():
                 # Pitcher transparency multipliers for diagnostics
                 'pitcher_mult': round2(opp_qual),  # opposing lineup quality (lower = weaker lineup = better for pitcher)
                 'platoon_mult': None,
-                'context_mult': None,
+                'context_mult': _pitcher_context_mult,
                 'vegas_mult': round2(exp_win / 0.25) if exp_win else None,  # win prob relative to baseline
                 'park_mult': round2(park_hr_f),
                 'weather_mult': round2(wx_hr),

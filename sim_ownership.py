@@ -51,14 +51,14 @@ CONFIRMED_BOOST = 1.5
 UNCONFIRMED_PENALTY = 0.4
 
 # Softmax temperature per position — lower = sharper (more concentrated at top players)
-# 2026-05-04 calibration: bias=+5.70%, MAE=6.72%, r=0.580.
-# Tier analysis: chalk -2.13% (under-proj), mid +4.97%, low +6.31% (over-proj).
-# Classic "too flat" distribution — sharpened both SP and hitter temps to concentrate at top.
-SOFTMAX_TEMP = {'SP': 0.38, 'C': 0.50, '1B': 0.50, '2B': 0.50,
+# 2026-05-04: SP 0.38→0.30 — even at 0.38, Schlittler/Gilbert projected 37-42% on large slate.
+# Target: no SP above 35% on a 12+ game slate. Lower temp concentrates more at true #1 SP.
+SOFTMAX_TEMP = {'SP': 0.30, 'C': 0.50, '1B': 0.50, '2B': 0.50,
                 '3B': 0.50, 'SS': 0.50, 'OF': 0.50}
 
 # Per-position ownership cap (large slate)
-POSITION_MAX_OWN = {'SP': 55.0, 'C': 30.0, '1B': 30.0, '2B': 30.0,
+# SP reduced from 55% to 35% — a single pitcher exceeding 35% on large slates is dangerous exposure.
+POSITION_MAX_OWN = {'SP': 35.0, 'C': 30.0, '1B': 30.0, '2B': 30.0,
                     '3B': 30.0, 'SS': 30.0, 'OF': 25.0}
 
 
@@ -193,6 +193,7 @@ def build_pool(data, slate=None):
                 if nm not in sal_name_map or s == 'main':
                     sal_name_map[nm] = row
 
+    games_by_pk = {g['game_pk']: g for g in data['games']}
     pool = []
     name_fallback_count = 0
 
@@ -242,7 +243,17 @@ def build_pool(data, slate=None):
         salary_score = (salary / 3500) ** 1.3
         value = (proj / salary * 1000) if salary > 0 else 0
         value_score = value ** 0.6
-        env_score = (game_total / 8.5) ** 2.0  # steeper curve — public piles into high-total games
+
+        if is_pitcher and odds_row:
+            # Pitchers: low opponent implied = favorable matchup = higher ownership.
+            # Direction is INVERTED vs hitters — a 7.5-total game is good for the pitcher.
+            game_row = games_by_pk.get(p.get('game_pk'), {})
+            pitcher_is_home = (p.get('team') == game_row.get('home_team'))
+            opp_imp = safe(odds_row.get('away_implied' if pitcher_is_home else 'home_implied')) or (game_total / 2.0)
+            # opp_implied=3.0 (great) → 1.0 | opp_implied=5.0 (avg) → 0.5 | opp_implied=7.0 (bad) → 0.0
+            env_score = clip(1.0 - (opp_imp - 3.0) / 4.0, 0.0, 1.0)
+        else:
+            env_score = (game_total / 8.5) ** 2.0  # hitters: high total = more ownership
 
         if not is_pitcher and batting_order:
             bo_score = {1: 1.30, 2: 1.25, 3: 1.20, 4: 1.15, 5: 1.05,
@@ -317,7 +328,13 @@ def build_pool(data, slate=None):
         vs = v ** 0.6
         odds_row = data['odds'].get(best.get('game_pk'))
         gt = safe(odds_row.get('game_total'), 8.5) if odds_row else 8.5
-        es = (gt / 8.5) ** 2.0
+        if best['is_pitcher'] and odds_row:
+            game_row = games_by_pk.get(best.get('game_pk'), {})
+            pit_is_home = (best.get('team') == game_row.get('home_team'))
+            opp_imp = safe(odds_row.get('away_implied' if pit_is_home else 'home_implied')) or (gt / 2.0)
+            es = clip(1.0 - (opp_imp - 3.0) / 4.0, 0.0, 1.0)
+        else:
+            es = (gt / 8.5) ** 2.0
         best['base_score'] = (ps * W_PROJ + ss * W_SALARY + vs * W_VALUE +
                               es * W_ENV + bo_s * W_BAT_ORDER)
         if not best['is_pitcher'] and gt > 9.0:
