@@ -1793,7 +1793,7 @@ def fetch_data(target_date: str) -> dict:
     games = sb.table('games').select(
         'game_pk,game_date,home_team,away_team,home_team_id,away_team_id,'
         'home_sp_id,away_sp_id,home_sp_hand,away_sp_hand,venue_id'
-    ).eq('game_date', target_date).execute().data or []
+    ).eq('game_date', target_date).neq('status', 'Postponed').execute().data or []
     print(f"  Games: {len(games)}")
     if not games:
         return {}

@@ -8500,6 +8500,22 @@ let _poolFilter = {};
 let _contestPool = [];     // contest pool player_id arrays for sim
 let _contestPoolFieldMult = 1;
 
+// Fetch all pages of a Supabase query in parallel (first page sequential, rest parallel)
+async function fetchAllPages(queryBuilder) {
+  const { data: first } = await queryBuilder.range(0, 999);
+  const rows = [...(first || [])];
+  if (rows.length < 1000) return rows;
+  // Fire up to 29 more pages in parallel (covers up to 30k rows)
+  const rest = await Promise.all(
+    Array.from({ length: 29 }, (_, i) => queryBuilder.range((i + 1) * 1000, (i + 2) * 1000 - 1))
+  );
+  for (const { data } of rest) {
+    if (!data || !data.length) break;
+    rows.push(...data);
+  }
+  return rows;
+}
+
 async function loadPoolFromDB() {
   // Determine which slate is active
   const slate = _activeSlate || 'main';
@@ -8510,48 +8526,39 @@ async function loadPoolFromDB() {
   showPoolLoading('Loading pool from database...');
 
   try {
-    // Fetch user pool
-    const userRes = [];
-    for (let offset = 0; ; offset += 1000) {
-      const { data } = await sb.from('sim_pool')
+    // Fetch user pool and contest pool in parallel, each with parallel pagination
+    updatePoolLoading('Fetching pool from database...', '', 10);
+    const [userRes, contestRes] = await Promise.all([
+      fetchAllPages(sb.from('sim_pool')
         .select('player_ids,salary,proj,stack_team,stack_size,sub_team,sub_size,avg_pms,gpp_score')
-        .eq('game_date', today).eq('dk_slate', slate).eq('pool_type', 'user')
-        .range(offset, offset + 999);
-      if (!data || !data.length) break;
-      userRes.push(...data);
-      if (data.length < 1000) break;
-    }
-    updatePoolLoading(`${userRes.length} user lineups`, 'Enriching with player data', 30);
-
-    // Fetch contest pool
-    const contestRes = [];
-    for (let offset = 0; ; offset += 1000) {
-      const { data } = await sb.from('sim_pool')
+        .eq('game_date', today).eq('dk_slate', slate).eq('pool_type', 'user')),
+      fetchAllPages(sb.from('sim_pool')
         .select('player_ids')
-        .eq('game_date', today).eq('dk_slate', slate).eq('pool_type', 'contest')
-        .range(offset, offset + 999);
-      if (!data || !data.length) break;
-      contestRes.push(...data);
-      if (data.length < 1000) break;
-    }
+        .eq('game_date', today).eq('dk_slate', slate).eq('pool_type', 'contest')),
+    ]);
 
     if (!userRes.length) {
       hidePoolLoading();
       showToast('No pool data found. Run generate_pool.py first.');
       return;
     }
+    updatePoolLoading(`${userRes.length} user lineups`, 'Enriching with player data', 30);
 
     // Collect all unique player IDs from pool lineups
-    const allPoolPids = [...new Set(userRes.flatMap(r => r.player_ids || []))];
-    updatePoolLoading(`Fetching ${allPoolPids.length} players`, 'Loading salary + projection data', 50);
+    const allPoolPids = new Set(userRes.flatMap(r => r.player_ids || []));
+    updatePoolLoading(`Fetching ${allPoolPids.size} players`, 'Loading salary + projection data', 50);
 
-    // Fetch salary and projection data directly — don't depend on allHitters/allPitchers
-    const [salRows, projRows] = await Promise.all([
-      batchIn('dk_salaries', 'player_id,name,position,salary,team,dk_slate', 'player_id', allPoolPids,
-        q => q.eq('dk_slate', slate)),
-      batchIn('player_projections', 'player_id,full_name,team,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,is_pitcher,batting_order,proj_ip,proj_ks,proj_er,win_prob,game_pk,context_mult', 'player_id', allPoolPids,
-        q => q.eq('game_date', today)),
+    // Fetch all slate players in 2 parallel queries — no batchIn chunking needed
+    const [salData, projData] = await Promise.all([
+      sb.from('dk_salaries')
+        .select('player_id,name,position,salary,team,dk_slate')
+        .eq('dk_slate', slate).eq('season', new Date().getFullYear()).limit(5000),
+      sb.from('player_projections')
+        .select('player_id,full_name,team,proj_dk_pts,proj_floor,proj_ceiling,proj_ownership,is_pitcher,batting_order,proj_ip,proj_ks,proj_er,win_prob,game_pk,context_mult')
+        .eq('game_date', today).limit(5000),
     ]);
+    const salRows = salData.data || [];
+    const projRows = projData.data || [];
 
     const salMap = {};
     salRows.forEach(s => { if (s.player_id) salMap[s.player_id] = s; });
@@ -8586,7 +8593,7 @@ async function loadPoolFromDB() {
         context_mult: proj?.context_mult ?? null,
       };
     }
-    console.warn(`[loadPoolFromDB] playerMap: ${Object.keys(playerMap).length} players from ${allPoolPids.length} unique IDs (sal=${salRows.length}, proj=${projRows.length})`);
+    console.warn(`[loadPoolFromDB] playerMap: ${Object.keys(playerMap).length} players from ${allPoolPids.size} unique IDs (sal=${salRows.length}, proj=${projRows.length})`);
 
     // Enrich pool players with PMS/HES from main player data (allHitters/allPitchers)
     const _mainPLookup = {};
@@ -8611,28 +8618,36 @@ async function loadPoolFromDB() {
     const expectedLen = isSD ? 6 : 10;
 
     _poolCandidates = [];
-    for (const row of userRes) {
-      const pids = row.player_ids;
-      if (!pids || pids.length !== expectedLen) continue;
+    const ENRICH_CHUNK = 500;
+    for (let ci = 0; ci < userRes.length; ci += ENRICH_CHUNK) {
+      const slice = userRes.slice(ci, ci + ENRICH_CHUNK);
+      for (const row of slice) {
+        const pids = row.player_ids;
+        if (!pids || pids.length !== expectedLen) continue;
 
-      const lineup = {};
-      for (let i = 0; i < slotDefs.length && i < pids.length; i++) {
-        const p = playerMap[pids[i]];
-        if (p) {
-          // For SD CPT slot, apply 1.5x salary/proj multipliers
-          if (isSD && slotDefs[i].isCpt) {
-            lineup[slotDefs[i].key] = { ...p, salary: Math.round(p.salary * 1.5),
-              proj_dk_pts: p.proj_dk_pts != null ? +(p.proj_dk_pts * 1.5).toFixed(1) : null };
-          } else {
-            lineup[slotDefs[i].key] = p;
+        const lineup = {};
+        for (let i = 0; i < slotDefs.length && i < pids.length; i++) {
+          const p = playerMap[pids[i]];
+          if (p) {
+            // For SD CPT slot, apply 1.5x salary/proj multipliers
+            if (isSD && slotDefs[i].isCpt) {
+              lineup[slotDefs[i].key] = { ...p, salary: Math.round(p.salary * 1.5),
+                proj_dk_pts: p.proj_dk_pts != null ? +(p.proj_dk_pts * 1.5).toFixed(1) : null };
+            } else {
+              lineup[slotDefs[i].key] = p;
+            }
           }
         }
-      }
 
-      const metrics = scorePoolLineup(lineup);
-      metrics.avgPms = row.avg_pms ?? metrics.avgPms;
-      const key = [...pids].sort((a,b) => a-b).join(',');
-      _poolCandidates.push({ lineup, metrics, dedupKey: key, dbGppScore: row.gpp_score });
+        const metrics = scorePoolLineup(lineup);
+        metrics.avgPms = row.avg_pms ?? metrics.avgPms;
+        const key = [...pids].sort((a,b) => a-b).join(',');
+        _poolCandidates.push({ lineup, metrics, dedupKey: key, dbGppScore: row.gpp_score });
+      }
+      // Yield to browser between chunks — keeps UI responsive and progress visible
+      const pct = 60 + Math.round((Math.min(ci + ENRICH_CHUNK, userRes.length) / userRes.length) * 30);
+      updatePoolLoading(`Enriching ${Math.min(ci + ENRICH_CHUNK, userRes.length)} / ${userRes.length} lineups`, 'Scoring pool...', pct);
+      await new Promise(resolve => setTimeout(resolve, 0));
     }
 
     // Store contest pool for sim
