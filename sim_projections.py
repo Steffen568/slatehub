@@ -416,16 +416,20 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
         for yr in [current_season, current_season-1, current_season-2]
     )
 
-    def _qoc_weighted(col, default):
+    def _qoc_weighted(col, default, is_qoc=False):
         """Weight predictive metrics by recency + PA, with sample-size regression.
         Players with < 500 career PA get regressed toward league avg.
         Regression is HEAVY for very small samples (< 200 PA) to prevent
-        69 PA of .447 xwOBA from producing elite talent estimates."""
+        69 PA of .447 xwOBA from producing elite talent estimates.
+
+        is_qoc: quality-of-contact metrics (xwOBA, barrel%, hard_hit%, avg_ev).
+        These stabilize in 80-150 PA and carry stronger signal early — use
+        half the regression pressure vs outcome stats (K%, BB%, BABIP).
+        """
         if total_career_pa < 200:
-            # Very small sample: regression dominates (800+ PA of league avg)
-            reg_pa = 800
+            reg_pa = 400 if is_qoc else 800  # QoC: lighter early-career regression
         elif total_career_pa < 500:
-            reg_pa = max(0, 600 - total_career_pa)
+            reg_pa = max(0, (300 if is_qoc else 600) - total_career_pa)
         else:
             reg_pa = 0
         num = reg_pa * default  # league avg regression
@@ -445,10 +449,12 @@ def bayesian_batter(stats_by_season: dict, current_season: int, target_date=None
         return num / den if den > 0 else default
 
     # Predictive metrics — form the Bayesian prior
-    xwoba    = clip(_qoc_weighted('xwoba',       0.315), 0.20, 0.55)
-    barrel   = clip(_qoc_weighted('barrel_pct',  0.065), 0.01, 0.30)
-    hard_hit = clip(_qoc_weighted('hard_hit_pct', 0.35), 0.15, 0.65)
-    avg_ev   = clip(_qoc_weighted('avg_ev',      88.0),  82.0, 98.0)
+    # Contact quality metrics (xwOBA, barrel%, hard_hit%, avg_ev) stabilize fast
+    # (80-150 PA) and use lighter regression for young/small-sample players.
+    xwoba    = clip(_qoc_weighted('xwoba',       0.315, is_qoc=True), 0.20, 0.55)
+    barrel   = clip(_qoc_weighted('barrel_pct',  0.065, is_qoc=True), 0.01, 0.30)
+    hard_hit = clip(_qoc_weighted('hard_hit_pct', 0.35, is_qoc=True), 0.15, 0.65)
+    avg_ev   = clip(_qoc_weighted('avg_ev',      88.0,  is_qoc=True), 82.0, 98.0)
     wrc_plus = clip(_qoc_weighted('wrc_plus',    100.0), 50.0, 220.0)
     o_swing  = clip(_qoc_weighted('o_swing_pct', 0.30),  0.15, 0.50)
     swstr    = clip(_qoc_weighted('swstr_pct',   0.11),  0.04, 0.25)
@@ -697,11 +703,16 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
         row = stats_by_season.get(yr)
         if not row:
             continue
-        if stuff_plus is None and safe(row.get('stuff_plus')):
+        row_ip = safe(row.get('ip'), 0)
+        # Pitching+/Stuff+/Location+ require ~20 IP to stabilize at the per-start level.
+        # Skip current-season values below that threshold — fall back to prior year instead.
+        # (e.g. Wheeler 2 starts / 11 IP in 2026 → use his 2025 Pitching+=121, not 2026=102)
+        skip_composite = (yr == current_season and row_ip < 20)
+        if stuff_plus is None and safe(row.get('stuff_plus')) and not skip_composite:
             stuff_plus = safe(row.get('stuff_plus'))
-        if pitching_plus is None and safe(row.get('pitching_plus')):
+        if pitching_plus is None and safe(row.get('pitching_plus')) and not skip_composite:
             pitching_plus = safe(row.get('pitching_plus'))
-        if location_plus is None and safe(row.get('location_plus')):
+        if location_plus is None and safe(row.get('location_plus')) and not skip_composite:
             location_plus = safe(row.get('location_plus'))
         if swstr_pct is None and safe(row.get('swstr_pct')):
             swstr_pct = safe(row.get('swstr_pct'))
@@ -810,25 +821,29 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
                 print(f"    BREAKOUT detected: xFIP {curr_xfip:.2f} vs prior {prior_xfip:.2f} "
                       f"(+{xfip_improvement:.2f})")
 
-    # IP per GS — Marcel-weighted across seasons (not just most recent)
-    ip_per_gs = 5.1
-    ipgs_num = 30.0 * 5.1  # regression: 30 GS at league avg
-    ipgs_den = 30.0
-    seasons = [current_season, current_season-1, current_season-2] if use_current \
-              else [current_season-1, current_season-2]
-    for yr in seasons:
-        row = stats_by_season.get(yr)
-        if not row:
-            continue
-        ip = safe(row.get('ip'), 0)
-        gs = safe(row.get('gs'), 0)
-        if gs >= 3:
-            raw = clip(ip / gs, 3.0, 6.0)  # modern SP ceiling ~6.0 IP/GS avg
-            wt = next((w for y, w in weights if y == yr), 0)
-            ipgs_num += raw * gs * wt
-            ipgs_den += gs * wt
-    if ipgs_den > 30:
-        ip_per_gs = ipgs_num / ipgs_den
+    # IP per GS — quality-tiered anchor blended with current-season actuals
+    #
+    # Phase 1 (quality anchor): Pitching+ drives the prior.
+    #   Better stuff+command = managers let them go deeper.
+    #   Fringe arms (PP=88) → ~3.9 IP. Elite (PP=120) → 6.3 IP.
+    #   Replaces Marcel historical weighting which let bad pitchers "earn" 5+ IP
+    #   projection from long outings in blowouts or with a tired bullpen.
+    #
+    # Phase 2 (current-season blend): once a pitcher has real starts this year,
+    #   blend in actual IP/GS — captures manager intent, injury management, and
+    #   role changes that Pitching+ doesn't know about.
+    #   Ramps from 30% actual at 3 GS → 60% actual at 12+ GS.
+    quality_ip = clip(4.7 + (pitching_plus - 100) * 0.10, 3.5, 6.5)
+    ip_per_gs = quality_ip
+    if use_current:
+        curr_ip_row = stats_by_season.get(current_season)
+        c_gs = safe((curr_ip_row or {}).get('gs'), 0)
+        c_ip = safe((curr_ip_row or {}).get('ip'), 0)
+        if c_gs >= 2 and c_ip > 0:
+            curr_ipgs = clip(c_ip / c_gs, 3.0, 7.0)
+            # Ramp: 25% at 2 GS → 60% at 12+ GS
+            actual_wt = clip(0.25 + (c_gs - 2) * (0.35 / 10), 0.25, 0.60)
+            ip_per_gs = quality_ip * (1.0 - actual_wt) + curr_ipgs * actual_wt
 
     # Opener/reliever detection: if pitcher is primarily a reliever (GS < 20% of G
     # across recent seasons), they're likely an opener — cap IP projection low.
@@ -845,7 +860,9 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
 
     if not curr_is_starter:
         total_g, total_gs = 0, 0
-        for yr in seasons:
+        _opener_seasons = [current_season, current_season-1, current_season-2] if use_current \
+                          else [current_season-1, current_season-2]
+        for yr in _opener_seasons:
             row = stats_by_season.get(yr)
             if not row:
                 continue
@@ -1180,10 +1197,11 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     elif vegas_ip:
         proj_ip = vegas_ip * VEGAS_IP_WEIGHT + talent_ip * (1.0 - VEGAS_IP_WEIGHT)
     else:
-        # No Vegas anchor — regress 50% toward league avg (5.0 IP/GS).
-        # Modern MLB starters average ~5.0 IP/GS. Without Vegas workload signal,
-        # regress heavily to prevent inflated career IP/GS from dominating.
-        proj_ip = talent_ip * 0.50 + 5.0 * 0.50
+        # No Vegas anchor — regress 50% toward league avg (4.7 IP/GS).
+        # Modern MLB starters average ~4.7 IP/GS (SP usage has declined).
+        # Without Vegas workload signal, regress heavily to prevent inflated
+        # career IP/GS from dominating.
+        proj_ip = talent_ip * 0.50 + 4.7 * 0.50
 
 
     # ── Pitcher splits adjustment ──────────────────────────────────────────
@@ -2611,7 +2629,7 @@ def run():
             PA_PER_IP = 4.3
             talent_ip = talent['ip_per_gs']
             # IP: opener hard cap takes priority. Real Vegas props blend with talent.
-            # Otherwise regress toward 5.0 league avg based on career IP sample.
+            # Otherwise regress toward 4.7 league avg based on career IP sample.
             if is_opener:
                 exp_ip = 1.0  # $4000 salary → hard 1 IP cap, no blending
             elif v_ip:
@@ -2620,7 +2638,7 @@ def run():
             else:
                 career_ip = sum(safe((p_stats.get(yr) or {}).get('ip'), 0) for yr in [SEASON, SEASON-1, SEASON-2])
                 ip_reg = clip(0.50 - (career_ip - 100) * 0.001, 0.25, 0.50)
-                exp_ip = talent_ip * (1.0 - ip_reg) + 5.0 * ip_reg
+                exp_ip = talent_ip * (1.0 - ip_reg) + 4.7 * ip_reg
             exp_bf = exp_ip * PA_PER_IP
 
             # K rate: Bayesian talent with current-season pull.
@@ -2705,6 +2723,14 @@ def run():
             if curr_xfip_val and curr_ip_k >= 13:
                 curr_xfip_wt = clip(curr_ip_k / (curr_ip_k + 80.0), 0.10, 0.50)
                 era_anchor = era_anchor * (1.0 - curr_xfip_wt) + curr_xfip_val * curr_xfip_wt
+            # Actual ERA blend: when ERA significantly exceeds the xFIP/SIERA anchor,
+            # the pitcher has persistent issues our peripheral model misses (command
+            # regression, weak contact that xFIP doesn't capture, etc.). Blend in
+            # actual ERA at up to 20% weight, scaled by IP (more sample = more weight).
+            curr_era_val = safe(curr_row.get('era')) if curr_row else None
+            if curr_era_val and curr_ip_k >= 20 and curr_era_val > era_anchor + 0.50:
+                era_blend_wt = min(curr_ip_k / 300.0, 0.20)
+                era_anchor = era_anchor * (1.0 - era_blend_wt) + curr_era_val * era_blend_wt
             park_hr_f = safe(park_row.get('hr_factor'), 100) / 100.0 if park_row else 1.0
             wx_hr = weather_hr_mult(wx_row)
             park_er_adj = 1.0 + (park_hr_f - 1.0) * 0.45
