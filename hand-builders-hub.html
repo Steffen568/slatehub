@@ -10481,13 +10481,28 @@ function exportPoolDK() {
   }
   pool = filterByExposure(pool);
 
+  // Block export if exposure filtering left fewer unique lineups than needed entries.
+  // Silent modulo cycling (pool[i % pool.length]) produces duplicate entries which
+  // DraftKings will reject. Surface the problem here instead.
+  if (pool.length < entries.length) {
+    const dupes = entries.length - pool.length;
+    alert(
+      `Export blocked: only ${pool.length} unique lineups match your current filters ` +
+      `(need ${entries.length} — ${dupes} would be duplicated).\n\n` +
+      `Fix options:\n` +
+      `1. Loosen exposure caps so more lineups pass the filter.\n` +
+      `2. Set exposure caps BEFORE running the portfolio sim — the sim respects caps during selection, so the ${entries.length} lineups it picks will already satisfy them.`
+    );
+    return;
+  }
+
   const header = _dkTemplate.originalHeader || 'Entry ID,Contest Name,Contest ID,Entry Fee,SP,SP,C,1B,2B,3B,SS,OF,OF,OF';
   const csvRows = [header];
   const headerColCount = header.split(',').length;
 
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
-    const c = pool[i % pool.length];
+    const c = pool[i];
     const lu = c.lineup;
     const slots = LINEUP_SLOTS.map(sl => {
       const p = lu[sl.key];
