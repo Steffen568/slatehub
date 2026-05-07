@@ -4346,6 +4346,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-ui);font-feat
       </select>
       <input type="number" id="sim-count" value="5000" min="100" max="50000" step="500" style="width:54px;font-size:10px;" class="opto-input" title="Number of Monte Carlo sims">
       <button class="bld-btn" style="background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.35);color:#a78bfa;" onclick="simulateContest()">Sim Contest</button>
+      <button class="bld-btn" style="background:rgba(56,189,248,.1);border-color:rgba(56,189,248,.35);color:#38bdf8;" onclick="exportPoolRaw()" title="Download filtered lineups as CSV (no DK entry file needed)">Export CSV</button>
       <button class="bld-btn" style="background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportPoolDK()">Export DK</button>
     </div>
   </div>
@@ -10471,6 +10472,59 @@ function exportPortfolioDK() {
 
   const contest = _dkTemplate.contests.find(c => String(c.contestId) === String(contestId));
   showToast(`Exported ${entries.length} entries for ${contest?.contestName?.slice(0,40) || contestId}`);
+}
+
+function exportPoolRaw() {
+  // Export filtered pool to a plain CSV (no DK entry file required)
+  const isSD = _contestMode === 'showdown';
+
+  let pool = filterPoolCandidates();
+  const sc = _poolSortCol, dir = _poolSortDir;
+  const getVal = (c) => {
+    if (sc === 'gppScore')       return c.gppScore       || 0;
+    if (sc === 'blendedScore')   return c.blendedScore   || 0;
+    if (sc === 'pmsDriven')      return c.pmsDriven      || 0;
+    if (sc === 'portfolioScore') return c.portfolioScore || 0;
+    if (c.contest && sc in c.contest) return c.contest[sc] || 0;
+    if (sc in (c.metrics || {})) return c.metrics[sc]   || 0;
+    return c.metrics?.proj || 0;
+  };
+  const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
+  if (lowerIsBetter) pool.sort((a,b) => (getVal(a) - getVal(b)) * dir || b.metrics.proj - a.metrics.proj);
+  else               pool.sort((a,b) => (getVal(b) - getVal(a)) * dir || b.metrics.proj - a.metrics.proj);
+  pool = filterByExposure(pool);
+
+  if (!pool.length) { showToast('No lineups to export — adjust filters first'); return; }
+
+  let csvRows;
+  if (isSD) {
+    csvRows = ['Lineup,Proj,Salary,CPT,UTIL1,UTIL2,UTIL3,UTIL4,UTIL5'];
+    pool.forEach((c, i) => {
+      const lu = c.lineup || {};
+      const cpt  = lu.cpt?.name  || '';
+      const flex = [1,2,3,4,5].map(n => lu[`flex${n}`]?.name || '').join(',');
+      const sal  = Math.round(c.metrics?.salary || 0);
+      csvRows.push(`${i+1},${(c.metrics?.proj||0).toFixed(1)},${sal},${cpt},${flex}`);
+    });
+  } else {
+    csvRows = ['Lineup,Proj,Salary,Stack,P,P,C,1B,2B,3B,SS,OF,OF,OF'];
+    pool.forEach((c, i) => {
+      const lu    = c.lineup || {};
+      const names = LINEUP_SLOTS.map(sl => lu[sl.key]?.name || '').join(',');
+      const sal   = Math.round(c.metrics?.salary || 0);
+      const stack = c.metrics?.stack || '';
+      csvRows.push(`${i+1},${(c.metrics?.proj||0).toFixed(1)},${sal},${stack},${names}`);
+    });
+  }
+
+  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `Pool_Lineups_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast(`Exported ${pool.length} lineups`);
 }
 
 function exportPoolDK() {
