@@ -801,6 +801,20 @@ html{font-size:14px;}
   .park-bar-inner { overflow:hidden; transition:max-height .35s ease; max-height:2000px; }
   .park-bar-inner.collapsed { max-height:0 !important; }
 
+  /* ── Park factor year tabs ── */
+  .pf-tabs { display:flex; gap:3px; padding:8px 10px 0; }
+  .pf-tab {
+    flex:1; padding:4px 2px; cursor:pointer;
+    font-family:var(--font-mono); font-size:9px; font-weight:700;
+    text-transform:uppercase; letter-spacing:0.6px;
+    background:var(--s2); color:var(--muted2);
+    border:1px solid var(--border); border-radius:var(--radius-sm);
+    transition:color .12s, border-color .12s, background .12s;
+  }
+  .pf-tab:hover:not(.active) { color:var(--text2); border-color:var(--border2); }
+  .pf-tab.active { background:var(--accent-soft); color:var(--accent); border-color:var(--accent-line); }
+  .pf-tab.no-data { opacity:.35; cursor:default; }
+
   /* ══ PITCHER TAB NAV ══ */
   .p-tab-nav { display:flex; border-bottom:2px solid #3a4a60; background:var(--bg); }
   .p-tab-btn {
@@ -1786,6 +1800,12 @@ html{font-size:14px;}
         <div class="kpi-div"></div>
         <div class="kpi"><div class="kpi-lbl">Runs Factor</div><div class="kpi-val" id="pfRuns" style="color:var(--muted);">--</div></div>
       </div>
+    </div>
+    <div class="pf-tabs" id="pfTabs">
+      <button class="pf-tab active" data-tab="blend" onclick="switchPfTab(this,'blend')">3-Yr Blend</button>
+      <button class="pf-tab" data-tab="2026" onclick="switchPfTab(this,'2026')">2026</button>
+      <button class="pf-tab" data-tab="2025" onclick="switchPfTab(this,'2025')">2025</button>
+      <button class="pf-tab" data-tab="2024" onclick="switchPfTab(this,'2024')">2024</button>
     </div>
     <div class="field-wrap"><img id="stadiumImg" /><canvas id="fieldCanvas"></canvas></div>
     <div style="text-align:center;margin-top:6px;font-size:10px;color:var(--muted);line-height:1.4;">Stadium diagrams courtesy of <a href="http://www.andrewclem.com/Baseball/index.html" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">Andrew G. Clem</a></div>
@@ -5982,7 +6002,9 @@ async function loadWeather(gamePk, venueName, away, home, time, venueId) {
 }
 
 // ── PARK FACTORS
-let _pfLoadingFor = null;
+let _pfLoadingFor  = null;
+let _pfDataByTab   = {};   // keyed by 'blend' | '2026' | '2025' | '2024'
+let _pfVenueName   = null; // for fallback label
 // MLB API team_id → our internal park_factors venue_id (regular season home park)
 const TEAM_HOME_VENUE = {
   108:1, 117:2, 133:3, 141:4, 144:5, 158:6, 138:7, 112:8, 109:9, 119:10,
@@ -5997,43 +6019,67 @@ async function loadParkFactors(venueId, venueName, homeTeam, homeTeamId) {
     return;
   }
   _pfLoadingFor = venueId || homeTeamId;
+  _pfVenueName  = venueName;
 
-  // Primary query — try the actual venue
-  let data = null, error = null, isFallback = false;
+  // Fetch ALL rows for this venue (blend + single-year across seasons)
+  let allRows = [], isFallback = false;
+  let fetchVenueId = venueId;
+
   if (venueId) {
-    ({ data, error } = await sb
-      .from('park_factors')
-      .select('*')
-      .eq('venue_id', venueId)
-      .order('season', { ascending: false })
-      .limit(1)
-      .maybeSingle());
+    const { data } = await sb.from('park_factors').select('*').eq('venue_id', venueId).execute();
+    allRows = data || [];
   }
 
   // Fallback — spring training / temp venue: use home team's regular season park
-  if ((!data || error) && homeTeamId) {
+  if (!allRows.length && homeTeamId) {
     const fallbackVenueId = TEAM_HOME_VENUE[homeTeamId];
     if (fallbackVenueId && fallbackVenueId !== venueId) {
-      ({ data, error } = await sb
-        .from('park_factors')
-        .select('*')
-        .eq('venue_id', fallbackVenueId)
-        .order('season', { ascending: false })
-        .limit(1)
-        .maybeSingle());
-      if (data) isFallback = true;
+      const { data } = await sb.from('park_factors').select('*').eq('venue_id', fallbackVenueId).execute();
+      allRows = data || [];
+      if (allRows.length) { isFallback = true; fetchVenueId = fallbackVenueId; }
     }
   }
 
   if (_pfLoadingFor !== (venueId || homeTeamId)) return;
 
+  // Organise rows by tab key
+  _pfDataByTab = {};
+  for (const row of allRows) {
+    if (row.data_type === 'blend') {
+      // Use the highest-season blend row
+      if (!_pfDataByTab.blend || row.season > _pfDataByTab.blend.season)
+        _pfDataByTab.blend = row;
+    } else if (row.data_type === 'single_year') {
+      const key = String(row.season);
+      if (!_pfDataByTab[key] || row.season > (_pfDataByTab[key]?.season || 0))
+        _pfDataByTab[key] = row;
+    }
+  }
+  // Fallback: if no blend, use latest single-year
+  if (!_pfDataByTab.blend && allRows.length) {
+    _pfDataByTab.blend = allRows.sort((a, b) => b.season - a.season)[0];
+  }
+
+  // Reset tabs: mark which years have data, reset to blend
+  const tabs = document.querySelectorAll('.pf-tab');
+  tabs.forEach(btn => {
+    const key = btn.dataset.tab;
+    btn.classList.remove('active', 'no-data');
+    if (key !== 'blend' && !_pfDataByTab[key]) btn.classList.add('no-data');
+  });
+  const blendBtn = document.querySelector('.pf-tab[data-tab="blend"]');
+  if (blendBtn) blendBtn.classList.add('active');
+
+  // Pick the current active tab's data (may have been left on a year tab)
+  const activeTab = document.querySelector('.pf-tab.active:not(.no-data)');
+  const activeKey = activeTab?.dataset.tab || 'blend';
+  const data = _pfDataByTab[activeKey] || _pfDataByTab.blend;
+
+  if (_pfLoadingFor !== (venueId || homeTeamId)) return;
+
   updateFieldDiagram(venueName, homeTeam);
 
-  const pfBasic  = document.getElementById('pfBasic');
-  const pfHR     = document.getElementById('pfHR');
-  const pfRuns   = document.getElementById('pfRuns');
-  const pfSub    = document.getElementById('parkSub');
-  const roofEl   = document.getElementById('roofBadge');
+  const roofEl = document.getElementById('roofBadge');
 
   // Roof badge — from activeGame (only populated on game day for retractable roof parks)
   const roofStatus = activeGame?.roof_status || null;
@@ -6055,7 +6101,30 @@ async function loadParkFactors(venueId, venueName, homeTeam, homeTeamId) {
     }
   }
 
-  if (!data || error) {
+  renderParkFactors(data, isFallback, venueName);
+}
+
+function switchPfTab(btn, tabKey) {
+  if (btn.classList.contains('no-data')) return;
+  document.querySelectorAll('.pf-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const data = _pfDataByTab[tabKey];
+  if (!data) {
+    const splitsEl = document.getElementById('pfSplitsBody');
+    if (splitsEl) splitsEl.innerHTML = '<div style="color:var(--muted);font-size:11px;text-align:center;padding:16px 0;">No data for this year</div>';
+    return;
+  }
+  renderParkFactors(data, false, _pfVenueName);
+}
+
+function renderParkFactors(data, isFallback, venueName) {
+  const splitsEl = document.getElementById('pfSplitsBody');
+  const pfBasic  = document.getElementById('pfBasic');
+  const pfHR     = document.getElementById('pfHR');
+  const pfRuns   = document.getElementById('pfRuns');
+  const pfSub    = document.getElementById('parkSub');
+
+  if (!data) {
     if (pfBasic) { pfBasic.textContent = 'N/A'; pfBasic.style.color = 'var(--muted)'; }
     if (pfHR)    { pfHR.textContent    = 'N/A'; pfHR.style.color    = 'var(--muted)'; }
     if (pfRuns)  { pfRuns.textContent  = 'N/A'; pfRuns.style.color  = 'var(--muted)'; }
@@ -6170,9 +6239,12 @@ async function loadParkFactors(venueId, venueName, homeTeam, homeTeamId) {
     const fallbackNote = isFallback
       ? `<div style="font-size:10px;color:var(--muted);margin-bottom:8px;padding:4px 6px;background:rgba(255,255,255,.04);border-radius:3px;border-left:2px solid var(--border2);">Using ${data.venue_name} factors — game venue has no historical data</div>`
       : '';
+    const sampleNote = (data.data_type === 'single_year' && data.season >= new Date().getFullYear())
+      ? `<div style="font-size:10px;color:var(--mid);margin-bottom:8px;padding:4px 6px;background:rgba(251,191,36,.06);border-radius:3px;border-left:2px solid rgba(251,191,36,.35);">~30 games into ${data.season} — low-frequency stats (3B, etc.) are noisy. Use 3-Yr Blend for lineup decisions.</div>`
+      : '';
 
     splitsEl.innerHTML = `
-      ${fallbackNote}
+      ${fallbackNote}${sampleNote}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px;">
         <div>
           <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text2);margin-bottom:4px;padding-bottom:3px;border-bottom:1px solid var(--border2);">Contact Quality</div>
