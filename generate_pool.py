@@ -127,13 +127,14 @@ def _get_stack_implied(lu_players, stack_team):
 def _physics_matchup(pitcher_rows, attack_angle, swing_path_tilt, pitcher_arm_angle):
     """
     Physics-based pitch geometry vs batter swing plane matchup.
-    Returns (k_adj, contact_adj) — duplicated from sim_projections.py to avoid circular import.
+    Returns (k_adj, contact_adj, hr_plane_adj) — duplicated from sim_projections.py to avoid circular import.
     Uses stable physical measurements: IVB, HB, VAA, arm_angle vs attack_angle, swing_path_tilt.
+    IVB is incorporated into effective VAA (not a separate conflict axis).
     """
     LEAGUE_ATTACK = 12.0
     LEAGUE_ARM    = 45.0
     if not pitcher_rows:
-        return 1.0, 1.0
+        return 1.0, 1.0, 1.0
     if attack_angle is None:
         attack_angle = LEAGUE_ATTACK
     if swing_path_tilt is None:
@@ -141,9 +142,13 @@ def _physics_matchup(pitcher_rows, attack_angle, swing_path_tilt, pitcher_arm_an
 
     total_usage = sum(safe(r.get('usage_pct'), 0) for r in pitcher_rows)
     if total_usage <= 0:
-        return 1.0, 1.0
+        return 1.0, 1.0, 1.0
+
+    IVB_BASELINE  = 8.0
+    IVB_VAA_COEFF = 0.088  # degrees flatter per inch above baseline (arctan(1/12 / 54))
 
     weighted_difficulty = 0.0
+    weighted_vert_gap   = 0.0
     weight_sum = 0.0
 
     for r in pitcher_rows:
@@ -154,22 +159,21 @@ def _physics_matchup(pitcher_rows, attack_angle, swing_path_tilt, pitcher_arm_an
         ext = safe(r.get('extension'), 6.5)
         denom = max(60.5 - ext, 1.0)
         vaa = -math.degrees(math.atan((rh - 2.5) / denom))
-        ivb = safe(r.get('ivb'), 8.0)
+        ivb = safe(r.get('ivb'), IVB_BASELINE)
         hb  = safe(r.get('hb'), 0.0)
 
-        vert_gap      = abs(attack_angle - abs(vaa))
+        effective_vaa = vaa + (ivb - IVB_BASELINE) * IVB_VAA_COEFF
+        vert_gap      = abs(attack_angle - abs(effective_vaa))
         vert_score    = clip(vert_gap / 15.0, 0.0, 1.0)
-        ivb_dev       = ivb - 8.0
-        aa_dev        = attack_angle - LEAGUE_ATTACK
-        ivb_conflict  = clip(ivb_dev * aa_dev * 0.004, 0.0, 1.0)
         lat_mismatch  = clip((abs(hb) - abs(swing_path_tilt) * 1.5) / 18.0, 0.0, 1.0)
 
-        pitch_difficulty = (vert_score * 0.45 + ivb_conflict * 0.35 + lat_mismatch * 0.20)
+        pitch_difficulty = (vert_score * 0.70 + lat_mismatch * 0.30)
         weighted_difficulty += pitch_difficulty * u
+        weighted_vert_gap   += vert_gap * u
         weight_sum += u
 
     if weight_sum <= 0:
-        return 1.0, 1.0
+        return 1.0, 1.0, 1.0
 
     raw = weighted_difficulty / weight_sum
     if pitcher_arm_angle is not None:
@@ -179,7 +183,11 @@ def _physics_matchup(pitcher_rows, attack_angle, swing_path_tilt, pitcher_arm_an
 
     k_adj       = clip(1.0 + raw * 0.08, 0.94, 1.10)
     contact_adj = clip(1.0 - raw * 0.05, 0.92, 1.05)
-    return k_adj, contact_adj
+
+    avg_vert_gap = weighted_vert_gap / weight_sum
+    hr_plane_adj = clip(1.0 - (avg_vert_gap - 5.0) * 0.015, 0.90, 1.10)
+
+    return k_adj, contact_adj, hr_plane_adj
 
 
 def compute_pms(pd, p_splits, bt, b_stats, bat_hand, b_splits=None, vaa=None, l7xwoba=None,
@@ -253,9 +261,13 @@ def compute_pms(pd, p_splits, bt, b_stats, bat_hand, b_splits=None, vaa=None, l7
     atk  = safe(bt.get('attack_angle'), None) if bt else None
     tilt = safe(bt.get('swing_path_tilt'), None) if bt else None
     if sp_arsenal_rows:
-        k_a, c_a = _physics_matchup(sp_arsenal_rows, atk, tilt, sp_arm_angle)
+        k_a, c_a, hr_a = _physics_matchup(sp_arsenal_rows, atk, tilt, sp_arm_angle)
         # physics_difficulty: 0.0 = perfect alignment (easy for batter), 1.0 = extreme mismatch
-        physics_difficulty = ((k_a - 1.0) / 0.08 + (1.0 - c_a) / 0.05) / 2.0
+        # hr_a > 1.0 = batter on-plane for power contact (favorable) → reduce apparent difficulty
+        k_diff  = (k_a - 1.0) / 0.08
+        c_diff  = (1.0 - c_a) / 0.05
+        hr_diff = (hr_a - 1.0) / 0.10  # positive = HR alignment bonus (favorable for batter)
+        physics_difficulty = clip((k_diff + c_diff) / 2.0 - hr_diff * 0.25, 0.0, 1.0)
         p = 3 if physics_difficulty <= 0.15 else 2 if physics_difficulty <= 0.35 else 1 if physics_difficulty <= 0.55 else 0
         pts += p; max_pts += 3
 

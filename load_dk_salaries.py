@@ -283,6 +283,8 @@ PLAYER_ID_REMAP = {
     1122217 : 681190,   # Randy Vasquez (DK ASCII vs MLBAM Vásquez)
     666126  : 665532,   # Carlos Cortes (auto-fixed)
     875573  : 664731,   # P.J. Higgins (auto-fixed)
+    873680  : 669221,   # Sean Murphy (auto-fixed)
+    911914  : 823550,   # Sung-Mun Song (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids

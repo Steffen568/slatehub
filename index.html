@@ -5,15 +5,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SlateHub &mdash; Game View</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=Barlow:wght@300;400;500;600&family=Barlow+Semi+Condensed:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800;900&family=Geist+Mono:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0f1318;--surface:#181d25;--s2:#1f2530;--s3:#252d38;--border:#2a3344;--border2:#334055;--text:#e8edf4;--text2:#b8cad8;--muted:#8899b0;--hi:#4ade80;--lo:#f87171;--mid:#fbbf24;--blue:#60a5fa;--orange:#fb923c;--purple:#e879f9;}
+:root{
+  --bg:#000000;--surface:#07090c;--s2:#0a0d12;--s3:#0d1217;
+  --border:#1a2028;--border2:#232c38;--border3:#2f3a4a;
+  --text:#f5f8fb;--text2:#c7d2dd;--muted:#8294a8;--muted2:#4a5668;
+  --hi:#4ade80;--lo:#f87171;--mid:#fbbf24;--blue:#60a5fa;
+  --orange:#fb923c;--purple:#a78bfa;
+  --accent:#ff7a00;--accent-soft:rgba(255,122,0,.15);--accent-line:rgba(255,122,0,.45);
+  --font-ui:'Inter Tight',system-ui,sans-serif;
+  --font-num:'Geist Mono',ui-monospace,monospace;
+  --font-mono:'JetBrains Mono',ui-monospace,monospace;
+  --pad-x:18px;--pad-y:10px;
+  --gap-tight:4px;--gap-sm:8px;--gap-md:12px;--gap-lg:16px;
+  --radius-sm:3px;--radius-md:4px;--radius-lg:6px;
+}
 *{margin:0;padding:0;box-sizing:border-box;}html{font-size:14px;}
-body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;overflow-x:hidden;display:flex;flex-direction:column;min-height:100vh;}
+body{background:var(--bg);color:var(--text);font-family:var(--font-ui);font-feature-settings:'tnum' 1;overflow-x:hidden;display:flex;flex-direction:column;min-height:100vh;}
 ::-webkit-scrollbar{width:5px;}::-webkit-scrollbar-track{background:var(--bg);}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
 
 /* LAYOUT */
-.slate-wrap{display:grid;grid-template-columns:1fr 1fr;flex:1;}
+.slate-wrap{display:grid;grid-template-columns:1.15fr 1fr;flex:1;}
 @media(max-width:900px){.slate-wrap{grid-template-columns:1fr;}.pitcher-col{order:1;border-bottom:1px solid var(--border);}.lineup-col{order:2;}}
 .lineup-col{border-right:1px solid var(--border);overflow-y:auto;}
 .pitcher-col{overflow-y:auto;}
@@ -21,8 +34,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
 
 /* PANEL HEADER */
 .panel-hdr{display:flex;align-items:center;justify-content:space-between;padding:7px 20px;background:var(--bg);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:20;}
-.ph-label{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:2px;color:var(--text2);}
-.gl-btn{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:4px 12px;border-radius:4px;cursor:pointer;background:var(--s3);color:var(--text2);border:1px solid var(--border2);transition:all 0.15s;}
+.ph-label{font-family:var(--font-num);font-weight:700;font-size:9px;text-transform:uppercase;letter-spacing:2px;color:var(--text2);}
+.gl-btn{font-family:var(--font-num);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:4px 12px;border-radius:4px;cursor:pointer;background:var(--s3);color:var(--text2);border:1px solid var(--border2);transition:all 0.15s;}
 .gl-btn:hover{color:var(--text);background:var(--border);}
 
 /* GLOSSARY DRAWERS */
@@ -33,40 +46,18 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
 .gl-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:299;}
 .gl-overlay.show{display:block;}
 .gl-hdr{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:#0d1117;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10;}
-.gl-title{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:16px;letter-spacing:2px;text-transform:uppercase;}
+.gl-title{font-family:var(--font-num);font-weight:700;font-size:16px;letter-spacing:2px;text-transform:uppercase;}
 .gl-close{background:none;border:1px solid var(--border);color:var(--text2);cursor:pointer;width:28px;height:28px;border-radius:4px;font-size:15px;display:flex;align-items:center;justify-content:center;transition:all 0.12s;}
 .gl-close:hover{color:var(--text);border-color:var(--border2);}
 .gl-body{padding:18px 20px;}
 .gl-grp{margin-bottom:22px;}
-.gl-grp-t{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text2);margin-bottom:10px;padding-bottom:5px;border-bottom:1px solid var(--border);}
+.gl-grp-t{font-family:var(--font-num);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text2);margin-bottom:10px;padding-bottom:5px;border-bottom:1px solid var(--border);}
 .gl-item{margin-bottom:11px;}
-.gl-term{font-family:'Barlow Semi Condensed',sans-serif;font-weight:600;font-size:12px;color:var(--text);margin-bottom:2px;}
+.gl-term{font-family:var(--font-ui);font-weight:600;font-size:12px;color:var(--text);margin-bottom:2px;}
 .gl-def{font-size:11px;color:var(--text2);line-height:1.6;}
 .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:middle;}
 
 /* PITCHER PANEL */
-
-  :root {
-    --bg:        #0f1318;
-    --surface:   #181d25;
-    --s2:        #1f2530;
-    --s3:        #252d38;
-    --border:    #2a3344;
-    --border2:   #334055;
-    --text:      #e8edf4;
-    --text2:     #b8cad8;
-    --muted:     #8899b0;
-    --hi:        #4ade80;
-    --lo:        #f87171;
-    --mid:       #fbbf24;
-  }
-  * { margin:0; padding:0; box-sizing:border-box; }
-  html { font-size:14px; }
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Barlow', sans-serif;
-  }
 
   /* =====================================================
      PITCHER PANEL — standalone mockup, full page width
@@ -88,8 +79,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
 
   /* ── HERO ── */
   .sp-hero {
-    background: linear-gradient(160deg, #0d1a35 0%, #0a1020 100%);
-    border-bottom: 1px solid #1a2d52;
+    background: var(--s3);
+    border-bottom: 1px solid var(--border2);
     padding: 16px 20px 18px;
   }
 
@@ -98,7 +89,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
     margin-bottom: 4px;
   }
   .sp-name {
-    font-family: 'Barlow Condensed', sans-serif;
+    font-family: var(--font-ui);
     font-weight: 800; font-size: 34px;
     letter-spacing: 0.5px; color: #fff;
     text-transform: uppercase; line-height: 1;
@@ -117,9 +108,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
 
   .grade-wrap { display:flex; flex-direction:column; align-items:center; gap:3px; flex-shrink:0; }
   .grade-box {
-    width:58px; height:58px; border-radius:10px;
+    width:58px; height:58px; border-radius:var(--radius-md);
     display:flex; align-items:center; justify-content:center;
-    font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:34px;
+    font-family:var(--font-num); font-weight:800; font-size:34px;
   }
   .g-A{background:#0d2e1a;color:#4ade80;} .g-B{background:#0a2818;color:#34d399;}
   .g-C{background:#2d1f08;color:#fbbf24;} .g-D{background:#2d0d0d;color:#f87171;}
@@ -137,7 +128,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
   }
   .wl-item:last-child { border-right:none; }
   .wl-lbl { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:1px; color:rgba(255,255,255,.3); }
-  .wl-val { font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:22px; color:#fff; line-height:1; }
+  .wl-val { font-family:var(--font-num); font-weight:800; font-size:22px; color:#fff; line-height:1; }
   .wl-sub { font-size:9px; color:rgba(255,255,255,.22); }
 
   /* PLUS TRIO */
@@ -148,7 +139,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
     border-radius:7px; padding:10px 12px;
   }
   .plus-lbl { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.8px; color:rgba(255,255,255,.3); margin-bottom:3px; }
-  .plus-val { font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:28px; line-height:1; }
+  .plus-val { font-family:var(--font-num); font-weight:800; font-size:28px; line-height:1; }
   .plus-sub { font-size:9px; color:rgba(255,255,255,.18); margin-top:2px; }
   .plus-bar { height:3px; background:rgba(255,255,255,.06); border-radius:2px; margin-top:5px; overflow:hidden; }
   .plus-fill { height:100%; border-radius:2px; }
@@ -158,16 +149,21 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
   .sec-hdr {
     display:flex; align-items:center; justify-content:space-between;
     padding:11px 20px; cursor:pointer; user-select:none;
-    transition:background 0.12s;
+    border-left:3px solid transparent;
+    transition:background 0.12s, border-left-color 0.12s;
   }
   .sec-hdr:hover { background:var(--s2); }
+  .sec-hdr.open {
+    background:rgba(255,122,0,.04);
+    border-left-color:var(--accent);
+  }
   .sec-title {
-    font-family:'Barlow Condensed',sans-serif;
-    font-weight:700; font-size:12px;
-    text-transform:uppercase; letter-spacing:1.5px;
+    font-family:var(--font-ui);
+    font-weight:800; font-size:12px;
+    text-transform:uppercase; letter-spacing:1px;
     color:var(--text2); display:flex; align-items:center; gap:8px;
   }
-  .pip { width:3px; height:12px; border-radius:2px; flex-shrink:0; }
+  .pip { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
   .arrow { font-size:12px; color:var(--text2); transition:transform 0.2s; }
   .arrow.open { transform:rotate(180deg); }
   .sec-body { padding:0 20px 14px; display:none; }
@@ -180,7 +176,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
   .g4 { grid-template-columns:repeat(4,1fr); }
   .sc { background:var(--s2); padding:9px 10px; }
   .sc-l { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.6px; color:#c8d4e0; margin-bottom:3px; }
-  .sc-v { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:18px; line-height:1; color:var(--text); }
+  .sc-v { font-family:var(--font-num); font-weight:700; font-size:18px; line-height:1; color:var(--text); }
   .sc-v.hi{color:var(--hi);} .sc-v.lo{color:var(--lo);} .sc-v.mid{color:var(--mid);}
   .sc-ctx { font-size:9px; color:var(--muted); margin-top:2px; }
 
@@ -214,7 +210,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
   .a-row.active { background: var(--s2); margin: 0 -20px; padding-left: 20px; padding-right: 20px; }
 
   .pb {
-    font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:11px;
+    font-family:var(--font-num); font-weight:700; font-size:11px;
     padding:2px 5px; border-radius:3px; text-align:center;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   }
@@ -222,7 +218,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
   .pt-ch{background:#1a3d2a;color:#4ade80;} .pt-cu{background:#2d1a2a;color:#e879f9;}
   .pt-si{background:#0f1e3a;color:#93bbff;}
 
-  .av { font-family:'Barlow Semi Condensed',sans-serif; font-weight:600; font-size:12px; text-align:center; color:var(--text2); }
+  .av { font-family:var(--font-ui); font-weight:600; font-size:12px; text-align:center; color:var(--text2); }
   .av.hi{color:var(--hi);} .av.lo{color:var(--lo);} .av.mid{color:var(--mid);}
   .av:last-child { text-align:right; }
 
@@ -254,7 +250,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
     padding:3px 0;
   }
   .psd-stat { font-size:10px; font-weight:500; color:#c8d4e0; }
-  .psd-val { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:14px; }
+  .psd-val { font-family:var(--font-num); font-weight:700; font-size:14px; }
   .psd-expand-hint {
     font-size:9px; color:var(--muted);
     float:right; font-style:italic;
@@ -267,21 +263,21 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
     padding:16px; margin-top:2px; margin-bottom:12px;
   }
   .arm-info { flex:1; display:flex; flex-direction:column; gap:7px; }
-  .arm-deg { font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:42px; color:var(--mid); line-height:1; }
+  .arm-deg { font-family:var(--font-num); font-weight:800; font-size:42px; color:var(--mid); line-height:1; }
   .arm-desc { font-size:11px; color:var(--text2); line-height:1.5; }
   .arm-class { font-size:10px; font-weight:700; padding:3px 9px; border-radius:3px; background:#2d1a08; color:#fb923c; display:inline-block; width:fit-content; }
 
   .physics-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
   .phy-card { background:var(--s2); border-radius:6px; padding:10px 12px; border-left:2px solid var(--border2); }
   .phy-lbl { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; color:#c8d4e0; margin-bottom:4px; }
-  .phy-val { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:20px; }
+  .phy-val { font-family:var(--font-num); font-weight:700; font-size:20px; }
   .phy-ctx { font-size:10px; color:var(--muted); margin-top:3px; }
 
   /* ── TRUE TALENT ── */
   .bb-wrap { margin-top:10px; }
   .bb-lbl { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; color:#c8d4e0; margin-bottom:7px; }
   .bb-track { display:flex; height:26px; border-radius:6px; overflow:hidden; }
-  .bb-seg { display:flex; align-items:center; justify-content:center; font-family:'Barlow Semi Condensed',sans-serif; font-weight:700; font-size:11px; white-space:nowrap; overflow:hidden; }
+  .bb-seg { display:flex; align-items:center; justify-content:center; font-family:var(--font-ui); font-weight:700; font-size:11px; white-space:nowrap; overflow:hidden; }
   .bb-legend { display:flex; gap:14px; margin-top:7px; }
   .bb-li { display:flex; align-items:center; gap:5px; font-size:11px; font-weight:500; color:var(--text2); }
   .bb-dot { width:10px; height:10px; border-radius:2px; flex-shrink:0; }
@@ -291,9 +287,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
   .era-item { flex:1; padding:11px 14px; border-right:1px solid var(--border); }
   .era-item:last-child { border-right:none; flex:0 0 auto; padding:11px 16px; display:flex; flex-direction:column; align-items:center; justify-content:center; }
   .era-lbl { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; color:#c8d4e0; margin-bottom:3px; }
-  .era-val { font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:28px; line-height:1; }
+  .era-val { font-family:var(--font-num); font-weight:800; font-size:28px; line-height:1; }
   .era-sub { font-size:9px; color:var(--muted); margin-top:2px; }
-  .era-gap-val { font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:16px; color:var(--mid); }
+  .era-gap-val { font-family:var(--font-num); font-weight:800; font-size:16px; color:var(--mid); }
   .era-gap-lbl { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:0.4px; }
 
   /* ── SPLITS — PROMINENT ── */
@@ -304,12 +300,12 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
   }
   .spc.rh { border-top-color:#60a5fa; }
   .spc.lh { border-top-color:#4ade80; }
-  .spc-vs { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:13px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; text-align:center; }
+  .spc-vs { font-family:var(--font-num); font-weight:700; font-size:13px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; text-align:center; }
   .spc-vs.rh{color:#60a5fa;} .spc-vs.lh{color:#4ade80;}
   .spr { display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid var(--border); }
   .spr:last-child { border-bottom:none; }
   .spr-n { font-size:10px; font-weight:600; color:#c8d4e0; text-transform:uppercase; letter-spacing:0.5px; }
-  .spr-v { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:16px; }
+  .spr-v { font-family:var(--font-num); font-weight:700; font-size:16px; }
   .spr-v.hi{color:var(--hi);}
   .spr-v.mid{color:var(--mid);}
   .spr-v.lo{color:var(--lo);}
@@ -321,7 +317,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
     background:none; border:1px solid var(--border);
     color:var(--muted); cursor:pointer;
     padding:6px 12px; border-radius:4px;
-    font-family:'Barlow Semi Condensed',sans-serif;
+    font-family:var(--font-ui);
     font-size:10px; font-weight:600;
     text-transform:uppercase; letter-spacing:0.8px;
     transition:all 0.15s;
@@ -347,7 +343,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
   }
   .splits-adv-table th:first-child { text-align:left; }
   .splits-adv-table td {
-    font-family:'Barlow Semi Condensed',sans-serif;
+    font-family:var(--font-ui);
     font-size:12px; font-weight:500; color:var(--text2);
     padding:6px 6px; text-align:right;
     border-bottom:1px solid var(--border);
@@ -363,7 +359,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
     display:flex; align-items:center; gap:5px;
   }
   .mini-pb {
-    font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:10px;
+    font-family:var(--font-num); font-weight:700; font-size:10px;
     padding:1px 5px; border-radius:2px;
   }
   .hand-sep {
@@ -375,7 +371,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
 
   /* ── TREND ── */
   .chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; justify-content:center; }
-  .chip { font-size:10px; font-weight:700; padding:4px 9px; border-radius:4px; font-family:'Barlow Semi Condensed',sans-serif; }
+  .chip { font-size:10px; font-weight:700; padding:4px 9px; border-radius:4px; font-family:var(--font-ui); }
   .chip-good{background:#0d2e1a;color:#4ade80;} .chip-warn{background:#2d1a08;color:#fb923c;}
   .chip-bad{background:#2d0d0d;color:#f87171;} .chip-info{background:#0f1e3a;color:#93bbff;}
 
@@ -391,7 +387,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
     display:block; width:100%; margin-top:10px;
     background:none; border:1px solid var(--border);
     color:var(--muted); cursor:pointer; padding:6px 12px; border-radius:4px;
-    font-family:'Barlow Semi Condensed',sans-serif;
+    font-family:var(--font-ui);
     font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.8px;
     transition:all 0.15s;
   }
@@ -402,9 +398,9 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
   .xd-row:last-child { border-bottom:none; }
   .xd-ind { width:3px; border-radius:2px; align-self:stretch; flex-shrink:0; min-height:40px; }
   .xd-body { flex:1; }
-  .xd-title { font-family:'Barlow Semi Condensed',sans-serif; font-weight:600; font-size:12px; color:var(--text); margin-bottom:3px; }
+  .xd-title { font-family:var(--font-ui); font-weight:600; font-size:12px; color:var(--text); margin-bottom:3px; }
   .xd-detail { font-size:11px; color:var(--text2); line-height:1.5; }
-  .xd-stat { font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:15px; flex-shrink:0; text-align:right; padding-top:2px; }
+  .xd-stat { font-family:var(--font-num); font-weight:800; font-size:15px; flex-shrink:0; text-align:right; padding-top:2px; }
 
   /* ── GLOSSARY ── */
   .gl-tab-btn {
@@ -413,7 +409,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
     border-right:none; border-radius:6px 0 0 6px;
     padding:14px 8px; cursor:pointer;
     writing-mode:vertical-lr;
-    font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:700;
+    font-family:var(--font-num); font-size:11px; font-weight:700;
     letter-spacing:2px; text-transform:uppercase; color:var(--text2);
     transition:all 0.15s; z-index:201;
   }
@@ -428,29 +424,21 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;over
   .gl-drawer.open { right:0; }
   .gl-drawer::-webkit-scrollbar{width:4px;} .gl-drawer::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px;}
   .gl-hdr { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; background:#0d1117; border-bottom:1px solid var(--border); position:sticky; top:0; z-index:10; }
-  .gl-title { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:16px; letter-spacing:2px; text-transform:uppercase; }
+  .gl-title { font-family:var(--font-num); font-weight:700; font-size:16px; letter-spacing:2px; text-transform:uppercase; }
   .gl-close { background:none; border:1px solid var(--border); color:var(--muted); cursor:pointer; width:28px; height:28px; border-radius:4px; font-size:15px; display:flex; align-items:center; justify-content:center; transition:all 0.12s; }
   .gl-close:hover { color:var(--text); border-color:var(--border2); }
   .gl-body { padding:18px 20px; }
   .gl-grp { margin-bottom:22px; }
-  .gl-grp-t { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:1.5px; color:var(--muted); margin-bottom:10px; padding-bottom:5px; border-bottom:1px solid var(--border); }
+  .gl-grp-t { font-family:var(--font-num); font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:1.5px; color:var(--muted); margin-bottom:10px; padding-bottom:5px; border-bottom:1px solid var(--border); }
   .gl-item { margin-bottom:11px; }
-  .gl-term { font-family:'Barlow Semi Condensed',sans-serif; font-weight:600; font-size:12px; color:var(--text); margin-bottom:2px; }
+  .gl-term { font-family:var(--font-ui); font-weight:600; font-size:12px; color:var(--text); margin-bottom:2px; }
   .gl-def { font-size:11px; color:var(--text2); line-height:1.6; }
   .sw { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; vertical-align:middle; }
 
 /* LINEUP PANEL */
 
-:root {
-  --bg:#0f1318; --surface:#181d25; --s2:#1f2530; --s3:#252d38;
-  --border:#2a3344; --border2:#334055;
-  --text:#e8edf4; --text2:#9aaab8; --muted:#5a6a7e;
-  --hi:#4ade80; --lo:#f87171; --mid:#fbbf24;
-  --blue:#60a5fa; --orange:#fb923c;
-}
 *{margin:0;padding:0;box-sizing:border-box;}
 html{font-size:14px;}
-body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 ::-webkit-scrollbar{width:5px;}
 ::-webkit-scrollbar-track{background:var(--bg);}
 ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
@@ -458,24 +446,24 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 .lineup-panel{width:100%;max-width:680px;background:var(--surface);border-right:1px solid var(--border);min-height:100vh;}
 
 /* ── MATCHUP BAR ── */
-.matchup-bar{background:linear-gradient(160deg,#0d1a35 0%,#0a1020 100%);border-bottom:1px solid #1a2d52;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;}
+.matchup-bar{background:var(--s3);border-bottom:1px solid var(--border2);padding:12px 20px;display:flex;align-items:center;justify-content:space-between;}
 .mb-left{display:flex;flex-direction:column;gap:3px;}
 .mb-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:rgba(255,255,255,.3);}
-.mb-teams{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:22px;letter-spacing:0.5px;color:#fff;text-transform:uppercase;}
+.mb-teams{font-family:var(--font-num);font-weight:800;font-size:22px;letter-spacing:0.5px;color:#fff;text-transform:uppercase;}
 .mb-meta{display:flex;align-items:center;gap:10px;}
-.mb-pill{font-size:10px;font-weight:700;padding:2px 8px;border-radius:3px;background:rgba(255,255,255,.07);color:var(--text2);border:1px solid rgba(255,255,255,.1);}
+.mb-pill{font-family:var(--font-mono);font-size:10px;font-weight:700;padding:2px 8px;border-radius:3px;background:rgba(255,255,255,.07);color:var(--text2);border:1px solid rgba(255,255,255,.1);}
 .mb-pill.lhp{color:#93bbff;border-color:rgba(147,187,255,.25);background:rgba(147,187,255,.07);}
 .mb-right{display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
-.mb-implied{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:28px;color:var(--hi);line-height:1;}
+.mb-implied{font-family:var(--font-num);font-weight:800;font-size:28px;color:var(--accent);line-height:1;}
 .mb-implied-lbl{font-size:9px;color:#c8d4e0;text-transform:uppercase;letter-spacing:0.8px;}
-.mb-hes{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:28px;color:var(--muted);line-height:1;}
+.mb-hes{font-family:var(--font-num);font-weight:800;font-size:28px;color:var(--muted);line-height:1;}
 
 /* ── STACK BAR ── */
 .stack-bar{display:flex;gap:6px;align-items:center;padding:9px 20px;border-bottom:1px solid var(--border);background:var(--s2);}
 .stack-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#c8d4e0;flex-shrink:0;}
 .stack-segments{display:flex;flex:1;height:6px;border-radius:3px;overflow:hidden;gap:1px;}
 .stack-seg{flex:1;border-radius:1px;}
-.stack-grade{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:14px;padding:2px 8px;border-radius:3px;}
+.stack-grade{font-family:var(--font-num);font-weight:800;font-size:14px;padding:2px 8px;border-radius:var(--radius-sm);}
 .sg-Aplus{background:#0d2e1a;color:#4ade80;}
 .sg-A    {background:#0d2e1a;color:#86efac;}
 .sg-Bplus{background:#1a2d14;color:#bef264;}
@@ -488,7 +476,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 
 /* ── LINEUP STATUS ── */
 .lineup-status{display:flex;align-items:center;gap:8px;padding:7px 16px;background:var(--s2);border-bottom:1px solid var(--border);}
-.ls-badge{font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;padding:2px 8px;border-radius:3px;flex-shrink:0;}
+.ls-badge{font-family:var(--font-mono);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;padding:2px 8px;border-radius:var(--radius-sm);flex-shrink:0;}
 .ls-badge.ls-confirmed{background:rgba(74,222,128,.15);color:#4ade80;border:1px solid rgba(74,222,128,.3);}
 .ls-badge.ls-projected{background:rgba(251,191,36,.12);color:#fbbf24;border:1px solid rgba(251,191,36,.25);}
 .ls-text{font-size:10px;font-weight:600;color:var(--text2);}
@@ -498,26 +486,26 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 .batter-row{border-bottom:1px solid var(--border);cursor:pointer;transition:background 0.1s;}
 .batter-row:hover .br-main{background:var(--s2);}
 .batter-row.expanded .br-main{background:var(--s2);}
-.br-main{display:grid;grid-template-columns:28px 1fr 54px 54px 54px 54px 80px;align-items:center;padding:10px 20px;transition:background 0.1s;}
+.br-main{display:grid;grid-template-columns:32px 1fr 56px 56px 56px 56px 80px;align-items:center;padding:10px 20px;transition:background 0.1s;}
 .br-id{display:flex;flex-wrap:wrap;align-items:center;}
 .br-name{flex:0 0 130px;}
 .br-dfs-pills{flex:0 0 auto;display:flex;align-items:center;gap:5px;}
 .br-meta{flex:0 0 100%;margin-top:2px;}
-.br-order{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:18px;color:var(--muted);line-height:1;}
+.br-order{font-family:var(--font-num);font-weight:800;font-size:18px;color:var(--muted);line-height:1;}
 .br-order.top3{color:var(--text);}
 .br-id{padding-left:8px;}
-.br-name{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:17px;color:var(--text);line-height:1;letter-spacing:0.3px;}
+.br-name{font-family:var(--font-ui);font-weight:700;font-size:14px;color:var(--text);line-height:1;letter-spacing:0.3px;}
 .br-meta{display:flex;align-items:center;gap:5px;margin-top:2px;}
 .br-pos{font-size:9px;font-weight:700;padding:1px 5px;border-radius:2px;background:rgba(255,255,255,.07);color:var(--text2);}
 .br-hand{font-size:9px;font-weight:700;padding:1px 5px;border-radius:2px;color:#93bbff;background:rgba(147,187,255,.08);border:1px solid rgba(147,187,255,.15);}
 .br-hand.R{color:var(--orange);background:rgba(251,146,60,.08);border-color:rgba(251,146,60,.15);}
 .br-hand.S{color:var(--hi);background:rgba(74,222,128,.08);border-color:rgba(74,222,128,.15);}
 .br-stat{text-align:center;}
-.br-stat-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#c8d4e0;margin-bottom:2px;}
-.br-stat-val{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:17px;line-height:1;color:var(--text);}
+.br-stat-lbl{font-family:var(--font-mono);font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--muted2);margin-bottom:2px;}
+.br-stat-val{font-family:var(--font-num);font-weight:700;font-size:16px;line-height:1;color:var(--text);}
 .br-stat-val.hi{color:var(--hi);}.br-stat-val.lo{color:var(--lo);}.br-stat-val.mid{color:var(--mid);}
 .br-matchup{display:flex;flex-direction:column;align-items:flex-end;gap:3px;}
-.matchup-badge{font-size:9px;font-weight:800;padding:3px 8px;border-radius:3px;text-transform:uppercase;letter-spacing:0.8px;}
+.matchup-badge{font-family:var(--font-mono);font-size:9px;font-weight:800;padding:3px 8px;border-radius:var(--radius-sm);text-transform:uppercase;letter-spacing:0.8px;}
 .mb-mismatch{background:#2d0d0d;color:#f87171;border:1px solid rgba(248,113,113,.2);}
 .mb-pitcher-edge{background:#2d0d0d;color:#f87171;border:1px solid rgba(248,113,113,.2);}
 .mb-neutral{background:#1f2530;color:#94a3b8;border:1px solid var(--border2);}
@@ -527,13 +515,13 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 .mb-on-plane{background:#0d2e1a;color:#4ade80;border:1px solid rgba(74,222,128,.2);}
 .meter-verdict.pitcher-edge{border-left:3px solid var(--lo);}
 .br-split-woba{font-size:9px;color:var(--muted);text-align:right;}
-.br-split-woba span{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:13px;color:var(--text2);}
+.br-split-woba span{font-family:var(--font-num);font-weight:700;font-size:13px;color:var(--text2);}
 
 /* ── EXPANDED DETAIL ── */
 .br-detail{display:none;background:#141920;border-top:1px solid var(--border2);padding:14px 20px 16px;}
 .br-detail.open{display:block;}
 .det-tabs{display:flex;gap:2px;margin-bottom:12px;border-bottom:1px solid var(--border);}
-.det-tab{font-family:'Barlow Semi Condensed',sans-serif;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.8px;padding:6px 10px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:filter 0.15s;color:var(--muted);}
+.det-tab{font-family:var(--font-ui);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.8px;padding:6px 10px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:filter 0.15s;color:var(--muted);}
 .det-tab[data-pane="core"]          { color:#4a8cc4; }
 .det-tab[data-pane="splits"]        { color:#3da866; }
 .det-tab[data-pane="swing"]         { color:#b87030; }
@@ -551,12 +539,12 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 .det-tab:hover{ filter:brightness(1.4); }
 .det-pane{display:none;}
 .det-pane.active{display:block;}
-.det-grid{display:grid;gap:1px;background:var(--border);border-radius:6px;overflow:hidden;margin-bottom:10px;}
+.det-grid{display:grid;gap:4px;background:var(--bg);border-radius:var(--radius-sm);overflow:hidden;margin-bottom:10px;}
 .det-g2{grid-template-columns:1fr 1fr;}.det-g3{grid-template-columns:repeat(3,1fr);}.det-g4{grid-template-columns:repeat(4,1fr);}
-.det-cell{background:var(--s3);padding:9px 11px;}
-.det-lbl{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:#c8d4e0;margin-bottom:3px;}
-.det-val{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:18px;line-height:1;}
-.det-ctx{font-size:9px;color:var(--muted);margin-top:2px;}
+.det-cell{background:var(--s3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 8px;}
+.det-lbl{font-family:var(--font-mono);font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--muted2);margin-bottom:2px;}
+.det-val{font-family:var(--font-num);font-weight:700;font-size:14px;line-height:1;}
+.det-ctx{font-family:var(--font-mono);font-size:8.5px;color:var(--muted2);margin-top:2px;}
 .det-val.hi{color:var(--hi);}.det-val.lo{color:var(--lo);}.det-val.mid{color:var(--mid);}
 .det-sec-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:#c8d4e0;margin:10px 0 6px;display:flex;align-items:center;gap:6px;}
 .det-sec-lbl::after{content:'';flex:1;height:1px;background:var(--border);}
@@ -564,17 +552,17 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 .det-spc{background:var(--s3);border-radius:7px;padding:11px 13px;border-top:3px solid var(--border2);}
 .det-spc.vs-r{border-top-color:var(--orange);}
 .det-spc.vs-l{border-top-color:var(--blue);}
-.det-spc-hdr{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;}
+.det-spc-hdr{font-family:var(--font-num);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;}
 .det-spc-hdr.vs-r{color:var(--orange);}.det-spc-hdr.vs-l{color:var(--blue);}
 .spr2{display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid var(--border);}
 .spr2:last-child{border-bottom:none;}
 .spr2-n{font-size:9px;font-weight:600;color:#c8d4e0;text-transform:uppercase;letter-spacing:0.4px;}
-.spr2-v{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:15px;}
+.spr2-v{font-family:var(--font-num);font-weight:700;font-size:15px;}
 .spr2-v.hi{color:var(--hi);}
 .spr2-v.mid{color:var(--mid);}
 .spr2-v.lo{color:var(--lo);}
 .bb-track{display:flex;height:20px;border-radius:4px;overflow:hidden;}
-.bb-seg{display:flex;align-items:center;justify-content:center;font-family:'Barlow Semi Condensed',sans-serif;font-weight:700;font-size:10px;}
+.bb-seg{display:flex;align-items:center;justify-content:center;font-family:var(--font-ui);font-weight:700;font-size:10px;}
 .bb-legend{display:flex;gap:12px;margin-top:5px;}
 .bb-li{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text2);}
 .bb-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
@@ -590,7 +578,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 .angle-stat-pair{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;}
 .angle-stat{background:var(--s3);padding:9px 11px;border-radius:5px;border-top:2px solid var(--border2);}
 .as-lbl{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:#c8d4e0;margin-bottom:3px;}
-.as-val{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:20px;line-height:1;}
+.as-val{font-family:var(--font-num);font-weight:700;font-size:20px;line-height:1;}
 .as-ctx{font-size:10px;color:var(--text2);margin-top:3px;}
 
 /* Mismatch meter */
@@ -604,7 +592,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 .meter-verdict.neutral{border-left:3px solid var(--border2);}
 .meter-verdict.on-plane{border-left:3px solid var(--hi);}
 .mv-text{font-size:12px;color:var(--text);line-height:1.6;flex:1;}
-.mv-numbers{font-size:12px;color:var(--text);margin-top:6px;font-family:'Barlow Condensed',sans-serif;font-weight:600;letter-spacing:0.5px;}
+.mv-numbers{font-size:12px;color:var(--text);margin-top:6px;font-family:var(--font-num);font-weight:600;letter-spacing:0.5px;}
 .mv-numbers span{color:var(--text2);font-weight:400;margin:0 3px;}
 .mv-note{font-size:10px;color:var(--text2);margin-top:7px;line-height:1.6;border-top:1px solid var(--border);padding-top:7px;}
 
@@ -612,7 +600,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
    RECENT FORM — STATCAST VERSION
 ══════════════════════════════════════ */
 .form-toggle-row{display:flex;gap:3px;margin-bottom:10px;}
-.form-toggle-btn{flex:1;padding:5px 0;font-family:'Barlow Semi Condensed',sans-serif;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.8px;text-align:center;border:1px solid var(--border);border-radius:4px;color:var(--muted);cursor:pointer;background:none;transition:all 0.15s;}
+.form-toggle-btn{flex:1;padding:5px 0;font-family:var(--font-ui);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.8px;text-align:center;border:1px solid var(--border);border-radius:4px;color:var(--muted);cursor:pointer;background:none;transition:all 0.15s;}
 .form-toggle-btn:hover{color:var(--text2);border-color:var(--border2);}
 .form-toggle-btn.active{background:var(--blue);color:#0f1318;border-color:var(--blue);font-weight:700;}
 
@@ -621,7 +609,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 .form-roll.hot{border-top-color:var(--hi);}
 .form-roll.mid{border-top-color:var(--mid);}
 .fr-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#c8d4e0;margin-bottom:2px;}
-.fr-val{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:19px;line-height:1;}
+.fr-val{font-family:var(--font-num);font-weight:800;font-size:19px;line-height:1;}
 .fr-val.hi{color:var(--hi);}.fr-val.mid{color:var(--mid);}
 .fr-sub{font-size:9px;color:var(--muted);margin-top:1px;}
 
@@ -645,10 +633,6 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;}
 .form-note b{display:block;margin-bottom:2px;font-size:11px;}
 
 /* PARK BAR */
-
-:root{--bg:#0f1318;--surface:#181d25;--s2:#1f2530;--s3:#252d38;--border:#2a3344;--border2:#334055;--text:#e8edf4;--text2:#9aaab8;--muted:#5a6a7e;--hi:#4ade80;--lo:#f87171;--mid:#fbbf24;--blue:#60a5fa;--orange:#fb923c;--pf-hi:#fb923c;--pf-mid:#9aaab8;--pf-lo:#60a5fa;}
-*{margin:0;padding:0;box-sizing:border-box;}html{font-size:18px;}
-body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padding:20px;}
 .park-bar{display:grid;grid-template-columns:1fr 1fr 1fr;background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;min-height:240px;}
 @media(max-width:900px){.park-bar{grid-template-columns:1fr;}}
 @media(max-width:900px){.slate-selector-bar{position:static !important;}}
@@ -658,23 +642,23 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 .pw-left{padding:13px 15px;border-right:1px solid var(--border);display:flex;flex-direction:column;gap:8px;}
 .wx-main{display:flex;align-items:center;gap:10px;}
 .wx-icon{font-size:30px;line-height:1;flex-shrink:0;}
-.wx-temp{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:40px;color:var(--text);line-height:1;}
+.wx-temp{font-family:var(--font-num);font-weight:800;font-size:40px;color:var(--text);line-height:1;}
 .wx-temp sup{font-size:18px;color:var(--text2);vertical-align:super;}
 .wx-desc{font-size:11px;color:var(--text2);margin-top:2px;}
 .wx-feels{font-size:12px;color:var(--muted);}
 .wind-block{background:var(--s2);border-radius:5px;padding:7px 10px;display:flex;gap:9px;align-items:center;}
 .wind-compass{width:32px;height:32px;border-radius:50%;border:1px solid var(--border2);background:var(--s3);position:relative;flex-shrink:0;}
-.compass-n{position:absolute;top:1px;left:50%;transform:translateX(-50%);font-size:6px;font-weight:700;color:var(--muted);font-family:'Barlow Condensed',sans-serif;}
+.compass-n{position:absolute;top:1px;left:50%;transform:translateX(-50%);font-size:6px;font-weight:700;color:var(--muted);font-family:var(--font-num);}
 .wind-needle{position:absolute;width:2px;height:12px;background:var(--orange);border-radius:1px;bottom:50%;left:50%;margin-left:-1px;transform-origin:bottom center;}
 .wind-info{flex:1;}
-.wind-speed{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:22px;color:var(--text);line-height:1;}
+.wind-speed{font-family:var(--font-num);font-weight:800;font-size:22px;color:var(--text);line-height:1;}
 .wind-speed span{font-size:12px;font-weight:500;color:var(--text2);}
 .wind-dir{font-size:11px;color:var(--text2);margin-top:1px;}
 .wind-tag{font-size:12px;font-weight:700;padding:2px 7px;border-radius:3px;background:rgba(251,146,60,.1);color:var(--orange);border:1px solid rgba(251,146,60,.2);white-space:nowrap;}
 .wind-effect-banner{display:flex;align-items:center;gap:10px;border-radius:6px;padding:10px 14px;}
 .wind-effect-banner .wef-icon{font-size:28px;flex-shrink:0;}
 .wind-effect-banner .wef-body{flex:1;min-width:0;}
-.wind-effect-banner .wef-label{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:20px;line-height:1.1;letter-spacing:0.5px;text-transform:uppercase;}
+.wind-effect-banner .wef-label{font-family:var(--font-num);font-weight:800;font-size:20px;line-height:1.1;letter-spacing:0.5px;text-transform:uppercase;}
 .wind-effect-banner .wef-sub{font-size:11px;margin-top:2px;opacity:.75;line-height:1.3;}
 .wind-effect-banner .wef-pill{font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;white-space:nowrap;text-transform:uppercase;letter-spacing:0.6px;}
 .wef-out{background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.2);}
@@ -696,7 +680,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 .cond-row{display:grid;grid-template-columns:1fr 1fr;gap:4px;}
 .cond{background:var(--s2);border-radius:4px;padding:5px 6px;text-align:center;}
 .cond-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;color:#c8d4e0;margin-bottom:2px;}
-.cond-val{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:18px;line-height:1;color:var(--text2);}
+.cond-val{font-family:var(--font-num);font-weight:800;font-size:18px;line-height:1;color:var(--text2);}
 .cond-sub{font-size:11px;color:var(--muted);margin-top:1px;}
 .wx-note{background:var(--s2);border-radius:4px;padding:6px 8px;border-left:3px solid var(--orange);font-size:12px;color:var(--text2);line-height:1.6;}
 .wx-note strong{color:var(--orange);}
@@ -706,12 +690,12 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 /* CENTER */
 .pw-center{display:flex;flex-direction:column;align-items:center;padding:12px 10px 8px;gap:6px;border-right:1px solid var(--border);background:linear-gradient(180deg,#0d1117 0%,#0f1318 100%);}
 .park-hdr{width:100%;display:flex;align-items:flex-start;justify-content:space-between;padding:0 2px;}
-.park-name{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:18px;letter-spacing:1px;text-transform:uppercase;color:var(--text);line-height:1;}
+.park-name{font-family:var(--font-num);font-weight:800;font-size:18px;letter-spacing:1px;text-transform:uppercase;color:var(--text);line-height:1;}
 .park-sub{font-size:12px;color:var(--muted);margin-top:2px;}
 .park-kpis{display:flex;align-items:center;gap:8px;}
 .kpi{display:flex;flex-direction:column;align-items:center;}
 .kpi-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#c8d4e0;}
-.kpi-val{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:19px;line-height:1.1;}
+.kpi-val{font-family:var(--font-num);font-weight:800;font-size:19px;line-height:1.1;}
 .kpi-div{width:1px;height:22px;background:var(--border2);}
 .field-wrap{flex:1;width:100%;display:flex;align-items:flex-start;justify-content:center;min-height:300px;max-height:480px;background:var(--surface);border-radius:6px;overflow:hidden;}
 #fieldCanvas{display:block;width:100%;height:100%;}
@@ -720,17 +704,17 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 .pw-right{padding:13px 15px;display:flex;flex-direction:column;gap:9px;}
 .lr-split{display:flex;flex-direction:column;gap:4px;}
 .lr-row{display:flex;align-items:center;gap:6px;}
-.lr-hand{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:11px;width:26px;text-align:center;flex-shrink:0;padding:2px 3px;border-radius:3px;}
+.lr-hand{font-family:var(--font-num);font-weight:700;font-size:11px;width:26px;text-align:center;flex-shrink:0;padding:2px 3px;border-radius:3px;}
 .lr-hand.L{color:#93bbff;background:rgba(147,187,255,.1);}
 .lr-hand.R{color:var(--orange);background:rgba(251,146,60,.1);}
 .lr-bar-wrap{flex:1;height:16px;background:var(--s3);border-radius:3px;overflow:hidden;position:relative;}
 .lr-bar-mid{position:absolute;top:0;left:50%;width:1px;height:100%;background:var(--border2);}
 .lr-bar{height:100%;border-radius:3px;display:flex;align-items:center;padding-left:5px;}
-.lr-val{width:30px;text-align:right;flex-shrink:0;font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:13px;}
+.lr-val{width:30px;text-align:right;flex-shrink:0;font-family:var(--font-num);font-weight:800;font-size:13px;}
 .hit-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;}
 .hg-card{background:var(--s2);border-radius:4px;padding:5px 6px;text-align:center;border-top:2px solid var(--border2);}
 .hg-lbl{font-size:11px;font-weight:700;text-transform:uppercase;color:#c8d4e0;margin-bottom:2px;}
-.hg-val{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:19px;line-height:1;}
+.hg-val{font-family:var(--font-num);font-weight:800;font-size:19px;line-height:1;}
 /* LEGEND */
 .pf-legend{display:flex;align-items:stretch;border-radius:4px;overflow:hidden;border:1px solid var(--border);}
 .leg-seg{flex:1;padding:5px 4px;text-align:center;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;line-height:1.3;}
@@ -762,7 +746,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   .ssb-divider { width:1px; height:22px; background:var(--border2); }
   .ssb-btns { display:flex; align-items:center; gap:3px; flex-wrap:wrap; }
   .ssb-btn {
-    font-family:'Barlow Condensed',sans-serif; font-size:12px; font-weight:700;
+    font-family:var(--font-num); font-size:12px; font-weight:700;
     padding:3px 10px; border-radius:4px; cursor:pointer;
     background:var(--s2); color:var(--text2); border:1px solid var(--border);
     transition:all .15s; white-space:nowrap;
@@ -781,7 +765,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   #dateButtons .ssb-btn:hover { background:#0f2040; color:#93c5fd; }
   /* Game buttons — split team colors, handled via inline style */
   .game-btn {
-    font-family:'Barlow Condensed',sans-serif; font-size:11px; font-weight:700;
+    font-family:var(--font-num); font-size:11px; font-weight:700;
     padding:0; border-radius:5px; cursor:pointer;
     border:1px solid rgba(255,255,255,0.08);
     transition:all .15s; white-space:nowrap; overflow:hidden;
@@ -798,7 +782,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   .team-pill {
     display:inline-block; font-size:9px; font-weight:800;
     padding:1px 5px; border-radius:3px; margin-right:3px;
-    font-family:'Barlow Condensed',sans-serif;
+    font-family:var(--font-num);
   }
   .team-pill.nyy { background:rgba(96,165,250,.15); color:#60a5fa; border:1px solid rgba(96,165,250,.25); }
   .team-pill.bos { background:rgba(248,113,113,.12); color:#f87171; border:1px solid rgba(248,113,113,.22); }
@@ -811,7 +795,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     border-bottom:1px solid rgba(251,146,60,.18); user-select:none;
   }
   .park-bar-toggle:hover { background:rgba(251,146,60,.12); }
-  .pbt-label { font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:14px; text-transform:uppercase; letter-spacing:1.5px; color:#fb923c; }
+  .pbt-label { font-family:var(--font-ui); font-weight:800; font-size:14px; text-transform:uppercase; letter-spacing:1.5px; color:#fb923c; }
   .pbt-arrow { font-size:13px; color:#fb923c; transition:transform .25s; }
   .park-bar-toggle.collapsed .pbt-arrow { transform:rotate(180deg); }
   .park-bar-inner { overflow:hidden; transition:max-height .35s ease; max-height:2000px; }
@@ -820,7 +804,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   /* ══ PITCHER TAB NAV ══ */
   .p-tab-nav { display:flex; border-bottom:2px solid #3a4a60; background:var(--bg); }
   .p-tab-btn {
-    flex:1; padding:8px 10px; font-family:'Barlow Condensed',sans-serif;
+    flex:1; padding:8px 10px; font-family:var(--font-num);
     font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1px;
     cursor:pointer; background:transparent; border:none; color:var(--text2);
     border-bottom:3px solid transparent; margin-bottom:-2px; transition:all .15s;
@@ -845,13 +829,13 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     grid-template-columns:32px 1fr 44px 210px 28px;
     align-items:center; gap:8px; padding:9px 14px; transition:background .15s;
   }
-  .bp-role { font-size:9px; font-weight:700; padding:2px 5px; border-radius:3px; text-align:center; font-family:'Barlow Condensed',sans-serif; }
+  .bp-role { font-size:9px; font-weight:700; padding:2px 5px; border-radius:3px; text-align:center; font-family:var(--font-num); }
   .bp-role.CL { background:rgba(251,146,60,.15); color:var(--orange); border:1px solid rgba(251,146,60,.25); }
   .bp-role.SU { background:rgba(96,165,250,.12); color:#60a5fa; border:1px solid rgba(96,165,250,.2); }
   .bp-role.MR { background:rgba(154,170,184,.08); color:var(--text2); border:1px solid var(--border); }
-  .bp-name { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:15px; color:var(--text); line-height:1; }
+  .bp-name { font-family:var(--font-num); font-weight:700; font-size:15px; color:var(--text); line-height:1; }
   .bp-meta { font-size:9px; color:var(--muted); margin-top:1px; }
-  .bp-era { font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:17px; color:var(--text2); }
+  .bp-era { font-family:var(--font-num); font-weight:800; font-size:17px; color:var(--text2); }
   .bp-era-lbl { font-size:7px; color:var(--muted); text-transform:uppercase; text-align:center; }
   .bp-days { display:flex; gap:3px; align-items:center; }
   .bp-day {
@@ -874,7 +858,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   .bp-row.open .bp-detail, .bp-detail.open { display:block; }
   .bp-dtab-nav { display:flex; gap:4px; margin-bottom:10px; }
   .bp-dtab-btn {
-    font-family:'Barlow Condensed',sans-serif; font-size:10px; font-weight:700;
+    font-family:var(--font-num); font-size:10px; font-weight:700;
     padding:3px 11px; border-radius:3px; cursor:pointer;
     background:var(--s3); color:var(--text2); border:1px solid var(--border);
     text-transform:uppercase; letter-spacing:0.6px; transition:all .15s;
@@ -887,12 +871,12 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   .bp-dtab-pane.active[id$="-log"] { display:block; grid-template-columns:unset; }
   .bp-stat-cell { background:var(--s3); border-radius:5px; padding:7px 8px; text-align:center; }
   .bp-stat-lbl { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; color:#c8d4e0; margin-bottom:2px; }
-  .bp-stat-val { font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:18px; line-height:1; }
+  .bp-stat-val { font-family:var(--font-num); font-weight:800; font-size:18px; line-height:1; }
   .bp-stat-ctx { font-size:8px; color:var(--muted); margin-top:1px; }
   .bp-log-row { display:flex; align-items:center; justify-content:space-between; padding:5px 0; border-bottom:1px solid var(--border); }
   .bp-log-date { color:var(--muted); font-size:10px; width:60px; }
   .bp-log-opp { color:var(--text2); font-size:11px; width:50px; }
-  .bp-log-pitches { font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:14px; }
+  .bp-log-pitches { font-family:var(--font-num); font-weight:800; font-size:14px; }
   .bp-log-result { font-size:10px; color:var(--muted); text-align:right; flex:1; }
 
   /* ══ PARK BAR OVERRIDES ══ */
@@ -907,7 +891,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   position: sticky; top: 0; z-index: 2;
 }
 .gl-htab-btn {
-  font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+  font-family: var(--font-num); font-weight: 700;
   font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
   padding: 11px 12px 9px; border: none; background: none;
   cursor: pointer; color: var(--muted);
@@ -922,20 +906,20 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 .gl-tab-pane { display: none; padding: 18px 20px; }
 .gl-tab-pane.active { display: block; }
 .gl-score-header {
-  font-family: 'Barlow Condensed', sans-serif; font-weight: 800;
+  font-family: var(--font-num); font-weight: 800;
   font-size: 28px; margin-bottom: 4px;
 }
 .gl-score-sub { font-size: 11px; color: var(--muted); margin-bottom: 16px; line-height: 1.4; }
 .gl-pillar { margin-bottom: 14px; }
 .gl-pillar-title {
-  font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+  font-family: var(--font-num); font-weight: 700;
   font-size: 13px; text-transform: uppercase; letter-spacing: 0.8px;
   margin-bottom: 5px; padding-bottom: 4px; border-bottom: 1px solid var(--border);
 }
 .gl-range-row { display: flex; gap: 8px; margin-top: 12px; }
 .gl-range-chip {
   flex: 1; border-radius: 6px; padding: 8px 10px; text-align: center;
-  font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+  font-family: var(--font-num); font-weight: 700;
   font-size: 14px; border: 1px solid transparent;
 }
 .gl-range-chip .gl-range-lbl { font-size: 9px; font-weight: 400; opacity: .7; margin-top: 2px; }
@@ -968,7 +952,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   text-transform: uppercase; color: rgba(96,165,250,0.7); margin-bottom: 8px;
 }
 .tour-title {
-  font-family: 'Barlow Condensed', sans-serif; font-size: 20px;
+  font-family: var(--font-num); font-size: 20px;
   font-weight: 800; color: #e2e8f0; margin-bottom: 10px; line-height: 1.2;
 }
 .tour-body { font-size: 13px; color: #94a3b8; line-height: 1.55; margin-bottom: 18px; }
@@ -1181,7 +1165,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   .lineup-status-badge {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 4px 12px; border-radius: 20px;
-    font-family: 'Barlow Condensed', sans-serif;
+    font-family: var(--font-num);
     font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.2px;
     transition: all .2s;
   }
@@ -1211,11 +1195,11 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     0%,100% { opacity:1; } 50% { opacity:.4; }
   }
   .lsb-time {
-    font-family: 'Barlow', sans-serif; font-size: 10px;
+    font-family: var(--font-ui); font-size: 10px;
     font-weight: 400; color: var(--muted); margin-left: 4px;
   }
   .edit-lineup-btn {
-    font-family: 'Barlow Condensed', sans-serif; font-size: 11px; font-weight: 700;
+    font-family: var(--font-num); font-size: 11px; font-weight: 700;
     text-transform: uppercase; letter-spacing: 1px;
     padding: 4px 13px; border-radius: 4px; cursor: pointer;
     background: var(--s3); color: var(--text2);
@@ -1247,7 +1231,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   }
   .le-hdr-left { display: flex; flex-direction: column; gap: 2px; }
   .le-title {
-    font-family: 'Barlow Condensed', sans-serif; font-weight: 800;
+    font-family: var(--font-num); font-weight: 800;
     font-size: 16px; text-transform: uppercase; letter-spacing: 2px; color: var(--text);
   }
   .le-subtitle { font-size: 10px; color: var(--muted); }
@@ -1268,7 +1252,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   .le-team-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase;
     letter-spacing: 1px; color: var(--muted); }
   .le-team-btn {
-    font-family: 'Barlow Condensed', sans-serif; font-size: 12px; font-weight: 700;
+    font-family: var(--font-num); font-size: 12px; font-weight: 700;
     padding: 3px 12px; border-radius: 4px; cursor: pointer;
     background: var(--s2); color: var(--text2); border: 1px solid var(--border);
     transition: all .12s;
@@ -1288,13 +1272,13 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     padding: 10px 14px 6px; border-bottom: 1px solid var(--border); flex-shrink: 0;
   }
   .le-pool-title {
-    font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 10px;
+    font-family: var(--font-num); font-weight: 700; font-size: 10px;
     text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); margin-bottom: 6px;
   }
   .le-search {
     width: 100%; padding: 6px 10px; border-radius: 5px; font-size: 12px;
     background: var(--s3); border: 1px solid var(--border); color: var(--text);
-    outline: none; font-family: 'Barlow', sans-serif;
+    outline: none; font-family: var(--font-ui);
   }
   .le-search:focus { border-color: #60a5fa; }
   .le-search::placeholder { color: var(--muted); }
@@ -1328,12 +1312,12 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   .sp-pitcher-chip:hover { background: var(--s3); border-color: var(--border2); }
   .sp-pitcher-chip.active { border-color: #60a5fa; background: rgba(96,165,250,.10); }
   .sp-pitcher-chip-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1px; }
-  .sp-pitcher-chip-salary { font-size: 12px; font-weight: 800; color: #4ade80; font-family: 'Barlow Condensed', sans-serif; }
+  .sp-pitcher-chip-salary { font-size: 12px; font-weight: 800; color: #4ade80; font-family: var(--font-num); }
   .sp-pitcher-chip-hand { font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 3px; background: rgba(255,255,255,.06); }
-  .sp-pitcher-chip-name { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 16px; color: var(--text); line-height: 1.15; }
+  .sp-pitcher-chip-name { font-family: var(--font-num); font-weight: 700; font-size: 16px; color: var(--text); line-height: 1.15; }
   .sp-pitcher-chip-stats { display: flex; gap: 8px; margin-top: 4px; }
   .sp-pitcher-chip-stat { display: flex; flex-direction: column; align-items: center; min-width: 34px; }
-  .sp-pitcher-chip-stat-val { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 14px; line-height: 1; color: var(--text2); }
+  .sp-pitcher-chip-stat-val { font-family: var(--font-num); font-weight: 800; font-size: 14px; line-height: 1; color: var(--text2); }
   .sp-pitcher-chip-stat-lbl { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.3px; margin-top: 2px; }
 
   /* Card top row: position badge + hand */
@@ -1351,7 +1335,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   }
   /* Card name */
   .le-chip-name {
-    font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 14px;
+    font-family: var(--font-num); font-weight: 700; font-size: 14px;
     color: var(--text); line-height: 1.1; margin-top: 1px;
   }
   /* Card stat row */
@@ -1362,7 +1346,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     display: flex; flex-direction: column; align-items: center;
   }
   .le-chip-stat-val {
-    font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 13px;
+    font-family: var(--font-num); font-weight: 800; font-size: 13px;
     line-height: 1; color: var(--text2);
   }
   .le-chip-stat-val.hi { color: var(--hi); }
@@ -1386,7 +1370,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
     padding: 10px 14px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0;
   }
   .le-order-title {
-    font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 10px;
+    font-family: var(--font-num); font-weight: 700; font-size: 10px;
     text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted);
   }
   .le-order-list { flex: 1; overflow-y: auto; padding: 8px 10px; }
@@ -1399,12 +1383,12 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   .le-slot.filled { border-style: solid; background: var(--s2); border-color: var(--border2); }
   .le-slot.drag-over { border-color: #60a5fa; background: rgba(96,165,250,.06); }
   .le-slot-num {
-    font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 16px;
+    font-family: var(--font-num); font-weight: 800; font-size: 16px;
     color: var(--muted); width: 18px; text-align: center; flex-shrink: 0;
   }
   .le-slot.filled .le-slot-num { color: var(--text2); }
   .le-slot-name {
-    font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 14px;
+    font-family: var(--font-num); font-weight: 700; font-size: 14px;
     color: var(--text); flex: 1; line-height: 1.2;
   }
   .le-slot-pos { font-size: 9px; color: var(--muted); }
@@ -1436,7 +1420,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
   .le-status-toggle:hover { border-color: var(--border2); color: var(--text2); }
   .le-status-toggle input { cursor: pointer; accent-color: #4ade80; }
   .le-btn {
-    font-family: 'Barlow Condensed', sans-serif; font-size: 12px; font-weight: 700;
+    font-family: var(--font-num); font-size: 12px; font-weight: 700;
     text-transform: uppercase; letter-spacing: 1px;
     padding: 6px 16px; border-radius: 5px; cursor: pointer;
     transition: all .15s; border: none;
@@ -1453,10 +1437,12 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 
 /* ── SUITE TOP NAV ──────────────────────────────────────────────────────────── */
 .sh-topnav{display:flex;align-items:stretch;background:#0a0d12;border-bottom:1px solid var(--border);height:52px;flex-shrink:0;z-index:100;}
-.sh-topnav-logo{display:flex;align-items:center;padding:0 20px 0 16px;font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:17px;letter-spacing:2px;text-transform:uppercase;color:var(--text);white-space:nowrap;border-right:1px solid var(--border);margin-right:4px;}
-.sh-topnav-logo em{color:var(--hi);font-style:normal;}
-.sh-tab{display:flex;align-items:center;padding:0 24px;font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;text-decoration:none;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-1px;transition:all .15s;white-space:nowrap;}
+.sh-topnav-logo{display:flex;align-items:center;padding:0 20px 0 16px;font-family:var(--font-ui);font-weight:800;font-size:17px;letter-spacing:2px;text-transform:uppercase;color:var(--text);white-space:nowrap;border-right:1px solid var(--border);margin-right:4px;}
+.sh-topnav-logo em{color:var(--accent);font-style:normal;}
+.sh-tab{display:flex;align-items:center;padding:0 24px;font-family:var(--font-ui);font-size:14px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;text-decoration:none;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-1px;transition:all .15s;white-space:nowrap;}
 .sh-tab:hover{color:var(--text);background:rgba(255,255,255,.04);}
+.sh-tab.sh-accent:hover,.sh-tab.sh-accent.active{color:var(--accent);}
+.sh-tab.sh-accent.active{border-bottom-color:var(--accent);background:var(--accent-soft);}
 .sh-tab.sh-green:hover,.sh-tab.sh-green.active{color:var(--hi);}
 .sh-tab.sh-green.active{border-bottom-color:var(--hi);background:rgba(74,222,128,.07);}
 .sh-tab.sh-blue:hover,.sh-tab.sh-blue.active{color:var(--blue);}
@@ -1473,7 +1459,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 
 <nav class="sh-topnav">
   <div class="sh-topnav-logo">Slate<em>Hub</em></div>
-  <a class="sh-tab sh-green active" href="index.html">SlateHub</a>
+  <a class="sh-tab sh-accent active" href="index.html">SlateHub</a>
   <a class="sh-tab sh-blue" href="hand-builders-hub.html">Lineup Builder Hub</a>
   <a class="sh-tab sh-orange" href="top-stacks.html">Top Stacks</a>
   <a class="sh-tab sh-purple" href="top-pitchers.html">Top Pitchers</a>
@@ -1848,7 +1834,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
       <div class="ph-label">Batting Order &mdash; NYY vs BOS</div>
       <div style="display:flex;align-items:center;gap:8px;position:relative;">
         <span id="lineupCoverageBadge" style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;display:none;"></span>
-        <a href="hand-builders-hub.html" style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:2px 10px;border-radius:4px;border:1px solid rgba(251,191,36,.35);color:#fbbf24;text-decoration:none;transition:all .12s;" title="Lineup Builder Hub">✎ Build</a>
+        <a href="hand-builders-hub.html" style="font-family:var(--font-num);font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:2px 10px;border-radius:4px;border:1px solid rgba(251,191,36,.35);color:#fbbf24;text-decoration:none;transition:all .12s;" title="Lineup Builder Hub">✎ Build</a>
         <button class="gl-btn" onclick="openGlossaryTab('hes')"   title="Hitter Environment Score glossary" style="padding:2px 8px;font-size:11px;border-color:rgba(74,222,128,.35);color:#86efac;">HES</button>
         <button class="gl-btn" onclick="openGlossaryTab('pms')"   title="Pitcher Matchup Score glossary"    style="padding:2px 8px;font-size:11px;border-color:rgba(251,146,60,.35);color:#fdba74;">PMS</button>
         <button class="gl-btn" onclick="openGlossaryTab('stack')" title="Stack Grade glossary"              style="padding:2px 8px;font-size:11px;border-color:rgba(251,191,36,.35);color:#fde68a;">Stack</button>
@@ -2149,8 +2135,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,28 22,26 44,30 67,22 89,24 111,23 133,20 156,16 178,25 200,18"
               fill="none" stroke="#4ade80" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">94.2 season</text>
-            <text x="148" y="40" font-size="8" fill="#4ade80" font-family="Barlow Condensed">95.8 ↑</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">94.2 season</text>
+            <text x="148" y="40" font-size="8" fill="#4ade80" font-family="Geist Mono">95.8 ↑</text>
           </svg>
         </div>
         <div class="mini-chart-card">
@@ -2159,8 +2145,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,18 22,16 44,32 67,12 89,20 111,22 133,20 156,18 178,22 200,15"
               fill="none" stroke="#4ade80" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">14.2% season</text>
-            <text x="140" y="40" font-size="8" fill="#4ade80" font-family="Barlow Condensed">12.1% ↓</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">14.2% season</text>
+            <text x="140" y="40" font-size="8" fill="#4ade80" font-family="Geist Mono">12.1% ↓</text>
           </svg>
         </div>
       </div>
@@ -2327,16 +2313,16 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,24 22,22 44,26 67,18 89,20 111,18 133,15 156,12 178,20 200,14" fill="none" stroke="#4ade80" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">96.8 season</text>
-            <text x="148" y="40" font-size="8" fill="#4ade80" font-family="Barlow Condensed">97.4 ↑</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">96.8 season</text>
+            <text x="148" y="40" font-size="8" fill="#4ade80" font-family="Geist Mono">97.4 ↑</text>
           </svg>
         </div>
         <div class="mini-chart-card"><div class="mcc-lbl">K% trend</div>
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,22 22,24 44,28 67,18 89,22 111,24 133,22 156,20 178,24 200,20" fill="none" stroke="#mid" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">26.8% season</text>
-            <text x="130" y="40" font-size="8" fill="#fbbf24" font-family="Barlow Condensed">24.2% stable</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">26.8% season</text>
+            <text x="130" y="40" font-size="8" fill="#fbbf24" font-family="Geist Mono">24.2% stable</text>
           </svg>
         </div>
       </div>
@@ -2643,16 +2629,16 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,28 22,26 44,24 67,22 89,24 111,22 133,20 156,18 178,22 200,20" fill="none" stroke="#4ade80" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">season avg</text>
-            <text x="148" y="40" font-size="8" fill="#4ade80" font-family="Barlow Condensed">93.4 ↑</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">season avg</text>
+            <text x="148" y="40" font-size="8" fill="#4ade80" font-family="Geist Mono">93.4 ↑</text>
           </svg>
         </div>
         <div class="mini-chart-card"><div class="mcc-lbl">K% trend</div>
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,22 22,20 44,24 67,22 89,24 111,26 133,24 156,22 178,24 200,22" fill="none" stroke="#fbbf24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">29.4% season</text>
-            <text x="130" y="40" font-size="8" fill="#fbbf24" font-family="Barlow Condensed">elevated</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">29.4% season</text>
+            <text x="130" y="40" font-size="8" fill="#fbbf24" font-family="Geist Mono">elevated</text>
           </svg>
         </div>
       </div>
@@ -2809,16 +2795,16 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,22 22,24 44,22 67,24 89,22 111,24 133,22 156,24 178,22 200,24" fill="none" stroke="#fbbf24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">season avg</text>
-            <text x="140" y="40" font-size="8" fill="#fbbf24" font-family="Barlow Condensed">94.8 steady</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">season avg</text>
+            <text x="140" y="40" font-size="8" fill="#fbbf24" font-family="Geist Mono">94.8 steady</text>
           </svg>
         </div>
         <div class="mini-chart-card"><div class="mcc-lbl">Barrel% trend</div>
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,18 22,20 44,22 67,24 89,26 111,28 133,28 156,30 178,30 200,32" fill="none" stroke="#f87171" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">16.2% season</text>
-            <text x="130" y="40" font-size="8" fill="#f87171" font-family="Barlow Condensed">10.1% ↓</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">16.2% season</text>
+            <text x="130" y="40" font-size="8" fill="#f87171" font-family="Geist Mono">10.1% ↓</text>
           </svg>
         </div>
       </div>
@@ -2976,16 +2962,16 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,24 22,24 44,24 67,24 89,24 111,24 133,24 156,24 178,24 200,24" fill="none" stroke="#4b5563" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">— season</text>
-            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">—</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">— season</text>
+            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">—</text>
           </svg>
         </div>
         <div class="mini-chart-card"><div class="mcc-lbl">K% trend</div>
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,24 22,24 44,24 67,24 89,24 111,24 133,24 156,24 178,24 200,24" fill="none" stroke="#4b5563" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">— season</text>
-            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">—</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">— season</text>
+            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">—</text>
           </svg>
         </div>
       </div>
@@ -3142,16 +3128,16 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,24 22,24 44,24 67,24 89,24 111,24 133,24 156,24 178,24 200,24" fill="none" stroke="#4b5563" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">— season</text>
-            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">—</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">— season</text>
+            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">—</text>
           </svg>
         </div>
         <div class="mini-chart-card"><div class="mcc-lbl">K% trend</div>
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,24 22,24 44,24 67,24 89,24 111,24 133,24 156,24 178,24 200,24" fill="none" stroke="#4b5563" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">— season</text>
-            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">—</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">— season</text>
+            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">—</text>
           </svg>
         </div>
       </div>
@@ -3308,16 +3294,16 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,24 22,24 44,24 67,24 89,24 111,24 133,24 156,24 178,24 200,24" fill="none" stroke="#4b5563" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">— season</text>
-            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">—</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">— season</text>
+            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">—</text>
           </svg>
         </div>
         <div class="mini-chart-card"><div class="mcc-lbl">K% trend</div>
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,24 22,24 44,24 67,24 89,24 111,24 133,24 156,24 178,24 200,24" fill="none" stroke="#4b5563" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">— season</text>
-            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">—</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">— season</text>
+            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">—</text>
           </svg>
         </div>
       </div>
@@ -3474,16 +3460,16 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,24 22,24 44,24 67,24 89,24 111,24 133,24 156,24 178,24 200,24" fill="none" stroke="#4b5563" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">— season</text>
-            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">—</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">— season</text>
+            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">—</text>
           </svg>
         </div>
         <div class="mini-chart-card"><div class="mcc-lbl">K% trend</div>
           <svg width="100%" height="42" viewBox="0 0 200 42" preserveAspectRatio="xMidYMid meet" style="overflow:visible">
             <line x1="0" y1="24" x2="200" y2="24" stroke="#334055" stroke-width="1" stroke-dasharray="3,2"/>
             <polyline points="0,24 22,24 44,24 67,24 89,24 111,24 133,24 156,24 178,24 200,24" fill="none" stroke="#4b5563" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">— season</text>
-            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Barlow Condensed">—</text>
+            <text x="2" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">— season</text>
+            <text x="148" y="40" font-size="8" fill="#5a6a7e" font-family="Geist Mono">—</text>
           </svg>
         </div>
       </div>
@@ -3558,7 +3544,7 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
           <span class="sp-hand-badge">—</span>
         </div>
         <div class="sp-name">Kris Bubic</div>
-        <div id="spProjDisplay" style="display:none;margin-top:6px;font-family:'Barlow Condensed',sans-serif;"></div>
+        <div id="spProjDisplay" style="display:none;margin-top:6px;font-family:var(--font-num);"></div>
       </div>
       <div class="grade-wrap">
         <div class="grade-box g-C" id="spGradeBox">—</div>
@@ -3670,12 +3656,12 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
           <div style="display:flex;flex-direction:column;gap:6px;">
             <div style="background:var(--s3);border-radius:5px;padding:8px 10px;border-top:2px solid var(--orange);">
               <div style="font-size:8px;font-weight:600;text-transform:uppercase;color:var(--muted);margin-bottom:2px;">Arm Angle</div>
-              <div id="sp-arm-val" style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:20px;color:var(--orange);line-height:1;">--</div>
+              <div id="sp-arm-val" style="font-family:var(--font-num);font-weight:800;font-size:20px;color:var(--orange);line-height:1;">--</div>
               <div id="sp-arm-slot-lbl" style="font-size:9px;color:var(--muted);margin-top:1px;">—</div>
             </div>
             <div style="background:var(--s3);border-radius:5px;padding:8px 10px;border-top:2px solid #a78bfa;">
               <div style="font-size:8px;font-weight:600;text-transform:uppercase;color:var(--muted);margin-bottom:2px;">IVB (Fastball)</div>
-              <div id="sp-ivb-mini-val" style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:20px;color:#a78bfa;line-height:1;">--</div>
+              <div id="sp-ivb-mini-val" style="font-family:var(--font-num);font-weight:800;font-size:20px;color:#a78bfa;line-height:1;">--</div>
               <div id="sp-ivb-mini-ctx" style="font-size:9px;color:var(--muted);margin-top:1px;">induced vertical break</div>
             </div>
             <div id="sp-arm-desc" style="padding:7px 10px;background:var(--s3);border-radius:5px;border-left:3px solid var(--orange);font-size:10px;color:var(--text2);line-height:1.6;">
@@ -3773,8 +3759,8 @@ body{background:var(--bg);color:var(--text);font-family:'Barlow',sans-serif;padd
 
       <!-- ── SPLITS inside Results ── -->
       <div style="margin-top:12px;margin-bottom:4px;display:flex;align-items:center;gap:8px;">
-        <div style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);">Splits vs Handedness</div>
-        <span id="splitsTodayBadge" style="display:none;font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;font-family:'Barlow Condensed',sans-serif;"></span>
+        <div style="font-family:var(--font-num);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);">Splits vs Handedness</div>
+        <span id="splitsTodayBadge" style="display:none;font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;font-family:var(--font-num);"></span>
       </div>
       <div class="splits-duo" id="spSplitsDuo"><div style="color:var(--muted);font-size:11px;padding:8px;">Loading splits...</div></div>
 
@@ -4279,7 +4265,7 @@ function selectPitcherTeam(teamId) {
     ctx.stroke();
 
     // ── ANGLE LABELS ──
-    ctx.font = `700 11px "Barlow Condensed", sans-serif`;
+    ctx.font = `700 11px "Geist Mono", monospace`;
     ctx.textAlign = 'left';
 
     // Pitcher label (orange, at ball end)
@@ -4292,7 +4278,7 @@ function selectPitcherTeam(teamId) {
     const avgLabelX = avgResult.ex + 6;
     const avgLabelY = avgResult.ey + 4;
     ctx.fillStyle = avgC;
-    ctx.font = `500 9px "Barlow", sans-serif`;
+    ctx.font = `500 9px "Inter Tight", system-ui`;
     ctx.fillText('Avg ' + avgAngle + '°', avgLabelX, avgLabelY);
 
     // ── LEGEND DOTS at bottom ──
@@ -4300,7 +4286,7 @@ function selectPitcherTeam(teamId) {
     // Orange dot
     ctx.beginPath(); ctx.arc(cx - 28, legY, 3, 0, Math.PI * 2);
     ctx.fillStyle = armC; ctx.fill();
-    ctx.fillStyle = armC; ctx.font = `500 9px "Barlow", sans-serif`;
+    ctx.fillStyle = armC; ctx.font = `500 9px "Inter Tight", system-ui`;
     ctx.textAlign = 'left';
     ctx.fillText('This pitcher', cx - 22, legY + 3);
 
@@ -4681,11 +4667,11 @@ const STADIUMS = {"angels":{"meta":{"name":"Angel Stadium of Anaheim","location"
           const pt = outer[Math.min(pos.idx, outer.length-1)];
           const px = tx(pt[0]), py = ty(pt[1]);
           c.textAlign = pos.align;
-          c.font = 'bold 9px "Barlow Condensed", sans-serif';
+          c.font = 'bold 9px "Geist Mono", monospace';
           c.fillStyle = 'rgba(255,255,255,0.92)';
           c.fillText(pos.label, px, py - 6);
           if (pos.wall != null) {
-            c.font = '7px "Barlow Condensed", sans-serif';
+            c.font = '7px "Geist Mono", monospace';
             c.fillStyle = 'rgba(251,191,36,0.85)';
             c.fillText(pos.wall + "' wall", px, py - 16);
           }
@@ -4707,7 +4693,7 @@ const STADIUMS = {"angels":{"meta":{"name":"Angel Stadium of Anaheim","location"
     c.lineTo(tx(w2x)-9*Math.cos(aAng+0.4),ty(w2y)-9*Math.sin(aAng+0.4));
     c.closePath();c.fill();
     c.fillStyle='rgba(251,146,60,0.75)';
-    c.font='bold 8px "Barlow Condensed",sans-serif';c.textAlign='center';
+    c.font='bold 8px "Geist Mono",monospace';c.textAlign='center';
     c.fillText('14 mph',tx((w1x+w2x)/2)+12,ty((w1y+w2y)/2)-5);
     // Dimension labels — placed AT the wall using outfield_outer path
     // We sample wall positions by angle from home plate and draw labels just inside the wall
@@ -4755,7 +4741,7 @@ const STADIUMS = {"angels":{"meta":{"name":"Angel Stadium of Anaheim","location"
         c.beginPath(); c.moveTo(tx(wp.x), ty(wp.y));
         c.lineTo(tx(wp.x) - Math.sin(r)*7, ty(wp.y) + Math.cos(r)*7); c.stroke();
         // Background pill
-        c.font = 'bold 13px "Barlow Condensed",sans-serif';
+        c.font = 'bold 13px "Geist Mono",monospace';
         c.textAlign = 'center'; c.textBaseline = 'middle';
         const tw = c.measureText(d.label).width;
         c.fillStyle = 'rgba(10,14,20,0.85)';
@@ -4768,7 +4754,7 @@ const STADIUMS = {"angels":{"meta":{"name":"Angel Stadium of Anaheim","location"
     }
     const gmR=-44*Math.PI/180,gmD=255;
     c.fillStyle='rgba(74,222,128,0.7)';
-    c.font='700 7px "Barlow Condensed",sans-serif';c.textAlign='center';
+    c.font='700 7px "Geist Mono",monospace';c.textAlign='center';
     c.fillText("Green Monster \xb7 37'",tx(Math.sin(gmR)*gmD),ty(hpCY+Math.cos(gmR)*gmD)+9);
   }
   requestAnimationFrame(()=>requestAnimationFrame(drawField));
@@ -6175,7 +6161,7 @@ async function loadParkFactors(venueId, venueName, homeTeam, homeTeamId) {
             <div style="font-size:8.5px;color:var(--text2);line-height:1.2;margin-top:1px;">${desc}</div>
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:1px;flex-shrink:0;margin-left:6px;">
-            <span style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:14px;color:${pillCol};background:${pillBg};border:${pillBdr};border-radius:4px;padding:0px 7px;line-height:1.6;min-width:36px;text-align:center;display:inline-block;">${v ?? '--'}</span>
+            <span style="font-family:var(--font-num);font-weight:800;font-size:14px;color:${pillCol};background:${pillBg};border:${pillBdr};border-radius:4px;padding:0px 7px;line-height:1.6;min-width:36px;text-align:center;display:inline-block;">${v ?? '--'}</span>
             <span style="font-size:8px;font-weight:600;color:${pillCol};line-height:1;">${v != null ? sign+delta+'% · '+ctx : ''}</span>
           </div>
         </div>`;
@@ -6592,7 +6578,7 @@ async function showPitcherPicker(teamId) {
     const projCeil  = p.proj_ceiling!= null ? p.proj_ceiling.toFixed(1): null;
     const projRange = projFloor && projCeil ? ` [${projFloor}–${projCeil}]` : '';
     const projBadge = proj
-      ? `<span style="margin-left:auto;font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:800;color:var(--hi);" title="Projected DK pts${projRange}">${proj}<span style="font-weight:400;font-size:9px;color:var(--muted);"> pts</span></span>`
+      ? `<span style="margin-left:auto;font-family:var(--font-num);font-size:11px;font-weight:800;color:var(--hi);" title="Projected DK pts${projRange}">${proj}<span style="font-weight:400;font-size:9px;color:var(--muted);"> pts</span></span>`
       : '';
     const milbBadge = (p.stats_level && p.stats_level !== 'MLB')
       ? `<span style="font-size:8px;padding:1px 4px;border-radius:3px;font-weight:700;background:#78350f;color:#fcd34d;letter-spacing:.5px;" title="Projection based on ${p.stats_level} stats — discounted for competition level">${p.stats_level}</span>`
@@ -7213,10 +7199,10 @@ async function loadArsenal(spId) {
           </div>
           <div style="flex:1;height:18px;background:var(--s3);border-radius:3px;overflow:hidden;">
             <div style="height:100%;width:${pct}%;background:${c.bg};border-right:2px solid ${c.border};display:flex;align-items:center;padding-left:7px;">
-              <span style="font-size:10px;font-weight:700;color:${c.text};font-family:'Barlow Condensed',sans-serif;">${pct}%</span>
+              <span style="font-size:10px;font-weight:700;color:${c.text};font-family:var(--font-num);">${pct}%</span>
             </div>
           </div>
-          <div style="width:36px;text-align:right;font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:12px;color:${rvColor(p.rv100)};">${rv}</div>
+          <div style="width:36px;text-align:right;font-family:var(--font-num);font-weight:700;font-size:12px;color:${rvColor(p.rv100)};">${rv}</div>
         </div>`;
   });
 
@@ -7798,7 +7784,7 @@ async function loadBullpen(teamId, gameDate) {
           arr.style.transform = det.classList.contains('open') ? 'rotate(180deg)' : '';
         ">
           <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;background:${grade.bgColor};border:1px solid ${grade.color}33;border-radius:4px;padding:3px 2px;min-height:30px;">
-            <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;color:${grade.color};line-height:1;">${grade.grade}</div>
+            <div style="font-family:var(--font-num);font-weight:800;font-size:15px;color:${grade.color};line-height:1;">${grade.grade}</div>
             <div style="font-size:7px;color:${grade.color};opacity:.65;line-height:1;margin-top:1px;letter-spacing:.3px;">GRADE</div>
           </div>
           <div class="bp-name-wrap">
@@ -7818,7 +7804,7 @@ async function loadBullpen(teamId, gameDate) {
         </div>
         <div class="bp-detail" id="bpd-${rel.player_id}">
           <div style="display:flex;align-items:center;gap:10px;background:${grade.bgColor};border:1px solid ${grade.color}33;border-radius:5px;padding:8px 12px;margin-bottom:10px;">
-            <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:26px;color:${grade.color};line-height:1;min-width:32px;text-align:center;">${grade.grade}</div>
+            <div style="font-family:var(--font-num);font-weight:800;font-size:26px;color:${grade.color};line-height:1;min-width:32px;text-align:center;">${grade.grade}</div>
             <div style="border-left:1px solid ${grade.color}44;padding-left:10px;">
               <div style="font-size:10px;font-weight:700;color:${grade.color};margin-bottom:2px;">${roleLabels[role]} · Grade ${grade.grade} · ${grade.score}/100</div>
               <div style="font-size:9px;color:var(--text2);line-height:1.4;">${grade.desc}</div>
@@ -7850,7 +7836,7 @@ async function loadBullpen(teamId, gameDate) {
           <div class="bp-dtab-pane" id="bpt-${rel.player_id}-log">
             ${rel.appearances.slice(0,7).map(a => `
               <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 12px;border-bottom:1px solid var(--border);font-size:11px;">
-                <span style="color:var(--muted);font-family:'Barlow Condensed',sans-serif;">${a.game_date}</span>
+                <span style="color:var(--muted);font-family:var(--font-num);">${a.game_date}</span>
                 <span style="font-weight:700;">${a.pitches}p</span>
                 <span style="color:var(--muted);">${a.innings ? parseFloat(a.innings).toFixed(1) : '?'} IP</span>
                 <span style="color:${a.earned_runs > 0 ? 'var(--lo)' : 'var(--hi)'};">${a.earned_runs ?? 0} ER</span>
@@ -9008,35 +8994,40 @@ function computePhysicsMatchup(arsenalRows, attackAngle, swingPathTilt, pitcherA
   const LEAGUE_ATTACK = 12.0, LEAGUE_ARM = 45.0;
   const clip = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const safe = (v, fb) => (v != null && isFinite(v)) ? v : (fb ?? 0);
-  if (!arsenalRows || !arsenalRows.length) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0 };
+  if (!arsenalRows || !arsenalRows.length) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0, hrPlaneAdj: 1.0 };
   if (attackAngle == null) attackAngle = LEAGUE_ATTACK;
   if (swingPathTilt == null) swingPathTilt = 0.0;
   const totalUsage = arsenalRows.reduce((s, r) => s + safe(r.usage_pct, 0), 0);
-  if (totalUsage <= 0) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0 };
-  let weightedDifficulty = 0, weightSum = 0;
+  if (totalUsage <= 0) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0, hrPlaneAdj: 1.0 };
+  const IVB_BASELINE = 8.0, IVB_VAA_COEFF = 0.088;
+  let weightedDifficulty = 0, weightedVertGap = 0, weightSum = 0;
   for (const r of arsenalRows) {
     const u = safe(r.usage_pct, 0) / totalUsage;
     if (u <= 0) continue;
     const rh = safe(r.release_height, 6.0), ext = safe(r.extension, 6.5);
     const vaa = -(Math.atan((rh - 2.5) / Math.max(60.5 - ext, 1.0)) * 180 / Math.PI);
-    const ivb = safe(r.ivb, 8.0), hb = safe(r.hb, 0.0);
-    const vertGap = Math.abs(attackAngle - Math.abs(vaa));
+    const ivb = safe(r.ivb, IVB_BASELINE), hb = safe(r.hb, 0.0);
+    const effectiveVaa = vaa + (ivb - IVB_BASELINE) * IVB_VAA_COEFF;
+    const vertGap = Math.abs(attackAngle - Math.abs(effectiveVaa));
     const vertScore = clip(vertGap / 15.0, 0, 1);
-    const ivbConflict = clip((ivb - 8.0) * (attackAngle - LEAGUE_ATTACK) * 0.004, 0, 1);
     const latMismatch = clip((Math.abs(hb) - Math.abs(swingPathTilt) * 1.5) / 18.0, 0, 1);
-    weightedDifficulty += (vertScore * 0.45 + ivbConflict * 0.35 + latMismatch * 0.20) * u;
+    weightedDifficulty += (vertScore * 0.70 + latMismatch * 0.30) * u;
+    weightedVertGap    += vertGap * u;
     weightSum += u;
   }
-  if (weightSum <= 0) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0 };
+  if (weightSum <= 0) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0, hrPlaneAdj: 1.0 };
   let raw = weightedDifficulty / weightSum;
   if (pitcherArmAngle != null) {
     const armDev = pitcherArmAngle - LEAGUE_ARM;
     raw = clip(raw + clip(-armDev * (attackAngle - LEAGUE_ATTACK) * 0.001, 0, 0.15), 0, 1);
   }
+  const avgVertGap = weightedVertGap / weightSum;
+  const hrPlaneAdj = clip(1.0 - (avgVertGap - 5.0) * 0.015, 0.90, 1.10);
   return {
     kAdj:       clip(1.0 + raw * 0.08, 0.94, 1.10),
     contactAdj: clip(1.0 - raw * 0.05, 0.92, 1.05),
     difficulty: raw,
+    hrPlaneAdj,
   };
 }
 
@@ -9109,9 +9100,12 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
   const tilt = bt?.swing_path_tilt ?? null;
   const spArm = pd?.arm_angle ?? null;
   if (arsenalRows && arsenalRows.length) {
-    const { kAdj, contactAdj, difficulty } = computePhysicsMatchup(arsenalRows, atk, tilt, spArm);
-    const p = difficulty <= 0.15 ? 3 : difficulty <= 0.35 ? 2 : difficulty <= 0.55 ? 1 : 0;
-    components.push({ name: 'Physics Matchup', pts: p, max: 3, difficulty, kAdj, contactAdj, atk, tilt, spArm });
+    const { kAdj, contactAdj, difficulty, hrPlaneAdj } = computePhysicsMatchup(arsenalRows, atk, tilt, spArm);
+    // Incorporate HR alignment: on-plane contact is favorable for the batter → reduce apparent difficulty
+    const hrDiff = (hrPlaneAdj - 1.0) / 0.10;
+    const adjustedDifficulty = Math.max(0, Math.min(1, difficulty - hrDiff * 0.25));
+    const p = adjustedDifficulty <= 0.15 ? 3 : adjustedDifficulty <= 0.35 ? 2 : adjustedDifficulty <= 0.55 ? 1 : 0;
+    components.push({ name: 'Physics Matchup', pts: p, max: 3, difficulty: adjustedDifficulty, kAdj, contactAdj, hrPlaneAdj, atk, tilt, spArm });
   }
 
   // 5. K Environment (2 pts) — K% stabilizes after ~150 BF
@@ -9778,7 +9772,7 @@ function renderEnvironmentBreakdown() {
   const { score: hesScore, grade: hesGrade, color: hesColor } = computeHES(_activeParkFactors, _activeWeather);
   html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0 2px;">
     <span style="font-size:10px;color:var(--muted);">Environment Total</span>
-    <span style="font-size:14px;font-weight:800;font-family:'Barlow Condensed',sans-serif;color:${hesColor};">${hesScore.toFixed(1)} / 10 &nbsp;<span style="font-size:11px;">${hesGrade}</span></span>
+    <span style="font-size:14px;font-weight:800;font-family:var(--font-num);color:${hesColor};">${hesScore.toFixed(1)} / 10 &nbsp;<span style="font-size:11px;">${hesGrade}</span></span>
   </div>`;
 
   // ══ SECTION 2: STACK GRADE ══
@@ -9814,7 +9808,7 @@ function renderEnvironmentBreakdown() {
   const final = Math.min(10, pmsContrib + hesContrib + topBonus);
   html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0 2px;">
     <span style="font-size:10px;color:var(--muted);">Stack Grade Total</span>
-    <span style="font-size:14px;font-weight:800;font-family:'Barlow Condensed',sans-serif;color:var(--text1);">${final.toFixed(1)} / 10 &nbsp;<span class="stack-grade ${sgCls}" style="font-size:12px;padding:2px 6px;">${sgGrade}</span></span>
+    <span style="font-size:14px;font-weight:800;font-family:var(--font-num);color:var(--text1);">${final.toFixed(1)} / 10 &nbsp;<span class="stack-grade ${sgCls}" style="font-size:12px;padding:2px 6px;">${sgGrade}</span></span>
   </div>`;
 
   body.innerHTML = html;
@@ -10407,7 +10401,7 @@ function drawDKHistogram(canvas, outcomes, mean, median) {
   ctx.setLineDash([]);
 
   // X-axis labels every 5 pts
-  ctx.font = '9px Barlow Condensed, sans-serif';
+  ctx.font = '9px Geist Mono, monospace';
   ctx.textAlign = 'center';
   for (let v = 0; v <= maxX; v += 5) {
     const px = padL + v * barW + barW / 2;
@@ -10419,7 +10413,7 @@ function drawDKHistogram(canvas, outcomes, mean, median) {
   }
 
   // Small inline labels at top of each marker line
-  ctx.font = 'bold 8px Barlow Condensed, sans-serif';
+  ctx.font = 'bold 8px Geist Mono, monospace';
   ctx.fillStyle = '#60a5fa';
   ctx.textAlign = medX < meanX ? 'right' : 'left';
   ctx.fillText('MED', medX - 2, padT + 8);
@@ -10680,7 +10674,7 @@ function renderPMSBreakdown(rowId) {
     const scoreColor = score>=7 ? '#4ade80' : score>=6 ? '#86efac' : score>=5 ? '#94a3b8' : score>=4 ? '#fb923c' : '#f87171';
     html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0 2px;">
       <span style="font-size:10px;color:var(--muted);">${totalPts} of ${maxPts} pts scored</span>
-      <span style="font-size:15px;font-weight:800;font-family:'Barlow Condensed',sans-serif;color:${scoreColor};">PMS ${score} <span style="font-size:11px;opacity:.7;">${grade}</span></span>
+      <span style="font-size:15px;font-weight:800;font-family:var(--font-num);color:${scoreColor};">PMS ${score} <span style="font-size:11px;opacity:.7;">${grade}</span></span>
     </div>`;
   }
 
