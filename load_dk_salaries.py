@@ -561,6 +561,7 @@ for dgid in all_dg_ids:
                 'player_id':    player_id,
                 'season':       SEASON,
                 'dk_player_id': dk_player_id,
+                'draftable_id': draftable_id,
                 'name':         name,
                 'position':     position,
                 'salary':       salary,

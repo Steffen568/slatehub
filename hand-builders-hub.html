@@ -10475,7 +10475,9 @@ function exportPortfolioDK() {
 }
 
 function exportPoolRaw() {
-  // Export filtered pool to a plain CSV (no DK entry file required)
+  // Export filtered pool in exact DK entry CSV format using draftable IDs from DB.
+  // Entry metadata columns (Entry ID / Contest Name / Contest ID / Entry Fee) are left
+  // blank — paste these rows over the player-slot columns in your downloaded DK entry file.
   const isSD = _contestMode === 'showdown';
 
   let pool = filterPoolCandidates();
@@ -10496,24 +10498,34 @@ function exportPoolRaw() {
 
   if (!pool.length) { showToast('No lineups to export — adjust filters first'); return; }
 
+  function playerCell(p, role) {
+    if (!p) return '';
+    let id;
+    if (isSD) {
+      id = role === 'cpt'
+        ? (dkDraftgroupMapCPT[normName(p.name) + '|' + (p.team||'')] || dkDraftgroupMapCPT[normName(p.name)] || p.dk_id || p.player_id)
+        : (dkDraftgroupMapFLEX[normName(p.name) + '|' + (p.team||'')] || dkDraftgroupMapFLEX[normName(p.name)] || p.dk_id || p.player_id);
+    } else {
+      id = dkIdFor(p);
+    }
+    return id ? `${p.name} (${id})` : p.name;
+  }
+
   let csvRows;
   if (isSD) {
-    csvRows = ['Lineup,Proj,Salary,CPT,UTIL1,UTIL2,UTIL3,UTIL4,UTIL5'];
-    pool.forEach((c, i) => {
-      const lu = c.lineup || {};
-      const cpt  = lu.cpt?.name  || '';
-      const flex = [1,2,3,4,5].map(n => lu[`flex${n}`]?.name || '').join(',');
-      const sal  = Math.round(c.metrics?.salary || 0);
-      csvRows.push(`${i+1},${(c.metrics?.proj||0).toFixed(1)},${sal},${cpt},${flex}`);
+    csvRows = ['Entry ID,Contest Name,Contest ID,Entry Fee,CPT,UTIL,UTIL,UTIL,UTIL,UTIL'];
+    pool.forEach(c => {
+      const lu   = c.lineup || {};
+      const cpt  = playerCell(lu.cpt, 'cpt');
+      const flex = [1,2,3,4,5].map(n => playerCell(lu[`flex${n}`], 'flex')).join(',');
+      csvRows.push(`,,,,${cpt},${flex}`);
     });
   } else {
-    csvRows = ['Lineup,Proj,Salary,Stack,P,P,C,1B,2B,3B,SS,OF,OF,OF'];
-    pool.forEach((c, i) => {
+    csvRows = ['Entry ID,Contest Name,Contest ID,Entry Fee,P,P,C,1B,2B,3B,SS,OF,OF,OF'];
+    pool.forEach(c => {
       const lu    = c.lineup || {};
-      const names = LINEUP_SLOTS.map(sl => lu[sl.key]?.name || '').join(',');
-      const sal   = Math.round(c.metrics?.salary || 0);
-      const stack = c.metrics?.stack || '';
-      csvRows.push(`${i+1},${(c.metrics?.proj||0).toFixed(1)},${sal},${stack},${names}`);
+      const slots = LINEUP_SLOTS.map(sl => playerCell(lu[sl.key], 'classic')).join(',');
+      csvRows.push(`,,,,${slots}`);
     });
   }
 
@@ -10928,7 +10940,7 @@ async function buildPoolFromCSV(csvPool, date) {
     let all = [], offset = 0;
     while (true) {
       let q = sb.from('dk_salaries')
-        .select('player_id,name,salary,position,team,dk_slate,dg_id')
+        .select('player_id,name,salary,position,team,dk_slate,dg_id,draftable_id')
         .eq('contest_type', 'classic');
       if (_activeSlate && _activeSlate !== 'all') q = q.eq('dk_slate', _activeSlate);
       const { data } = await q.range(offset, offset + 999);
@@ -10984,7 +10996,7 @@ async function buildPoolFromCSV(csvPool, date) {
       if (!csvTeams.has(s.team)) return;  // only teams already in the CSV pool
       const key = normName(s.name);
       if (!csvPool[key] && !csvPool[(s.name||'').toLowerCase()]) {
-        csvPool[key] = { name: s.name, draftableId: '', position: s.position || '', salary: s.salary || 0, team: s.team || '' };
+        csvPool[key] = { name: s.name, draftableId: s.draftable_id ? String(s.draftable_id) : '', position: s.position || '', salary: s.salary || 0, team: s.team || '' };
         csvPool[(s.name||'').toLowerCase()] = csvPool[key];
         backfilled++;
       }
