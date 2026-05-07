@@ -1801,17 +1801,17 @@ html{font-size:14px;}
         <div class="kpi"><div class="kpi-lbl">Runs Factor</div><div class="kpi-val" id="pfRuns" style="color:var(--muted);">--</div></div>
       </div>
     </div>
+    <div class="field-wrap"><img id="stadiumImg" /><canvas id="fieldCanvas"></canvas></div>
+    <div style="text-align:center;margin-top:6px;font-size:10px;color:var(--muted);line-height:1.4;">Stadium diagrams courtesy of <a href="http://www.andrewclem.com/Baseball/index.html" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">Andrew G. Clem</a></div>
+  </div>
+
+  <div class="pw-right">
     <div class="pf-tabs" id="pfTabs">
       <button class="pf-tab active" data-tab="blend" onclick="switchPfTab(this,'blend')">3-Yr Blend</button>
       <button class="pf-tab" data-tab="2026" onclick="switchPfTab(this,'2026')">2026</button>
       <button class="pf-tab" data-tab="2025" onclick="switchPfTab(this,'2025')">2025</button>
       <button class="pf-tab" data-tab="2024" onclick="switchPfTab(this,'2024')">2024</button>
     </div>
-    <div class="field-wrap"><img id="stadiumImg" /><canvas id="fieldCanvas"></canvas></div>
-    <div style="text-align:center;margin-top:6px;font-size:10px;color:var(--muted);line-height:1.4;">Stadium diagrams courtesy of <a href="http://www.andrewclem.com/Baseball/index.html" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">Andrew G. Clem</a></div>
-  </div>
-
-  <div class="pw-right">
     <div class="pw-lbl">Park Factor Splits</div>
     <div>
       <div class="pf-legend">
@@ -6026,7 +6026,7 @@ async function loadParkFactors(venueId, venueName, homeTeam, homeTeamId) {
   let fetchVenueId = venueId;
 
   if (venueId) {
-    const { data } = await sb.from('park_factors').select('*').eq('venue_id', venueId).execute();
+    const { data } = await sb.from('park_factors').select('*').eq('venue_id', venueId);
     allRows = data || [];
   }
 
@@ -6034,7 +6034,7 @@ async function loadParkFactors(venueId, venueName, homeTeam, homeTeamId) {
   if (!allRows.length && homeTeamId) {
     const fallbackVenueId = TEAM_HOME_VENUE[homeTeamId];
     if (fallbackVenueId && fallbackVenueId !== venueId) {
-      const { data } = await sb.from('park_factors').select('*').eq('venue_id', fallbackVenueId).execute();
+      const { data } = await sb.from('park_factors').select('*').eq('venue_id', fallbackVenueId);
       allRows = data || [];
       if (allRows.length) { isFallback = true; fetchVenueId = fallbackVenueId; }
     }
