@@ -3576,18 +3576,18 @@ html{font-size:14px;}
     <div class="sp-workload">
       <div class="wl-item">
         <div class="wl-lbl">Games Started</div>
-        <div class="wl-val" id="sp-gs">14</div>
-        <div class="wl-sub">2025 season</div>
+        <div class="wl-val" id="sp-gs">--</div>
+        <div class="wl-sub" id="sp-gs-sub">season</div>
       </div>
       <div class="wl-item">
         <div class="wl-lbl">Innings Pitched</div>
-        <div class="wl-val" id="sp-ip">78.2</div>
-        <div class="wl-sub">5.6 IP/start avg</div>
+        <div class="wl-val" id="sp-ip">--</div>
+        <div class="wl-sub" id="sp-ip-sub">IP/start avg</div>
       </div>
       <div class="wl-item">
         <div class="wl-lbl">Last Outing</div>
-        <div class="wl-val" id="sp-last">6.0</div>
-        <div class="wl-sub">Mar 28 · 2 ER · 87 P</div>
+        <div class="wl-val" id="sp-last">--</div>
+        <div class="wl-sub" id="sp-last-sub">—</div>
       </div>
     </div>
 
@@ -6524,6 +6524,7 @@ function clearSPPanel() {
   const todayBadge = document.getElementById('splitsTodayBadge');
   if (todayBadge) { todayBadge.style.display = 'none'; todayBadge.textContent = ''; }
 
+  ['sp-gs-sub','sp-ip-sub','sp-last-sub'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '—'; });
   [
     'sp-gs','sp-ip','sp-last','sp-era','sp-fip','sp-xfip','sp-siera',
     'sc-stuff','sc-xfip','sc-kpct','sc-bbpct','sc-kbb','sc-swstr','sc-csw',
@@ -6925,6 +6926,44 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
   updatePitcherStat('sc-stuff', pd.stuff_plus ? Math.round(pd.stuff_plus)        : '--');
   updatePitcherStat('sp-ip',    pd.ip         ? parseFloat(pd.ip).toFixed(1)     : '--');
   updatePitcherStat('sp-gs',    pd.gs != null ? Math.round(pd.gs) : '--');
+
+  // ── Workload sub-labels
+  const _season = pd.season || new Date().getFullYear();
+  const _ipSub  = document.getElementById('sp-ip-sub');
+  const _gsSub  = document.getElementById('sp-gs-sub');
+  if (_gsSub) _gsSub.textContent = `${_season} season`;
+  if (_ipSub && pd.ip && pd.gs > 0) {
+    _ipSub.textContent = `${(parseFloat(pd.ip) / pd.gs).toFixed(1)} IP/start avg`;
+  } else if (_ipSub) {
+    _ipSub.textContent = `${_season} season`;
+  }
+
+  // ── Last outing — fetch most recent starter appearance
+  (async () => {
+    const lastSub = document.getElementById('sp-last-sub');
+    const lastVal = document.getElementById('sp-last');
+    try {
+      const { data: apps } = await sb.from('bullpen_appearances')
+        .select('game_date,innings,earned_runs,pitches')
+        .eq('player_id', spId)
+        .eq('is_starter', true)
+        .order('game_date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (apps) {
+        if (lastVal) lastVal.textContent = apps.innings ? parseFloat(apps.innings).toFixed(1) : '--';
+        const dt  = apps.game_date ? new Date(apps.game_date + 'T12:00:00').toLocaleDateString('en-US', { month:'short', day:'numeric' }) : '—';
+        const er  = apps.earned_runs != null ? `${apps.earned_runs} ER` : '';
+        const pc  = apps.pitches     != null ? `${apps.pitches}P`       : '';
+        if (lastSub) lastSub.textContent = [dt, er, pc].filter(Boolean).join(' · ');
+      } else {
+        if (lastVal) lastVal.textContent = '--';
+        if (lastSub) lastSub.textContent = 'no data';
+      }
+    } catch(e) {
+      if (lastVal) lastVal.textContent = '--';
+    }
+  })();
 
   // ── Plus trio hero cards (Stuff+ / Location+ / Pitching+)
   const _plusVal = (id, v) => {
