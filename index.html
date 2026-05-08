@@ -8372,11 +8372,11 @@ async function loadBatterStats(playerIds, lineupPlayers, year = '2026') {
 
   const splitsQuery = is3yr
     ? sb.from('batter_splits')
-        .select('player_id, split, avg, obp, slg, ops, woba, wrc_plus, k_pct, bb_pct, iso, babip, pa, season')
+        .select('player_id, split, avg, obp, slg, ops, xwoba, woba, wrc_plus, k_pct, bb_pct, iso, babip, pa, season')
         .in('player_id', playerIds)
         .in('season', [2023, 2024, 2025])
     : sb.from('batter_splits')
-        .select('player_id, split, avg, obp, slg, ops, woba, wrc_plus, k_pct, bb_pct, iso, babip, pa')
+        .select('player_id, split, avg, obp, slg, ops, xwoba, woba, wrc_plus, k_pct, bb_pct, iso, babip, pa')
         .in('player_id', playerIds)
         .eq('season', season);
 
@@ -9315,9 +9315,8 @@ function renderAllPMS() {
     const batHand = rowEl.querySelector('.br-hand')?.textContent?.trim() || null;
     // L7 xwOBA from game logs
     const form = cachedFormData[pid] || cachedFormData[String(pid)] || null;
-    const l7xwoba = form?.games?.length >= 3
-      ? form.games.slice(0, 7).reduce((s, g) => s + (g.xwoba || 0), 0) / Math.min(form.games.length, 7)
-      : null;
+    const _l7games = form?.games?.length >= 3 ? form.games.slice(0, 7).filter(g => g.xwoba != null) : [];
+    const l7xwoba = _l7games.length >= 2 ? _l7games.reduce((s, g) => s + parseFloat(g.xwoba), 0) / _l7games.length : null;
 
     const { score, grade, cls, pSplit } = computePMS(pd, _activeSplits, bt, bStats, batHand, bSplits, null, l7xwoba, _activeArsenal, getOpposingSpHand());
 
