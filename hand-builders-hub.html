@@ -12543,7 +12543,13 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
   }
 
   // 1. Platoon Vulnerability (3 pts)
-  const pxw = parseFloat(pSplit?.xwoba) || parseFloat(pSplit?.woba) || null;
+  // Use max(xwoba, woba*0.92) — woba gets a slight discount vs xwoba to account for
+  // BABIP luck, but real outcomes still count when xwoba is stale or missing coverage.
+  const _pxw  = parseFloat(pSplit?.xwoba) || null;
+  const _pwob = parseFloat(pSplit?.woba)  || null;
+  const pxw = (_pxw != null || _pwob != null)
+    ? Math.max(_pxw ?? 0, _pwob != null ? _pwob * 0.92 : 0) || null
+    : null;
   if (pxw != null) {
     const p = pxw >= 0.350 ? 3 : pxw >= 0.320 ? 2 : pxw >= 0.300 ? 1 : 0;
     components.push({ name: 'Platoon Vulnerability', pts: p, max: 3, pxw });
