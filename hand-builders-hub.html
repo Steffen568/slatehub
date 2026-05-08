@@ -4391,12 +4391,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-ui);font-feat
     </select>
     <span style="color:var(--border);margin:0 4px;">|</span>
     <label style="color:var(--muted);font-weight:700;">Portfolio:</label>
-    <select class="opto-input" id="portfolio-contest-type" style="width:68px;" title="Contest type controls diversity aggressiveness">
-      <option value="large">Large GPP</option>
-      <option value="mid">Mid GPP</option>
-      <option value="small">Small Field</option>
-      <option value="single">Single Entry</option>
-    </select>
     <input type="number" id="portfolio-k" value="20" min="1" max="500" style="width:44px;" class="opto-input" title="Number of entries to optimize for">
     <button onclick="applyPortfolioRank()" style="font-weight:700;cursor:pointer;padding:2px 8px;background:rgba(167,139,250,.2);color:#a78bfa;border:1px solid rgba(167,139,250,.4);border-radius:4px;font-size:10px;" title="Rank lineups for portfolio selection — maximize E[max score across K lineups]">Portfolio Rank</button>
     <span id="gpp-slider-wrap" style="display:inline-flex;align-items:center;gap:3px;margin-left:4px;">
@@ -5144,11 +5138,11 @@ async function loadPlayerPool(date, slate) {
   const slateFilter = (slate && slate !== 'all') ? q => q.eq('dk_slate', slate) : q => q;
   const [pitcherSalRes, hitterSalRaw, dkPosRaw, rosterPosRaw] = await Promise.all([
     // All SP/RP on this slate
-    slateFilter(sb.from('dk_salaries').select('player_id,name,salary,position,team,dk_slate,dg_id'))
+    slateFilter(sb.from('dk_salaries').select('player_id,name,salary,position,team,dk_slate,dg_id,draftable_id'))
       .limit(3000),
     // Hitters via lineup player_ids — current slate only (prevents stale team tags from old entries)
     starterPids.length
-      ? batchIn('dk_salaries','player_id,name,salary,position,team,dk_slate','player_id',starterPids,
+      ? batchIn('dk_salaries','player_id,name,salary,position,team,dk_slate,draftable_id','player_id',starterPids,
           slate && slate !== 'all' ? q => q.eq('dk_slate', slate) : undefined)
       : Promise.resolve([]),
     // DK position + salary from ANY slate — positional fallback + salary fallback for players
@@ -5700,6 +5694,7 @@ async function loadPlayerPool(date, slate) {
 
     allHitters.push({
       player_id:        s.player_id,
+      draftable_id:     s.draftable_id ? String(s.draftable_id) : null,
       name:             s.name || bs?.full_name || lu?.player_name || '—',
       positions,
       salary:           s.salary || 0,
@@ -5763,6 +5758,7 @@ async function loadPlayerPool(date, slate) {
         allPitchers.push({
           player_id:        proj?.player_id || r.player_id,
           dk_id:            r.player_id,
+          draftable_id:     r.draftable_id ? String(r.draftable_id) : null,
           name:             r.name || '—',
           positions:        ['SP'],
           salary:           r.salary || 0,
@@ -5812,6 +5808,7 @@ async function loadPlayerPool(date, slate) {
       allPitchers.push({
         player_id:        proj.player_id,
         dk_id:            salRow?.player_id || null,
+        draftable_id:     salRow?.draftable_id ? String(salRow.draftable_id) : null,
         name,
         positions:        ['SP'],
         salary:           salRow?.salary || null,
@@ -6083,7 +6080,7 @@ function setPositionFilter(pos) {
 // Player objects are slimmed to essential fields only before persisting.
 
 const _SLIM_KEYS = ['player_id','name','salary','positions','team','team_id','game_pk',
-  'proj_dk_pts','proj_floor','proj_ceiling','proj_ownership','dk_id','batting_order',
+  'proj_dk_pts','proj_floor','proj_ceiling','proj_ownership','dk_id','draftable_id','batting_order',
   'in_lineup','lineup_confirmed','_dkDraftableId','_dkCellName'];
 
 function _slimPlayer(p) {
@@ -10515,8 +10512,8 @@ function exportPoolRaw() {
     let id;
     if (isSD) {
       id = role === 'cpt'
-        ? (dkDraftgroupMapCPT[normName(p.name) + '|' + (p.team||'')] || dkDraftgroupMapCPT[normName(p.name)] || p.dk_id || p.player_id)
-        : (dkDraftgroupMapFLEX[normName(p.name) + '|' + (p.team||'')] || dkDraftgroupMapFLEX[normName(p.name)] || p.dk_id || p.player_id);
+        ? (dkDraftgroupMapCPT[normName(p.name) + '|' + (p.team||'')] || dkDraftgroupMapCPT[normName(p.name)] || p.draftable_id || p.dk_id || p.player_id)
+        : (dkDraftgroupMapFLEX[normName(p.name) + '|' + (p.team||'')] || dkDraftgroupMapFLEX[normName(p.name)] || p.draftable_id || p.dk_id || p.player_id);
     } else {
       id = dkIdFor(p);
     }
@@ -10633,16 +10630,21 @@ function setPoolSort(col) {
 }
 
 // ── Portfolio Optimizer ───────────────────────────────────────────────────────
-// Selects K lineups that maximize E[max(V_1,...,V_K)] using a greedy algorithm.
-// Does NOT require ownership projections. Diversity is enforced via variance-
-// weighted player overlap: sharing boom-or-bust players couples lineup fates.
-//
-// Contest type controls coverage reward strength:
-//   large GPP (100k+): maximize coverage of all boom candidates  single: pure gpp_score
-const COVERAGE_ALPHA = { large: 0.30, mid: 0.20, small: 0.10, single: 0.00 };
+// Selects K lineups that maximize E[max(V_1,...,V_K)] via scenario simulation.
+// Same algorithm as optimize_portfolio.py (sim mode). Backed by Hunter/Vielma/Zaman (2016).
+// Diversity is automatic: correlated lineups win in the same scenarios → near-zero
+// marginal improvement → not picked. No alpha tuning parameter needed.
+const _PORT_N_SIMS       = 1000;  // scenarios per slate
+const _PORT_TEAM_VAR     = 0.30;  // 30% of player variance shared within team
+const _PORT_TEAM_SD_FACT = 0.15;  // team boost sd = 15% of avg slate projection
+
+function _boxMuller() {
+  let u; do { u = Math.random(); } while (u === 0);
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * Math.random());
+}
 
 function _lineupCorr(pidsA, pidsB, playerQuality) {
-  // Quality-weighted Jaccard overlap for diversity reporting. Returns 0 (nothing shared) -> 1 (identical).
+  // Quality-weighted Jaccard overlap for diversity reporting. Returns 0→1.
   let sharedQ = 0, totalQ = 0;
   const union = new Set([...pidsA, ...pidsB]);
   union.forEach(pid => {
@@ -10653,60 +10655,100 @@ function _lineupCorr(pidsA, pidsB, playerQuality) {
   return totalQ > 0 ? sharedQ / totalQ : 0;
 }
 
-function _marginalGain(candidate, selected, playerQuality, alpha) {
-  // Coverage-based gain: gpp_score + alpha x quality of new players not yet in portfolio.
-  const ev = candidate.dbGppScore || candidate.metrics?.proj || 0;
-  if (!selected.length || alpha === 0) return ev;
-  const alreadyCovered = new Set(selected.flatMap(lu => [...(lu._portfolioPids || [])]));
-  let newQuality = 0;
-  candidate._portfolioPids.forEach(pid => {
-    if (!alreadyCovered.has(pid)) newQuality += playerQuality[pid] || 0;
-  });
-  // Normalize: 10 players x avg quality ~18 pts = 180 per full lineup
-  return ev + alpha * (newQuality / 180.0);
-}
-
-function applyPortfolioRank() {
-  const k    = Math.max(1, +(document.getElementById('portfolio-k')?.value || 20));
-  const ctype = document.getElementById('portfolio-contest-type')?.value || 'large';
-  const alpha = COVERAGE_ALPHA[ctype] ?? 0.30;
-
-  // Work on the currently filtered pool (respects team excludes, proj filters, etc.)
-  const pool = filterPoolCandidates();
-  if (!pool.length) { showToast('No lineups in pool — adjust filters first'); return; }
-
-  // Build player quality map: proj_ceiling x context_mult (game-adjusted boom potential)
-  const playerQuality = {};
+function _simulatePortfolioScenarios(pool, nSims) {
+  // Collect per-player sim params from lineup objects
+  const playerData = {};
   pool.forEach(c => {
     Object.values(c.lineup).forEach(p => {
-      if (p?.player_id) {
-        const q = (p.proj_ceiling || 0) * (p.context_mult || 1.0);
-        playerQuality[p.player_id] = Math.max(q, 0.01);
-      }
+      if (!p?.player_id || playerData[p.player_id]) return;
+      const proj   = p.proj_dk_pts  || 0;
+      const ceil_  = p.proj_ceiling || 0;
+      const floor_ = p.proj_floor   || 0;
+      const sd = (ceil_ > floor_) ? (ceil_ - floor_) / 4 : proj * 0.45;
+      playerData[p.player_id] = { proj, sd: Math.max(sd, 0.01), team: p.team || '', ceil: ceil_ };
     });
   });
 
-  // Pre-compute pid sets for each lineup
+  // Avg proj for team boost scaling
+  const projs = Object.values(playerData).map(d => d.proj).filter(v => v > 0);
+  const avgProj = projs.length ? projs.reduce((a, b) => a + b, 0) / projs.length : 8.0;
+
+  // Team-level boosts — one draw per team per scenario (shared variance)
+  const teams = [...new Set(Object.values(playerData).map(d => d.team).filter(Boolean))];
+  const teamSd = _PORT_TEAM_SD_FACT * avgProj;
+  const teamBoosts = {};
+  teams.forEach(t => {
+    const arr = new Float32Array(nSims);
+    for (let s = 0; s < nSims; s++) arr[s] = _boxMuller() * teamSd;
+    teamBoosts[t] = arr;
+  });
+
+  // Per-player scenario scores: individual variance + team boost
+  const indFactor = Math.sqrt(Math.max(1 - _PORT_TEAM_VAR, 0));
+  const playerScores = {};
+  for (const [pid, d] of Object.entries(playerData)) {
+    const indSd = d.sd * indFactor;
+    const boost = teamBoosts[d.team] || new Float32Array(nSims);
+    const arr = new Float32Array(nSims);
+    for (let s = 0; s < nSims; s++) arr[s] = Math.max(0, d.proj + _boxMuller() * indSd + boost[s]);
+    playerScores[pid] = arr;
+  }
+
+  // Lineup scenario scores = sum of player scenario scores
+  pool.forEach(c => {
+    const arr = new Float32Array(nSims);
+    Object.values(c.lineup).forEach(p => {
+      const ps = p?.player_id && playerScores[p.player_id];
+      if (!ps) return;
+      for (let s = 0; s < nSims; s++) arr[s] += ps[s];
+    });
+    c._simScores = arr;
+  });
+
+  // Player quality map (ceil) for diversity reporting
+  const playerQuality = {};
+  for (const [pid, d] of Object.entries(playerData)) playerQuality[+pid] = Math.max(d.ceil, 0.01);
+  return playerQuality;
+}
+
+function applyPortfolioRank() {
+  const k = Math.max(1, +(document.getElementById('portfolio-k')?.value || 20));
+
+  const pool = filterPoolCandidates();
+  if (!pool.length) { showToast('No lineups in pool — adjust filters first'); return; }
+
+  const t0   = Date.now();
+  const nSims = _PORT_N_SIMS;
+
+  // Generate 1000 game-outcome scenarios and score every lineup
+  const playerQuality = _simulatePortfolioScenarios(pool, nSims);
+
+  // Pre-compute pid sets for diversity reporting
   pool.forEach(c => {
     c._portfolioPids = new Set(Object.values(c.lineup).map(p => p?.player_id).filter(Boolean));
   });
 
-  // Greedy coverage-maximizing selection
-  const selected = [];
-  const remaining = [...pool];
-  const t0 = Date.now();
+  // Greedy Max-E[max(V_1,...,V_K)] selection
+  const selected   = [];
+  const remaining  = pool.map((_, i) => i);        // indices into pool
+  const currentMax = new Float32Array(nSims);       // best score per scenario so far
 
   while (selected.length < k && remaining.length) {
-    let bestIdx = 0, bestGain = -Infinity;
+    let bestLocal = 0, bestEI = -1;
     for (let i = 0; i < remaining.length; i++) {
-      const gain = _marginalGain(remaining[i], selected, playerQuality, alpha);
-      if (gain > bestGain) { bestGain = gain; bestIdx = i; }
+      const scores = pool[remaining[i]]._simScores;
+      let ei = 0;
+      for (let s = 0; s < nSims; s++) { const imp = scores[s] - currentMax[s]; if (imp > 0) ei += imp; }
+      ei /= nSims;
+      if (ei > bestEI) { bestEI = ei; bestLocal = i; }
     }
-    const chosen = remaining.splice(bestIdx, 1)[0];
+    const bestGlobal = remaining.splice(bestLocal, 1)[0];
+    const chosen = pool[bestGlobal];
     chosen._portfolioRank = selected.length + 1;
-    // Store avg overlap with previously selected lineups for display
+    const bs = chosen._simScores;
+    for (let s = 0; s < nSims; s++) { if (bs[s] > currentMax[s]) currentMax[s] = bs[s]; }
     if (selected.length > 0) {
-      const avgOv = selected.reduce((s, x) => s + _lineupCorr(chosen._portfolioPids, x._portfolioPids, playerQuality), 0) / selected.length;
+      const avgOv = selected.reduce((sum, x) => sum + _lineupCorr(chosen._portfolioPids, x._portfolioPids, playerQuality), 0) / selected.length;
       chosen._portfolioOverlap = Math.round(avgOv * 100);
     } else {
       chosen._portfolioOverlap = 0;
@@ -10718,10 +10760,7 @@ function applyPortfolioRank() {
   const selectedSet = new Set(selected);
   pool.forEach(c => { c.portfolioScore = 0; });
   selected.forEach(c => { c.portfolioScore = k - c._portfolioRank + 1; });
-  // Also apply to unfiltered candidates that are in the selected set
-  _poolCandidates.forEach(c => {
-    if (!selectedSet.has(c)) c.portfolioScore = 0;
-  });
+  _poolCandidates.forEach(c => { if (!selectedSet.has(c)) c.portfolioScore = 0; });
 
   // Diversity stats
   let overlapSum = 0, overlapCount = 0, overlapMax = 0;
@@ -10734,9 +10773,8 @@ function applyPortfolioRank() {
   }
   const avgOverlap = overlapCount ? (overlapSum / overlapCount * 100).toFixed(1) : '0';
   const maxOverlap = (overlapMax * 100).toFixed(1);
-  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+  const elapsed    = ((Date.now() - t0) / 1000).toFixed(1);
 
-  // Switch to portfolio sort and re-render
   _poolSortCol = 'portfolioScore';
   _poolSortDir = 1;
   const sortSel = document.getElementById('pool-sort-select');
@@ -10744,7 +10782,7 @@ function applyPortfolioRank() {
   renderPoolCards();
   renderPoolExposure();
 
-  showToast(`Portfolio: ${selected.length} lineups ranked | avg overlap ${avgOverlap}% | max ${maxOverlap}% | ${elapsed}s`);
+  showToast(`Portfolio sim: ${selected.length} lineups | avg overlap ${avgOverlap}% | max ${maxOverlap}% | ${elapsed}s`);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -12388,7 +12426,7 @@ function fillDKTemplate(event) {
 
 // ── CSV EXPORT ───────────────────────────────────────────────────────────────
 function dkIdFor(p) {
-  // Priority: team-qualified name > name-only > dk_id > player_id (last resort)
+  // Priority: uploaded DK entries CSV > draftable_id from DB > dk_id > player_id (last resort)
   // Team-qualified key prevents same-name collisions (e.g. two Max Muncys on different teams)
   if (!p) return null;
   const nn = normName(p.name);
@@ -12397,6 +12435,7 @@ function dkIdFor(p) {
   return (team && dkDraftgroupMap[nn + '|' + team])
       || dkDraftgroupMap[nn]
       || dkDraftgroupMap[ln]
+      || p.draftable_id
       || p.dk_id
       || p.player_id;
 }
