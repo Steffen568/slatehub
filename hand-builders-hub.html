@@ -12585,15 +12585,16 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
   }
 
   // 4. Physics Matchup (3 pts) — pitch geometry vs swing plane
-  //    Replaces: simple VAA gap + xwOBA arsenal — uses IVB/HB/VAA/arm_angle vs attack_angle/tilt
+  const atk = bt?.attack_angle ?? null;
+  const tilt = bt?.swing_path_tilt ?? null;
+  const spArm = pd?.arm_angle ?? null;
   if (arsenalRows && arsenalRows.length) {
-    const atk  = bt?.attack_angle ?? null;
-    const tilt = bt?.swing_path_tilt ?? null;
-    const armAngles = arsenalRows.map(r => parseFloat(r.arm_angle)).filter(v => !isNaN(v));
-    const spArm = armAngles.length ? armAngles.reduce((s,v)=>s+v,0)/armAngles.length : null;
-    const { kAdj, contactAdj, difficulty } = computePhysicsMatchup(arsenalRows, atk, tilt, spArm);
-    const p = difficulty <= 0.15 ? 3 : difficulty <= 0.35 ? 2 : difficulty <= 0.55 ? 1 : 0;
-    components.push({ name: 'Physics Matchup', pts: p, max: 3, difficulty, kAdj, contactAdj });
+    const { kAdj, contactAdj, difficulty, hrPlaneAdj } = computePhysicsMatchup(arsenalRows, atk, tilt, spArm);
+    // Incorporate HR alignment: on-plane contact is favorable for the batter → reduce apparent difficulty
+    const hrDiff = (hrPlaneAdj - 1.0) / 0.10;
+    const adjustedDifficulty = Math.max(0, Math.min(1, difficulty - hrDiff * 0.25));
+    const p = adjustedDifficulty <= 0.15 ? 3 : adjustedDifficulty <= 0.35 ? 2 : adjustedDifficulty <= 0.55 ? 1 : 0;
+    components.push({ name: 'Physics Matchup', pts: p, max: 3, difficulty: adjustedDifficulty, kAdj, contactAdj, hrPlaneAdj, atk, tilt, spArm });
   }
 
   // 5. K Environment (2 pts)
