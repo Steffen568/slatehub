@@ -5366,12 +5366,16 @@ async function loadPlayerPool(date, slate) {
   const batTrackMap = {};
   btRaw.forEach(r => { if (!batTrackMap[r.player_id]) batTrackMap[r.player_id] = r; });
 
-  // 4d. Rosters — bat hand (L/R/S) for PMS split resolution
+  // 4d. Rosters — bat hand (L/R/S) + throws (L/R) for PMS split resolution
   const rosterRaw = allPlayerIds.length
-    ? await batchIn('rosters','player_id,bats','player_id',allPlayerIds)
+    ? await batchIn('rosters','player_id,bats,throws','player_id',allPlayerIds)
     : [];
-  const batsMap = {};
-  rosterRaw.forEach(r => { if (r.bats) batsMap[r.player_id] = r.bats; });
+  const batsMap   = {};
+  const throwsMap = {};
+  rosterRaw.forEach(r => {
+    if (r.bats)   batsMap[r.player_id]   = r.bats;
+    if (r.throws) throwsMap[r.player_id] = r.throws;
+  });
 
   // 4e. Batter game logs (L7 form) — recent xwOBA for PMS tiebreaker
   const glRaw = allPlayerIds.length
@@ -5684,8 +5688,9 @@ async function loadPlayerPool(date, slate) {
     const l7form    = l7Map[s.player_id] ?? null;
 
     const oppArsenal = oppSpId ? (arsenalMap[oppSpId] || null) : null;
+    const pitHand    = oppSpId ? (throwsMap[oppSpId] || null) : null;
     const pmsResult = oppPd
-      ? computePMS(oppPd, oppSplits, bt, bs, batHand, bSplit, oppVaa, l7form, oppArsenal)
+      ? computePMS(oppPd, oppSplits, bt, bs, batHand, bSplit, oppVaa, l7form, oppArsenal, pitHand)
       : null;
 
     allHitters.push({
@@ -12514,7 +12519,7 @@ function computePhysicsMatchup(arsenalRows, attackAngle, swingPathTilt, pitcherA
   };
 }
 
-function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, arsenalRows) {
+function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, arsenalRows, pitHand) {
   const components = [];
   const toD = v => (v == null ? null : v > 1 ? v / 100 : v);
   const toR = v => (v == null ? null : v > 1 ? v : v * 100);
@@ -12531,11 +12536,10 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
     pSplit = pSplits?.[batHand];
   }
 
-  // Resolve batter split
+  // Resolve batter split — indexed by PITCHER hand, not batter hand
   let bSplit = null;
-  if (bSplits) {
-    const pitHand = effectiveHand === 'L' ? 'L' : effectiveHand === 'R' ? 'R' : null;
-    if (pitHand) bSplit = bSplits[pitHand];
+  if (bSplits && pitHand) {
+    bSplit = bSplits[pitHand];
   }
 
   // 1. Platoon Vulnerability (3 pts)
