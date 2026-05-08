@@ -12479,48 +12479,43 @@ function computeSpGrade(pd) {
 //   Platoon splits (3) > Stuff/Barrel/Plane/K/Contact (2 each) > Discipline/Form (1 each)
 // Total max = 15. Score = (earned / available) * 10.
 function computePhysicsMatchup(arsenalRows, attackAngle, swingPathTilt, pitcherArmAngle) {
-  const LEAGUE_ATTACK = 12.0;
-  const LEAGUE_ARM    = 45.0;
+  const LEAGUE_ATTACK = 12.0, LEAGUE_ARM = 45.0;
   const clip = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-  if (!arsenalRows || !arsenalRows.length) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0 };
+  const safe = (v, fb) => (v != null && isFinite(v)) ? v : (fb ?? 0);
+  if (!arsenalRows || !arsenalRows.length) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0, hrPlaneAdj: 1.0 };
   if (attackAngle == null) attackAngle = LEAGUE_ATTACK;
   if (swingPathTilt == null) swingPathTilt = 0.0;
-
-  const totalUsage = arsenalRows.reduce((s, r) => s + (parseFloat(r.usage_pct) || 0), 0);
-  if (totalUsage <= 0) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0 };
-
-  let weightedDiff = 0, weightSum = 0;
-  arsenalRows.forEach(r => {
-    const u = (parseFloat(r.usage_pct) || 0) / totalUsage;
-    if (u <= 0) return;
-    const rh  = parseFloat(r.release_height) || 6.0;
-    const ext = parseFloat(r.extension) || 6.5;
-    const dist = Math.max(60.5 - ext, 1.0);
-    const vaa  = -Math.atan((rh - 2.5) / dist) * (180 / Math.PI);
-    const ivb  = parseFloat(r.ivb) || 8.0;
-    const hb   = parseFloat(r.hb) || 0.0;
-
-    const vertGap   = Math.abs(attackAngle - Math.abs(vaa));
+  const totalUsage = arsenalRows.reduce((s, r) => s + safe(r.usage_pct, 0), 0);
+  if (totalUsage <= 0) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0, hrPlaneAdj: 1.0 };
+  const IVB_BASELINE = 8.0, IVB_VAA_COEFF = 0.088;
+  let weightedDifficulty = 0, weightedVertGap = 0, weightSum = 0;
+  for (const r of arsenalRows) {
+    const u = safe(r.usage_pct, 0) / totalUsage;
+    if (u <= 0) continue;
+    const rh = safe(r.release_height, 6.0), ext = safe(r.extension, 6.5);
+    const vaa = -(Math.atan((rh - 2.5) / Math.max(60.5 - ext, 1.0)) * 180 / Math.PI);
+    const ivb = safe(r.ivb, IVB_BASELINE), hb = safe(r.hb, 0.0);
+    const effectiveVaa = vaa + (ivb - IVB_BASELINE) * IVB_VAA_COEFF;
+    const vertGap = Math.abs(attackAngle - Math.abs(effectiveVaa));
     const vertScore = clip(vertGap / 15.0, 0, 1);
-    const ivbConflict = clip((ivb - 8.0) * (attackAngle - LEAGUE_ATTACK) * 0.004, 0, 1);
     const latMismatch = clip((Math.abs(hb) - Math.abs(swingPathTilt) * 1.5) / 18.0, 0, 1);
-
-    weightedDiff += (vertScore * 0.45 + ivbConflict * 0.35 + latMismatch * 0.20) * u;
+    weightedDifficulty += (vertScore * 0.70 + latMismatch * 0.30) * u;
+    weightedVertGap    += vertGap * u;
     weightSum += u;
-  });
-
-  if (weightSum <= 0) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0 };
-  let raw = weightedDiff / weightSum;
-
-  if (pitcherArmAngle != null) {
-    const armConflict = clip(-(pitcherArmAngle - LEAGUE_ARM) * (attackAngle - LEAGUE_ATTACK) * 0.001, 0, 0.15);
-    raw = clip(raw + armConflict, 0, 1);
   }
-
+  if (weightSum <= 0) return { kAdj: 1.0, contactAdj: 1.0, difficulty: 0, hrPlaneAdj: 1.0 };
+  let raw = weightedDifficulty / weightSum;
+  if (pitcherArmAngle != null) {
+    const armDev = pitcherArmAngle - LEAGUE_ARM;
+    raw = clip(raw + clip(-armDev * (attackAngle - LEAGUE_ATTACK) * 0.001, 0, 0.15), 0, 1);
+  }
+  const avgVertGap = weightedVertGap / weightSum;
+  const hrPlaneAdj = clip(1.0 - (avgVertGap - 5.0) * 0.015, 0.90, 1.10);
   return {
     kAdj:       clip(1.0 + raw * 0.08, 0.94, 1.10),
     contactAdj: clip(1.0 - raw * 0.05, 0.92, 1.05),
-    difficulty: raw,  // 0-1 scale
+    difficulty: raw,
+    hrPlaneAdj,
   };
 }
 
