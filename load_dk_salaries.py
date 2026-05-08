@@ -285,6 +285,7 @@ PLAYER_ID_REMAP = {
     875573  : 664731,   # P.J. Higgins (auto-fixed)
     873680  : 669221,   # Sean Murphy (auto-fixed)
     911914  : 823550,   # Sung-Mun Song (auto-fixed)
+    1389620 : 683679,   # Jesus Rodriguez (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids

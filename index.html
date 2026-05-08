@@ -7556,7 +7556,6 @@ async function loadBullpen(teamId, gameDate) {
     .eq('team_id', teamId)
     .gte('game_date', fromStr)
     .lte('game_date', gameDate)
-    .eq('is_starter', false)
     .order('game_date', { ascending: false });
 
   if (error || !apps) {

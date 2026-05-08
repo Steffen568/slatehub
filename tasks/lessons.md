@@ -735,3 +735,7 @@ requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leader
 ### Auto-fixed DK ID mismatches: Carlos Cortes, Sung-Mun Song
 **What happened:** Pipeline auto-fixed 2 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Carlos Cortes, Jesus Rodriguez, Tyler O'Neill
+**What happened:** Pipeline auto-fixed 3 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
