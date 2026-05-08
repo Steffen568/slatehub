@@ -10506,6 +10506,8 @@ function exportPoolRaw() {
   else               pool.sort((a,b) => (getVal(b) - getVal(a)) * dir || b.metrics.proj - a.metrics.proj);
   pool = filterByExposure(pool);
 
+  pool = pool.slice(0, _poolCardsShown);
+
   if (!pool.length) { showToast('No lineups to export — adjust filters first'); return; }
 
   function playerCell(p, role) {
