@@ -10638,6 +10638,9 @@ const _PORT_N_SIMS       = 1000;  // scenarios per slate
 const _PORT_TEAM_VAR     = 0.50;  // 50% of player variance shared within team (higher = stacks stay together)
 const _PORT_TEAM_SD_FACT = 0.18;  // team boost sd = 18% of avg slate projection
 const _PORT_PREFILTER_N  = 80;    // run sim only on top-N candidates by gppScore (forces diversity within high-ceiling space)
+const _PORT_GAME_VAR     = 0.20;  // game env factor SD as fraction of avg player proj (high = high-scoring game, bad for pitcher)
+const _PORT_GAME_PITCH_W = 0.60;  // how much game env hurts the pitcher (sign flipped — high scoring = bad for SP)
+const _PORT_GAME_HIT_W   = 0.25;  // how much game env helps each hitter in a high-scoring game
 
 function _boxMuller() {
   let u; do { u = Math.random(); } while (u === 0);
@@ -10657,7 +10660,10 @@ function _lineupCorr(pidsA, pidsB, playerQuality) {
 }
 
 function _simulatePortfolioScenarios(pool, nSims) {
-  // Collect per-player sim params from lineup objects
+  // Collect per-player sim params from lineup objects.
+  // own: ownership fraction 0→1 for field-relative scoring.
+  // game_pk: for pitcher/hitter negative correlation within each game.
+  // is_sp: pitchers score inversely to game environment (high-scoring game = bad for SP).
   const playerData = {};
   pool.forEach(c => {
     Object.values(c.lineup).forEach(p => {
@@ -10665,19 +10671,22 @@ function _simulatePortfolioScenarios(pool, nSims) {
       const proj   = p.proj_dk_pts  || 0;
       const ceil_  = p.proj_ceiling || 0;
       const floor_ = p.proj_floor   || 0;
-      // Cap SD at 28% of projection — prevents wide floor/ceiling spreads from creating
-      // pure noise that drives extreme diversification away from high-projection lineups
       const rawSd = (ceil_ > floor_) ? (ceil_ - floor_) / 4 : proj * 0.45;
       const sd = Math.min(rawSd, proj * 0.25);
-      playerData[p.player_id] = { proj, sd: Math.max(sd, 0.01), team: p.team || '', ceil: ceil_ };
+      playerData[p.player_id] = {
+        proj, sd: Math.max(sd, 0.01), team: p.team || '', ceil: ceil_,
+        own:    Math.min((p.proj_ownership || 0) / 100, 0.99),  // ownership fraction, capped at 99%
+        game_pk: p.game_pk || null,
+        is_sp:  !!(p.positions || '').includes('SP'),
+      };
     });
   });
 
-  // Avg proj for team boost scaling
+  // Avg proj for scaling boost SDs
   const projs = Object.values(playerData).map(d => d.proj).filter(v => v > 0);
   const avgProj = projs.length ? projs.reduce((a, b) => a + b, 0) / projs.length : 8.0;
 
-  // Team-level boosts — one draw per team per scenario (shared variance)
+  // Team-level boosts — one draw per team per scenario (shared variance within team)
   const teams = [...new Set(Object.values(playerData).map(d => d.team).filter(Boolean))];
   const teamSd = _PORT_TEAM_SD_FACT * avgProj;
   const teamBoosts = {};
@@ -10687,24 +10696,51 @@ function _simulatePortfolioScenarios(pool, nSims) {
     teamBoosts[t] = arr;
   });
 
-  // Per-player scenario scores: individual variance + team boost
+  // Game-level environment boosts — one draw per game per scenario.
+  // Positive = high-scoring game (hitters boom, pitcher struggles).
+  // Negative = pitcher's duel (pitcher dominates, hitters underperform).
+  const games = [...new Set(Object.values(playerData).map(d => d.game_pk).filter(Boolean))];
+  const gameSd = _PORT_GAME_VAR * avgProj;
+  const gameBoosts = {};
+  games.forEach(g => {
+    const arr = new Float32Array(nSims);
+    for (let s = 0; s < nSims; s++) arr[s] = _boxMuller() * gameSd;
+    gameBoosts[g] = arr;
+  });
+
+  // Per-player raw scenario scores: individual variance + team boost + game environment.
+  // Pitchers are negatively correlated with game environment (high scoring = bad for SP).
   const indFactor = Math.sqrt(Math.max(1 - _PORT_TEAM_VAR, 0));
   const playerScores = {};
   for (const [pid, d] of Object.entries(playerData)) {
     const indSd = d.sd * indFactor;
-    const boost = teamBoosts[d.team] || new Float32Array(nSims);
+    const tBoost = teamBoosts[d.team] || new Float32Array(nSims);
+    const gBoost = d.game_pk ? (gameBoosts[d.game_pk] || new Float32Array(nSims)) : new Float32Array(nSims);
     const arr = new Float32Array(nSims);
-    for (let s = 0; s < nSims; s++) arr[s] = Math.max(0, d.proj + _boxMuller() * indSd + boost[s]);
+    for (let s = 0; s < nSims; s++) {
+      const raw = d.proj + _boxMuller() * indSd + tBoost[s];
+      // Pitcher: game env hurts (high scoring = bad). Hitter: game env helps.
+      const gameAdj = d.is_sp
+        ? -gBoost[s] * _PORT_GAME_PITCH_W
+        :  gBoost[s] * _PORT_GAME_HIT_W;
+      arr[s] = Math.max(0, raw + gameAdj);
+    }
     playerScores[pid] = arr;
   }
 
-  // Lineup scenario scores = sum of player scenario scores
+  // Ownership-adjusted lineup edge scores.
+  // Each player's contribution is weighted by (1 - ownership_fraction).
+  // Burns at 69% owned contributes 31% of his raw score as lineup "edge" over field.
+  // A 5%-owned contrarian contributes 95%. This is the correct GPP objective:
+  // maximizing lineup_score - field_average_score, which simplifies to this weighting.
   pool.forEach(c => {
     const arr = new Float32Array(nSims);
     Object.values(c.lineup).forEach(p => {
       const ps = p?.player_id && playerScores[p.player_id];
       if (!ps) return;
-      for (let s = 0; s < nSims; s++) arr[s] += ps[s];
+      const d = playerData[p.player_id];
+      const ownDiscount = d ? (1 - d.own) : 1.0;
+      for (let s = 0; s < nSims; s++) arr[s] += ps[s] * ownDiscount;
     });
     c._simScores = arr;
   });
