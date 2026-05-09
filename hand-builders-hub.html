@@ -10635,8 +10635,9 @@ function setPoolSort(col) {
 // Diversity is automatic: correlated lineups win in the same scenarios → near-zero
 // marginal improvement → not picked. No alpha tuning parameter needed.
 const _PORT_N_SIMS       = 1000;  // scenarios per slate
-const _PORT_TEAM_VAR     = 0.30;  // 30% of player variance shared within team
-const _PORT_TEAM_SD_FACT = 0.15;  // team boost sd = 15% of avg slate projection
+const _PORT_TEAM_VAR     = 0.50;  // 50% of player variance shared within team (higher = stacks stay together)
+const _PORT_TEAM_SD_FACT = 0.18;  // team boost sd = 18% of avg slate projection
+const _PORT_PREFILTER_N  = 80;    // run sim only on top-N candidates by gppScore (forces diversity within high-ceiling space)
 
 function _boxMuller() {
   let u; do { u = Math.random(); } while (u === 0);
@@ -10664,7 +10665,10 @@ function _simulatePortfolioScenarios(pool, nSims) {
       const proj   = p.proj_dk_pts  || 0;
       const ceil_  = p.proj_ceiling || 0;
       const floor_ = p.proj_floor   || 0;
-      const sd = (ceil_ > floor_) ? (ceil_ - floor_) / 4 : proj * 0.45;
+      // Cap SD at 28% of projection — prevents wide floor/ceiling spreads from creating
+      // pure noise that drives extreme diversification away from high-projection lineups
+      const rawSd = (ceil_ > floor_) ? (ceil_ - floor_) / 4 : proj * 0.45;
+      const sd = Math.min(rawSd, proj * 0.25);
       playerData[p.player_id] = { proj, sd: Math.max(sd, 0.01), team: p.team || '', ceil: ceil_ };
     });
   });
@@ -10714,8 +10718,16 @@ function _simulatePortfolioScenarios(pool, nSims) {
 function applyPortfolioRank() {
   const k = Math.max(1, +(document.getElementById('portfolio-k')?.value || 20));
 
-  const pool = filterPoolCandidates();
-  if (!pool.length) { showToast('No lineups in pool — adjust filters first'); return; }
+  const fullPool = filterPoolCandidates();
+  if (!fullPool.length) { showToast('No lineups in pool — adjust filters first'); return; }
+
+  // Pre-filter to top-N by gppScore so sim diversity happens within the high-ceiling tier,
+  // not across the entire pool. Without this, E[max] picks one lineup per edge-case scenario.
+  const preFilterN = Math.max(k * 3, _PORT_PREFILTER_N);
+  const pool = fullPool
+    .slice()
+    .sort((a, b) => (b.gppScore || b.blendedScore || b.dbGppScore || b.metrics?.proj || 0) - (a.gppScore || a.blendedScore || a.dbGppScore || a.metrics?.proj || 0))
+    .slice(0, preFilterN);
 
   const t0   = Date.now();
   const nSims = _PORT_N_SIMS;
