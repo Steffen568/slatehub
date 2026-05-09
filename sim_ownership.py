@@ -51,14 +51,17 @@ CONFIRMED_BOOST = 1.5
 UNCONFIRMED_PENALTY = 0.4
 
 # Softmax temperature per position — lower = sharper (more concentrated at top players)
-# 2026-05-04: SP 0.38→0.30 — even at 0.38, Schlittler/Gilbert projected 37-42% on large slate.
-# Target: no SP above 35% on a 12+ game slate. Lower temp concentrates more at true #1 SP.
-SOFTMAX_TEMP = {'SP': 0.30, 'C': 0.50, '1B': 0.50, '2B': 0.50,
+# SP at 0.40: produces ~55-65% for clear #1 on early slate, ~35-45% for #1 on main slate.
+# Prior history: 0.38→0.30 on 2026-05-04 to compensate for a 35% hard cap. Cap raised to 70%
+# so temperature now controls distribution naturally without needing cap suppression.
+SOFTMAX_TEMP = {'SP': 0.40, 'C': 0.50, '1B': 0.50, '2B': 0.50,
                 '3B': 0.50, 'SS': 0.50, 'OF': 0.50}
 
-# Per-position ownership cap (large slate)
-# SP reduced from 55% to 35% — a single pitcher exceeding 35% on large slates is dangerous exposure.
-POSITION_MAX_OWN = {'SP': 35.0, 'C': 30.0, '1B': 30.0, '2B': 30.0,
+# Per-position ownership ceiling — a true physical cap, not a GPP strategy cap.
+# SP raised from 35% to 70%: no real pitcher is ever 70%+ owned, so this never binds
+# in practice. The 35% cap was artificially compressing ownership and causing redistribution
+# to cluster all pitchers near the cap value. Exposure limits belong in the optimizer, not here.
+POSITION_MAX_OWN = {'SP': 70.0, 'C': 30.0, '1B': 30.0, '2B': 30.0,
                     '3B': 30.0, 'SS': 30.0, 'OF': 25.0}
 
 
