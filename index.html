@@ -614,25 +614,25 @@ html{font-size:14px;}
 .form-bars-wrap{background:var(--s2);border-radius:6px;padding:12px 14px;margin-bottom:8px;}
 .form-bars-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--muted);margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;}
 .form-bars-title span{font-size:9px;font-weight:400;color:var(--border2);font-style:italic;}
-.bars-chart{display:flex;gap:3px;align-items:stretch;height:80px;}
-.bar-game{flex:1;display:flex;flex-direction:column;align-items:center;min-width:0;}
-.bar-pts-label{font-size:8px;font-family:var(--font-num);color:var(--muted);height:13px;line-height:13px;text-align:center;}
-.bar-fill-wrap{flex:1;width:100%;display:flex;align-items:flex-end;}
-.bar-fill{width:100%;border-radius:2px 2px 0 0;min-height:2px;}
-.bar-game:hover .bar-fill{opacity:0.75;}
-.bar-labels{display:flex;gap:3px;margin-top:3px;}
-.bar-lbl{flex:1;font-size:7px;color:var(--muted);text-align:center;overflow:hidden;white-space:nowrap;}
-.bar-legend{display:flex;gap:12px;margin-top:8px;flex-wrap:wrap;}
-.bl-item{display:flex;align-items:center;gap:4px;font-size:9px;color:var(--muted);}
-.bl-swatch{width:10px;height:7px;border-radius:1px;}
+.form-line-chart{width:100%;display:block;overflow:visible;}
 .form-game-log{margin-top:10px;}
-.fgl-row{display:flex;gap:0;align-items:center;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:10px;}
+.fgl-row{display:flex;gap:0;align-items:center;padding:3px 2px;border-radius:3px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:10px;}
 .fgl-row:last-child{border-bottom:none;}
-.fgl-date{color:var(--muted);font-size:9px;width:38px;flex-shrink:0;}
-.fgl-stat{flex:1;font-family:var(--font-num);text-align:center;font-size:10px;}
-.fgl-header .fgl-stat,.fgl-header .fgl-date{color:var(--muted);font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;}
+.fgl-row.fgl-big{background:rgba(74,222,128,0.07);}
+.fgl-row.fgl-ok{background:rgba(251,191,36,0.05);}
+.fgl-date{color:var(--muted);font-size:9px;width:34px;flex-shrink:0;}
+.fgl-opp{font-size:8px;color:var(--text2);width:68px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.fgl-stat{flex:1;font-family:var(--font-num);text-align:center;font-size:10px;border-radius:2px;padding:1px 0;}
+.fgl-header .fgl-stat,.fgl-header .fgl-date,.fgl-header .fgl-opp{color:var(--muted);font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;background:none;}
 .fgl-pts{font-weight:700;}
 .fgl-pts.hi{color:var(--hi);}.fgl-pts.mid{color:var(--mid);}.fgl-pts.lo{color:#f97316;}
+.fgl-hr{background:rgba(74,222,128,0.20);color:var(--hi);font-weight:700;}
+.fgl-2b{background:rgba(251,191,36,0.18);color:#fbbf24;}
+.fgl-3b{background:rgba(251,191,36,0.28);color:#f59e0b;font-weight:700;}
+.fgl-sb{background:rgba(167,139,250,0.18);color:#a78bfa;}
+.fgl-bb{background:rgba(96,165,250,0.15);color:#60a5fa;}
+.fgl-k{color:rgba(248,113,113,0.7);}
+.fgl-0h{color:rgba(184,202,216,0.35);}
 .form-note{border-radius:6px;padding:9px 12px;font-size:10px;color:var(--text2);line-height:1.6;border-left:3px solid;}
 .form-note b{display:block;margin-bottom:2px;font-size:11px;}
 
@@ -4483,7 +4483,6 @@ function renderFormBars(rowId, numGames) {
   const rollEl = document.getElementById(rowId + '-roll');
   if (!barsEl) return;
 
-  // Remove static placeholder content on first call
   pane?.querySelectorAll('.form-mini-charts, .form-note').forEach(el => el.remove());
 
   const rowEl = document.getElementById(rowId);
@@ -4501,44 +4500,109 @@ function renderFormBars(rowId, numGames) {
   const games = entry.games.slice(0, numGames);
   if (wlEl) wlEl.textContent = `last ${games.length} games`;
 
-  // DK contact pts: 1Bx3 + 2Bx5 + 3Bx8 + HRx10 + BBx2
+  // DK contact pts: 1Bx3 + 2Bx5 + 3Bx8 + HRx10 + BBx2 + SBx5
   function dkPts(g) {
-    return (g.singles ?? 0)*3 + (g.doubles ?? 0)*5 + (g.triples ?? 0)*8 + (g.hr ?? 0)*10 + (g.bb ?? 0)*2;
+    return (g.singles ?? 0)*3 + (g.doubles ?? 0)*5 + (g.triples ?? 0)*8
+         + (g.hr ?? 0)*10 + (g.bb ?? 0)*2 + (g.sb ?? 0)*5;
   }
 
-  const pts = games.map(dkPts);
-  const maxPts = Math.max(...pts, 8);
+  const pts     = games.map(dkPts);
+  const maxPts  = Math.max(...pts, 10);
+  const N       = games.length;
 
-  // Bar chart
-  let barsHTML = '', lblsHTML = '';
-  for (let i = 0; i < games.length; i++) {
-    const g = games[i];
-    const p = pts[i];
-    const barH = Math.max(p > 0 ? 4 : 1, Math.round((p / maxPts) * 100));
-    const barColor = p >= 15 ? '#4ade80' : p >= 10 ? '#86efac' : p >= 5 ? '#fbbf24' : p >= 2 ? '#f97316' : 'rgba(80,80,80,0.4)';
+  // ── SVG line chart ────────────────────────────────────────────────────────
+  // Display order: oldest game on left, newest on right (reverse array)
+  const reversed = [...games].reverse();
+  const revPts   = [...pts].reverse();
+
+  const svgH  = 90;   // total SVG height
+  const padT  = 14;   // top pad (for labels)
+  const padB  = 20;   // bottom pad (for date labels)
+  const padL  = 6;
+  const padR  = 6;
+  const plotH = svgH - padT - padB;
+
+  function xPos(i, total, w) {
+    if (total <= 1) return w / 2;
+    return padL + (i / (total - 1)) * (w - padL - padR);
+  }
+  function yPos(p) {
+    return padT + plotH - Math.max(0, Math.min(1, p / maxPts)) * plotH;
+  }
+
+  // Build chart — width set by JS after mount, use viewBox with preserveAspectRatio
+  // We'll build the SVG inline with a fixed viewBox width of 500 and let CSS scale it
+  const VW = 500;
+  const dotR = N <= 10 ? 4 : N <= 20 ? 3 : 2.5;
+
+  let polyPts = '';
+  let areaPath = '';
+  let dotsHTML = '';
+  let dateLabels = '';
+  let ptLabels   = '';
+
+  for (let i = 0; i < N; i++) {
+    const x = xPos(i, N, VW);
+    const y = yPos(revPts[i]);
+    polyPts += `${x.toFixed(1)},${y.toFixed(1)} `;
+
+    if (i === 0) areaPath += `M${x.toFixed(1)},${(padT + plotH).toFixed(1)} L${x.toFixed(1)},${y.toFixed(1)} `;
+    else areaPath += `L${x.toFixed(1)},${y.toFixed(1)} `;
+    if (i === N - 1) areaPath += `L${x.toFixed(1)},${(padT + plotH).toFixed(1)} Z`;
+
+    const p = revPts[i];
+    const g = reversed[i];
+    const dotColor = p >= 15 ? '#4ade80' : p >= 10 ? '#86efac' : p >= 5 ? '#fbbf24' : p >= 2 ? '#f97316' : '#475569';
     const h = (g.singles ?? 0) + (g.doubles ?? 0) + (g.triples ?? 0) + (g.hr ?? 0);
-    const dateLabel = g.date ? g.date.slice(5).replace('-', '/') : `G${games.length - i}`;
-    const tooltip = `${g.date || ''} | ${p} DK pts | ${h}-${g.ab ?? 0}, ${g.hr ?? 0} HR, ${g.bb ?? 0} BB, ${g.k ?? 0} K`;
-    barsHTML += `<div class="bar-game" title="${tooltip}">
-      <div class="bar-pts-label">${p > 0 ? p : ''}</div>
-      <div class="bar-fill-wrap"><div class="bar-fill" style="height:${barH}%;background:${barColor};"></div></div>
-    </div>`;
-    lblsHTML += `<div class="bar-lbl">${dateLabel}</div>`;
-  }
-  barsEl.innerHTML = barsHTML;
-  if (lblEl) lblEl.innerHTML = lblsHTML;
+    const ttip = `${g.date || ''} | ${p} pts | ${h}-${g.ab ?? 0}${g.hr ? ', ' + g.hr + 'HR' : ''}${g.sb ? ', ' + g.sb + 'SB' : ''}`;
+    dotsHTML += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${dotR}" fill="${dotColor}" stroke="rgba(0,0,0,0.4)" stroke-width="0.5"><title>${ttip}</title></circle>`;
 
-  // Legend
+    // Point label (pts) above dots for high-value games
+    if (p >= 10 || N <= 10) {
+      ptLabels += `<text x="${x.toFixed(1)}" y="${(y - dotR - 2).toFixed(1)}" text-anchor="middle" font-size="7" fill="${dotColor}" font-family="var(--font-num)">${p}</text>`;
+    }
+
+    // Date labels below — every game if N<=14, every other if N<=21, every 3rd if more
+    const showDate = N <= 14 || (N <= 21 && i % 2 === 0) || (i % 3 === 0);
+    if (showDate) {
+      const dateLabel = g.date ? g.date.slice(5).replace('-', '/') : `G${i+1}`;
+      dateLabels += `<text x="${x.toFixed(1)}" y="${(svgH - 4).toFixed(1)}" text-anchor="middle" font-size="7" fill="rgba(184,202,216,0.5)" font-family="var(--font-ui)">${dateLabel}</text>`;
+    }
+  }
+
+  // Reference line at league-avg contact pts (~6)
+  const refY = yPos(6).toFixed(1);
+  const svgMarkup = `<svg class="form-line-chart" viewBox="0 0 ${VW} ${svgH}" preserveAspectRatio="xMidYMid meet" style="height:${svgH}px;">
+    <defs>
+      <linearGradient id="${rowId}-grad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#4ade80" stop-opacity="0.25"/>
+        <stop offset="100%" stop-color="#4ade80" stop-opacity="0.02"/>
+      </linearGradient>
+    </defs>
+    <line x1="${padL}" y1="${refY}" x2="${VW - padR}" y2="${refY}" stroke="rgba(255,255,255,0.08)" stroke-width="1" stroke-dasharray="3,3"/>
+    <text x="${padL + 2}" y="${parseFloat(refY) - 2}" font-size="7" fill="rgba(255,255,255,0.2)" font-family="var(--font-ui)">avg</text>
+    <path d="${areaPath}" fill="url(#${rowId}-grad)"/>
+    <polyline points="${polyPts.trim()}" fill="none" stroke="#4ade80" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+    ${dotsHTML}${ptLabels}${dateLabels}
+  </svg>`;
+
+  // Update the bars-wrap area with SVG (reuse barsEl container)
+  barsEl.style.height = '';
+  barsEl.style.display = 'block';
+  barsEl.innerHTML = svgMarkup;
+  if (lblEl) lblEl.innerHTML = '';  // dates now inline in SVG
+
+  // Update legend
   const legendEl = barsEl.closest('.form-bars-wrap')?.querySelector('.bar-legend');
   if (legendEl) {
     legendEl.innerHTML = `
-      <div class="bl-item"><div class="bl-swatch" style="background:#4ade80;"></div>≥15 pts</div>
-      <div class="bl-item"><div class="bl-swatch" style="background:#fbbf24;"></div>5–9 pts</div>
-      <div class="bl-item"><div class="bl-swatch" style="background:#f97316;"></div>2–4 pts</div>
-      <div style="margin-left:auto;font-size:9px;color:var(--muted);">1B\xd73 &middot; 2B\xd75 &middot; 3B\xd78 &middot; HR\xd710 &middot; BB\xd72</div>`;
+      <div class="bl-item"><div class="bl-swatch" style="background:#4ade80;border-radius:50%;"></div>≥15</div>
+      <div class="bl-item"><div class="bl-swatch" style="background:#fbbf24;border-radius:50%;"></div>5–9</div>
+      <div class="bl-item"><div class="bl-swatch" style="background:#f97316;border-radius:50%;"></div>2–4</div>
+      <div style="margin-left:auto;font-size:9px;color:var(--muted);">1B\xd73 · 2B\xd75 · 3B\xd78 · HR\xd710 · BB\xd72 · SB\xd75</div>`;
   }
 
-  // Per-game stat log table
+  // ── Per-game stat log ─────────────────────────────────────────────────────
   let logEl = document.getElementById(rowId + '-game-log');
   if (!logEl) {
     logEl = document.createElement('div');
@@ -4546,35 +4610,52 @@ function renderFormBars(rowId, numGames) {
     logEl.className = 'form-game-log';
     barsEl.closest('.form-bars-wrap').after(logEl);
   }
+
   let logHTML = `<div class="fgl-row fgl-header">
     <span class="fgl-date">Date</span>
+    <span class="fgl-opp">Opponent</span>
     <span class="fgl-stat">AB</span><span class="fgl-stat">H</span>
-    <span class="fgl-stat">1B</span><span class="fgl-stat">2B</span><span class="fgl-stat">3B</span>
-    <span class="fgl-stat">HR</span><span class="fgl-stat">BB</span><span class="fgl-stat">K</span>
+    <span class="fgl-stat">2B</span><span class="fgl-stat">3B</span>
+    <span class="fgl-stat">HR</span><span class="fgl-stat">BB</span>
+    <span class="fgl-stat">SB</span><span class="fgl-stat">K</span>
     <span class="fgl-stat">Pts</span>
   </div>`;
+
+  // Show newest game first in the log table
   for (let i = 0; i < games.length; i++) {
-    const g = games[i];
+    const g = games[i];  // already newest-first
     const p = pts[i];
     const h = (g.singles ?? 0) + (g.doubles ?? 0) + (g.triples ?? 0) + (g.hr ?? 0);
-    const ptsCls = p >= 12 ? 'hi' : p >= 7 ? 'mid' : p < 2 ? 'lo' : '';
+    const ptsCls   = p >= 12 ? 'hi' : p >= 7 ? 'mid' : p < 2 ? 'lo' : '';
+    const rowCls   = p >= 12 ? 'fgl-big' : p >= 7 ? 'fgl-ok' : '';
     const dateLabel = g.date ? g.date.slice(5).replace('-', '/') : `G${i+1}`;
-    logHTML += `<div class="fgl-row">
+    const oppLabel  = g.opp ? `vs ${g.opp}${g.sp ? ' · ' + g.sp : ''}` : '—';
+
+    const hrCls  = (g.hr  ?? 0) > 0 ? 'fgl-hr'  : '';
+    const dblCls = (g.doubles ?? 0) > 0 ? 'fgl-2b' : '';
+    const triCls = (g.triples ?? 0) > 0 ? 'fgl-3b' : '';
+    const sbCls  = (g.sb  ?? 0) > 0 ? 'fgl-sb'  : '';
+    const bbCls  = (g.bb  ?? 0) > 0 ? 'fgl-bb'  : '';
+    const kCls   = (g.k   ?? 0) > 0 ? 'fgl-k'   : '';
+    const hCls   = h === 0 ? 'fgl-0h' : '';
+
+    logHTML += `<div class="fgl-row ${rowCls}">
       <span class="fgl-date">${dateLabel}</span>
+      <span class="fgl-opp" title="${oppLabel}">${oppLabel}</span>
       <span class="fgl-stat">${g.ab ?? '—'}</span>
-      <span class="fgl-stat">${h}</span>
-      <span class="fgl-stat">${g.singles ?? '—'}</span>
-      <span class="fgl-stat">${g.doubles ?? '—'}</span>
-      <span class="fgl-stat">${g.triples ?? '—'}</span>
-      <span class="fgl-stat">${g.hr ?? '—'}</span>
-      <span class="fgl-stat">${g.bb ?? '—'}</span>
-      <span class="fgl-stat">${g.k ?? '—'}</span>
+      <span class="fgl-stat ${hCls}">${h}</span>
+      <span class="fgl-stat ${dblCls}">${g.doubles ?? '—'}</span>
+      <span class="fgl-stat ${triCls}">${g.triples ?? '—'}</span>
+      <span class="fgl-stat ${hrCls}">${g.hr ?? '—'}</span>
+      <span class="fgl-stat ${bbCls}">${g.bb ?? '—'}</span>
+      <span class="fgl-stat ${sbCls}">${g.sb ?? '—'}</span>
+      <span class="fgl-stat ${kCls}">${g.k ?? '—'}</span>
       <span class="fgl-stat fgl-pts ${ptsCls}">${p}</span>
     </div>`;
   }
   logEl.innerHTML = logHTML;
 
-  // Roll chips
+  // ── Roll chips ─────────────────────────────────────────────────────────────
   const avg = key => {
     const vals = games.map(g => g[key]).filter(v => v != null && !isNaN(v));
     return vals.length ? vals.reduce((a,b) => a+b, 0) / vals.length : null;
@@ -4592,26 +4673,27 @@ function renderFormBars(rowId, numGames) {
   const olderAvg  = olderEv.length  ? olderEv.reduce((a,b)=>a+b,0)/olderEv.length   : null;
   let evDir = '→';
   if (recentAvg != null && olderAvg != null) {
-    if (recentAvg > olderAvg + 1.5) evDir = '↑';
+    if (recentAvg > olderAvg + 1.5)      evDir = '↑';
     else if (recentAvg < olderAvg - 1.5) evDir = '↓';
   }
 
   if (rollEl) {
-    const wobaFmt   = avgWoba   != null ? avgWoba.toFixed(3)                 : '--';
+    const ptsFmt    = avgDkPts  != null ? avgDkPts.toFixed(1)                : '--';
     const xwobaFmt  = avgXwoba  != null ? avgXwoba.toFixed(3)                : '--';
     const evFmt     = avgEv     != null ? avgEv.toFixed(1)                   : '--';
     const barrelFmt = avgBarrel != null ? (avgBarrel * 100).toFixed(1) + '%' : '--';
-    const ptsFmt    = avgDkPts  != null ? avgDkPts.toFixed(1)                : '--';
+    const wobaFmt   = avgWoba   != null ? avgWoba.toFixed(3)                 : '--';
 
     const ptsClass   = avgDkPts  >= 10 ? 'hot' : avgDkPts  >= 6  ? 'mid' : '';
     const xwobaClass = avgXwoba  >= 0.370 ? 'hot' : avgXwoba >= 0.310 ? 'mid' : '';
     const evClass    = evDir === '↑' ? 'hot' : evDir === '↓' ? '' : 'mid';
+    const wobaClass  = avgWoba   >= 0.370 ? 'hot' : avgWoba  >= 0.310 ? 'mid' : '';
 
     rollEl.innerHTML = `
-      <div class="form-roll ${ptsClass}"><div class="fr-lbl">Avg DK Pts</div><div class="fr-val ${ptsClass === 'hot' ? 'hi' : ptsClass === 'mid' ? 'mid' : ''}">${ptsFmt}</div><div class="fr-sub">contact only</div></div>
+      <div class="form-roll ${ptsClass}"><div class="fr-lbl">Avg DK Pts</div><div class="fr-val ${ptsClass === 'hot' ? 'hi' : ptsClass === 'mid' ? 'mid' : ''}">${ptsFmt}</div><div class="fr-sub">contact + SB</div></div>
       <div class="form-roll ${xwobaClass}"><div class="fr-lbl">xwOBA</div><div class="fr-val ${xwobaClass === 'hot' ? 'hi' : xwobaClass === 'mid' ? 'mid' : ''}">${xwobaFmt}</div><div class="fr-sub">contact quality</div></div>
       <div class="form-roll ${evClass}"><div class="fr-lbl">Avg EV</div><div class="fr-val ${evClass === 'hot' ? 'hi' : evClass === 'mid' ? 'mid' : ''}">${evFmt}</div><div class="fr-sub">mph ${evDir}</div></div>
-      <div class="form-roll"><div class="fr-lbl">wOBA</div><div class="fr-val">${wobaFmt}</div><div class="fr-sub">result</div></div>`;
+      <div class="form-roll ${wobaClass}"><div class="fr-lbl">wOBA</div><div class="fr-val ${wobaClass === 'hot' ? 'hi' : wobaClass === 'mid' ? 'mid' : ''}">${wobaFmt}</div><div class="fr-sub">result</div></div>`;
   }
 }
 
@@ -8696,7 +8778,7 @@ async function loadBatterFormData(playerIds, lineupPlayers) {
 
   const { data, error } = await sb
     .from('batter_game_logs')
-    .select('player_id, game_date, woba, xwoba, avg_ev, barrel_pct, barrel_cnt, ab, hits, singles, doubles, triples, hr, k, bb')
+    .select('player_id, game_date, woba, xwoba, avg_ev, barrel_pct, barrel_cnt, ab, hits, singles, doubles, triples, hr, sb, k, bb, opponent_team, opposing_sp_name')
     .in('player_id', playerIds)
     .order('game_date', { ascending: false });
 
@@ -8719,8 +8801,11 @@ async function loadBatterFormData(playerIds, lineupPlayers) {
       doubles:   row.doubles,
       triples:   row.triples,
       hr:        row.hr,
+      sb:        row.sb ?? 0,
       k:         row.k,
       bb:        row.bb,
+      opp:       row.opponent_team   || null,
+      sp:        row.opposing_sp_name || null,
     });
   });
 

@@ -10,20 +10,26 @@ Usage:
 
 SQL migration (run once in Supabase):
   CREATE TABLE IF NOT EXISTS batter_game_logs (
-    player_id  INTEGER NOT NULL,
-    game_date  DATE    NOT NULL,
-    season     INTEGER,
-    pa         INTEGER,
-    ab         INTEGER,
-    hits       INTEGER,
-    hr         INTEGER,
-    k          INTEGER,
-    bb         INTEGER,
-    avg_ev     FLOAT,
-    xwoba      FLOAT,
-    barrel_cnt INTEGER,
-    barrel_pct FLOAT,
-    woba       FLOAT,
+    player_id         INTEGER NOT NULL,
+    game_date         DATE    NOT NULL,
+    season            INTEGER,
+    pa                INTEGER,
+    ab                INTEGER,
+    hits              INTEGER,
+    singles           INTEGER,
+    doubles           INTEGER,
+    triples           INTEGER,
+    hr                INTEGER,
+    sb                INTEGER,
+    k                 INTEGER,
+    bb                INTEGER,
+    avg_ev            FLOAT,
+    xwoba             FLOAT,
+    barrel_cnt        INTEGER,
+    barrel_pct        FLOAT,
+    woba              FLOAT,
+    opponent_team     VARCHAR(10),
+    opposing_sp_name  VARCHAR(100),
     PRIMARY KEY (player_id, game_date)
   );
 """
@@ -60,6 +66,7 @@ NON_AB_EVENTS  = {'walk', 'intent_walk', 'hit_by_pitch', 'sac_fly',
                   'sac_bunt', 'sac_fly_double_play', 'catcher_interf', 'batter_interference'}
 K_EVENTS       = {'strikeout', 'strikeout_double_play'}
 BB_EVENTS      = {'walk', 'intent_walk'}
+SB_EVENTS      = {'stolen_base_2b', 'stolen_base_3b', 'stolen_base_home'}
 
 # wOBA weights (2024 season)
 WOBA_W = {'bb': 0.690, 'single': 0.888, 'double': 1.267, 'triple': 1.603, 'home_run': 2.072}
@@ -105,7 +112,7 @@ if df.empty:
 # ── Filter to plate-ending events (one row per PA) ────────────────────────────
 
 pa_df = df[df['events'].notna()].copy()
-print(f"  {len(pa_df):,} plate appearances")
+print(f"  {len(pa_df):,} plate appearances (includes baserunning events)")
 
 # Ensure types
 pa_df['batter']    = pd.to_numeric(pa_df['batter'],    errors='coerce')
@@ -122,6 +129,77 @@ contact_df = contact_df[contact_df['batter'].notna()]
 # Pre-group contact by (batter, game_date) for fast lookup
 contact_grp = contact_df.groupby(['batter', 'game_date'])
 
+# ── Build stolen-base lookup: (player_id, game_date) → sb count ───────────────
+# Uses on_1b/2b/3b columns to identify the actual runner, not the batter at plate.
+
+print("Building SB lookup...")
+sb_df = df[df['events'].notna() & df['events'].str.lower().isin(SB_EVENTS)].copy()
+sb_lookup = {}
+if not sb_df.empty:
+    sb_df['game_date_str'] = sb_df['game_date'].astype(str).str[:10]
+    sb_df['event_lower']   = sb_df['events'].str.lower()
+
+    runner_ids = []
+    for _, row in sb_df.iterrows():
+        ev = row['event_lower']
+        if ev == 'stolen_base_2b':
+            runner_ids.append(row.get('on_1b'))
+        elif ev == 'stolen_base_3b':
+            runner_ids.append(row.get('on_2b'))
+        else:  # stolen_base_home
+            runner_ids.append(row.get('on_3b'))
+
+    sb_df['runner_id'] = runner_ids
+    sb_df = sb_df[sb_df['runner_id'].notna()]
+    sb_df['runner_id'] = pd.to_numeric(sb_df['runner_id'], errors='coerce')
+    sb_df = sb_df[sb_df['runner_id'].notna()]
+    sb_df['runner_id'] = sb_df['runner_id'].astype(int)
+
+    for _, row in sb_df.iterrows():
+        key = (int(row['runner_id']), row['game_date_str'])
+        sb_lookup[key] = sb_lookup.get(key, 0) + 1
+
+    print(f"  {len(sb_df)} SB events → {len(sb_lookup)} player-game entries")
+else:
+    print("  No SB events in window")
+
+# ── Build opposing-SP lookup ──────────────────────────────────────────────────
+# SP = most common pitcher in inning 1 of each game half.
+# 'Top' half = away team batting, home team pitching → home team's SP
+# 'Bot' half = home team batting, away team pitching → away team's SP
+
+print("Building SP lookup...")
+in1_cols = ['game_date', 'home_team', 'away_team', 'inning_topbot', 'pitcher']
+in1_df = df[(df['inning'] == 1) & df['pitcher'].notna()][in1_cols].copy()
+in1_df['game_date']     = in1_df['game_date'].astype(str).str[:10]
+in1_df['inning_topbot'] = in1_df['inning_topbot'].astype(str)
+in1_df['pitcher']       = pd.to_numeric(in1_df['pitcher'], errors='coerce')
+in1_df = in1_df[in1_df['pitcher'].notna()]
+
+# (gdate, home, away, topbot) → sp_id
+sp_by_half = {}
+for (gdate, home, away, topbot), grp in in1_df.groupby(['game_date', 'home_team', 'away_team', 'inning_topbot']):
+    mode = grp['pitcher'].mode()
+    if len(mode) > 0:
+        sp_by_half[(str(gdate), str(home), str(away), str(topbot))] = int(mode.iloc[0])
+
+# Batch-resolve SP MLBAM IDs → display names (e.g. "G. Cole")
+all_sp_ids = list({v for v in sp_by_half.values()})
+sp_name_map = {}
+if all_sp_ids:
+    print(f"  Resolving {len(all_sp_ids)} SP IDs to names...")
+    try:
+        rev = pb.playerid_reverse_lookup(all_sp_ids, key_type='mlbam')
+        for _, row in rev.iterrows():
+            mid   = int(row['key_mlbam'])
+            last  = str(row['name_last']).title()
+            first = str(row['name_first']).title()
+            sp_name_map[mid] = f"{first[0]}. {last}" if first else last
+    except Exception as e:
+        print(f"  WARN: SP name lookup failed: {e}")
+
+print(f"  {len(sp_by_half)} game halves indexed, {len(sp_name_map)} SP names resolved")
+
 # ── Aggregate per (batter, game_date) ─────────────────────────────────────────
 
 print("\nAggregating game logs...")
@@ -130,15 +208,19 @@ t1 = time.time()
 all_rows = []
 
 for (pid, gdate), g in pa_df.groupby(['batter', 'game_date']):
-    pid   = int(pid)
-    evs   = set(g['events'].dropna().str.lower())
+    pid = int(pid)
 
-    pa    = len(g)
-    ab    = len(g[~g['events'].str.lower().isin(NON_AB_EVENTS)])
-    hits  = len(g[g['events'].str.lower().isin(HIT_EVENTS)])
-    hr    = len(g[g['events'].str.lower() == 'home_run'])
-    k     = len(g[g['events'].str.lower().isin(K_EVENTS)])
-    bb    = len(g[g['events'].str.lower().isin(BB_EVENTS)])
+    # Filter to real plate appearances (exclude stolen base rows etc.)
+    pas = g[~g['events'].str.lower().isin(SB_EVENTS |
+            {'caught_stealing_2b', 'caught_stealing_3b', 'caught_stealing_home',
+             'pickoff_1b', 'pickoff_2b', 'pickoff_3b'})]
+
+    pa    = len(pas)
+    ab    = len(pas[~pas['events'].str.lower().isin(NON_AB_EVENTS)])
+    hits  = len(pas[pas['events'].str.lower().isin(HIT_EVENTS)])
+    hr    = len(pas[pas['events'].str.lower() == 'home_run'])
+    k     = len(pas[pas['events'].str.lower().isin(K_EVENTS)])
+    bb    = len(pas[pas['events'].str.lower().isin(BB_EVENTS)])
 
     # Contact stats from pitch-level (all pitches, not just PA-ending)
     try:
@@ -153,12 +235,12 @@ for (pid, gdate), g in pa_df.groupby(['batter', 'game_date']):
     bip        = len(cg)
     barrel_pct = clean(barrel_cnt / bip)                                if barrel_cnt and bip > 0 else None
 
-    # Approximate wOBA from counting stats
-    singles = hits - (len(g[g['events'].str.lower() == 'double']) +
-                      len(g[g['events'].str.lower() == 'triple']) + hr)
-    doubles = len(g[g['events'].str.lower() == 'double'])
-    triples = len(g[g['events'].str.lower() == 'triple'])
-    denom   = ab + bb
+    singles = hits - (len(pas[pas['events'].str.lower() == 'double']) +
+                      len(pas[pas['events'].str.lower() == 'triple']) + hr)
+    doubles = len(pas[pas['events'].str.lower() == 'double'])
+    triples = len(pas[pas['events'].str.lower() == 'triple'])
+
+    denom = ab + bb
     if denom > 0 and (singles + doubles + triples + hr + bb) > 0:
         woba = round(
             (WOBA_W['bb'] * bb + WOBA_W['single'] * singles +
@@ -166,26 +248,49 @@ for (pid, gdate), g in pa_df.groupby(['batter', 'game_date']):
              WOBA_W['home_run'] * hr) / denom, 3
         )
     else:
-        woba = xwoba  # fall back to xwoba if no counting data
+        woba = xwoba
+
+    # Stolen bases (attributed to correct runner via sb_lookup)
+    sb = sb_lookup.get((pid, gdate), 0)
+
+    # Opponent team and opposing SP
+    first_row = g.iloc[0]
+    home_team = str(first_row.get('home_team', '') or '')
+    away_team = str(first_row.get('away_team', '') or '')
+    topbot    = str(first_row.get('inning_topbot', '') or '')
+
+    if topbot == 'Top':
+        opponent_team = home_team
+    elif topbot == 'Bot':
+        opponent_team = away_team
+    else:
+        opponent_team = None
+
+    # The opposing SP pitched in the batter's own half-inning of inning 1
+    sp_id            = sp_by_half.get((gdate, home_team, away_team, topbot))
+    opposing_sp_name = sp_name_map.get(sp_id) if sp_id else None
 
     all_rows.append({
-        'player_id':  pid,
-        'game_date':  gdate,
-        'season':     SEASON,
-        'pa':         pa,
-        'ab':         ab,
-        'hits':       hits,
-        'singles':    singles,
-        'doubles':    doubles,
-        'triples':    triples,
-        'hr':         hr,
-        'k':          k,
-        'bb':         bb,
-        'avg_ev':     avg_ev,
-        'xwoba':      xwoba,
-        'barrel_cnt': barrel_cnt,
-        'barrel_pct': barrel_pct,
-        'woba':       woba,
+        'player_id':        pid,
+        'game_date':        gdate,
+        'season':           SEASON,
+        'pa':               pa,
+        'ab':               ab,
+        'hits':             hits,
+        'singles':          singles,
+        'doubles':          doubles,
+        'triples':          triples,
+        'hr':               hr,
+        'sb':               sb,
+        'k':                k,
+        'bb':               bb,
+        'avg_ev':           avg_ev,
+        'xwoba':            xwoba,
+        'barrel_cnt':       barrel_cnt,
+        'barrel_pct':       barrel_pct,
+        'woba':             woba,
+        'opponent_team':    opponent_team,
+        'opposing_sp_name': opposing_sp_name,
     })
 
 print(f"  {len(all_rows):,} player-game rows in {time.time()-t1:.1f}s")
