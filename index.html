@@ -4503,7 +4503,8 @@ function renderFormBars(rowId, numGames) {
   // DK contact pts: 1Bx3 + 2Bx5 + 3Bx8 + HRx10 + BBx2 + SBx5
   function dkPts(g) {
     return (g.singles ?? 0)*3 + (g.doubles ?? 0)*5 + (g.triples ?? 0)*8
-         + (g.hr ?? 0)*10 + (g.bb ?? 0)*2 + (g.sb ?? 0)*5;
+         + (g.hr  ?? 0)*10   + (g.r   ?? 0)*2      + (g.rbi ?? 0)*2
+         + (g.bb  ?? 0)*2    + (g.hbp ?? 0)*2      + (g.sb  ?? 0)*5;
   }
 
   const pts     = games.map(dkPts);
@@ -4616,8 +4617,9 @@ function renderFormBars(rowId, numGames) {
     <span class="fgl-opp">Opponent</span>
     <span class="fgl-stat">AB</span><span class="fgl-stat">H</span>
     <span class="fgl-stat">2B</span><span class="fgl-stat">3B</span>
-    <span class="fgl-stat">HR</span><span class="fgl-stat">BB</span>
-    <span class="fgl-stat">SB</span><span class="fgl-stat">K</span>
+    <span class="fgl-stat">HR</span><span class="fgl-stat">R</span>
+    <span class="fgl-stat">RBI</span><span class="fgl-stat">BB</span>
+    <span class="fgl-stat">HBP</span><span class="fgl-stat">SB</span><span class="fgl-stat">K</span>
     <span class="fgl-stat">Pts</span>
   </div>`;
 
@@ -4631,6 +4633,8 @@ function renderFormBars(rowId, numGames) {
     const dateLabel = g.date ? g.date.slice(5).replace('-', '/') : `G${i+1}`;
     const oppLabel  = g.opp ? `vs ${g.opp}${g.sp ? ' · ' + g.sp : ''}` : '—';
 
+    const rCls   = (g.r   ?? 0) > 0 ? 'fgl-bb'  : '';   // reuse blue for R
+    const rbiCls = (g.rbi ?? 0) > 0 ? 'fgl-bb'  : '';
     const hrCls  = (g.hr  ?? 0) > 0 ? 'fgl-hr'  : '';
     const dblCls = (g.doubles ?? 0) > 0 ? 'fgl-2b' : '';
     const triCls = (g.triples ?? 0) > 0 ? 'fgl-3b' : '';
@@ -4647,7 +4651,10 @@ function renderFormBars(rowId, numGames) {
       <span class="fgl-stat ${dblCls}">${g.doubles ?? '—'}</span>
       <span class="fgl-stat ${triCls}">${g.triples ?? '—'}</span>
       <span class="fgl-stat ${hrCls}">${g.hr ?? '—'}</span>
+      <span class="fgl-stat ${rCls}">${g.r  ?? '—'}</span>
+      <span class="fgl-stat ${rbiCls}">${g.rbi ?? '—'}</span>
       <span class="fgl-stat ${bbCls}">${g.bb ?? '—'}</span>
+      <span class="fgl-stat">${g.hbp || '—'}</span>
       <span class="fgl-stat ${sbCls}">${g.sb ?? '—'}</span>
       <span class="fgl-stat ${kCls}">${g.k ?? '—'}</span>
       <span class="fgl-stat fgl-pts ${ptsCls}">${p}</span>
@@ -8778,7 +8785,7 @@ async function loadBatterFormData(playerIds, lineupPlayers) {
 
   const { data, error } = await sb
     .from('batter_game_logs')
-    .select('player_id, game_date, woba, xwoba, avg_ev, barrel_pct, barrel_cnt, ab, hits, singles, doubles, triples, hr, sb, k, bb, opponent_team, opposing_sp_name')
+    .select('player_id, game_date, woba, xwoba, avg_ev, barrel_pct, barrel_cnt, ab, hits, singles, doubles, triples, hr, r, rbi, bb, hbp, sb, k, opponent_team, opposing_sp_name')
     .in('player_id', playerIds)
     .order('game_date', { ascending: false });
 
@@ -8801,9 +8808,12 @@ async function loadBatterFormData(playerIds, lineupPlayers) {
       doubles:   row.doubles,
       triples:   row.triples,
       hr:        row.hr,
-      sb:        row.sb ?? 0,
-      k:         row.k,
+      r:         row.r   ?? 0,
+      rbi:       row.rbi ?? 0,
       bb:        row.bb,
+      hbp:       row.hbp ?? 0,
+      sb:        row.sb  ?? 0,
+      k:         row.k,
       opp:       row.opponent_team   || null,
       sp:        row.opposing_sp_name || null,
     });

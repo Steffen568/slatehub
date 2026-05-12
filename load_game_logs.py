@@ -37,7 +37,7 @@ SQL migration (run once in Supabase):
 import sys
 sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
 
-import os, math, time
+import os, math, time, requests
 import pandas as pd
 from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
@@ -284,6 +284,9 @@ for (pid, gdate), g in pa_df.groupby(['batter', 'game_date']):
         'sb':               sb,
         'k':                k,
         'bb':               bb,
+        'r':                0,   # filled below from boxscore
+        'rbi':              0,
+        'hbp':              0,
         'avg_ev':           avg_ev,
         'xwoba':            xwoba,
         'barrel_cnt':       barrel_cnt,
@@ -296,6 +299,55 @@ for (pid, gdate), g in pa_df.groupby(['batter', 'game_date']):
 print(f"  {len(all_rows):,} player-game rows in {time.time()-t1:.1f}s")
 unique_players = len(set(r['player_id'] for r in all_rows))
 print(f"  {unique_players:,} unique players")
+
+# ── Enrich with R / RBI / HBP from MLB Stats API boxscores ────────────────────
+# Statcast is pitch-level only — runs, RBI, HBP require box score data.
+
+MLB_API = "https://statsapi.mlb.com/api/v1"
+
+print("\nFetching boxscores for R / RBI / HBP...")
+game_rows = supabase.table('games').select('game_pk,game_date') \
+    .gte('game_date', str(start_dt)).lte('game_date', str(end_dt)) \
+    .execute().data or []
+
+# Build (player_id, game_date) → {r, rbi, hbp} lookup
+box_lookup = {}
+for gr in game_rows:
+    gpk   = gr['game_pk']
+    gdate = gr['game_date']
+    try:
+        resp = requests.get(f"{MLB_API}/game/{gpk}/boxscore", timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"  WARN boxscore {gpk}: {e}")
+        continue
+
+    for side in ('home', 'away'):
+        team_data = data.get('teams', {}).get(side, {})
+        for pid_int in team_data.get('batters', []):
+            pinfo   = team_data.get('players', {}).get(f'ID{pid_int}', {})
+            batting = pinfo.get('stats', {}).get('batting', {})
+            if not batting or batting.get('plateAppearances', 0) == 0:
+                continue
+            box_lookup[(int(pid_int), gdate)] = {
+                'r':   batting.get('runs',        0),
+                'rbi': batting.get('rbi',         0),
+                'hbp': batting.get('hitByPitch',  0),
+            }
+
+# Merge into all_rows
+matched = 0
+for row in all_rows:
+    key = (row['player_id'], row['game_date'])
+    box = box_lookup.get(key)
+    if box:
+        row['r']   = box['r']
+        row['rbi'] = box['rbi']
+        row['hbp'] = box['hbp']
+        matched += 1
+
+print(f"  {len(game_rows)} games fetched, {matched}/{len(all_rows)} player-game rows enriched")
 
 # ── Upsert ─────────────────────────────────────────────────────────────────────
 
