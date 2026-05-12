@@ -5777,7 +5777,7 @@ function classifyWindEffect(windDeg, cfBearing, windSpeed) {
   // diff near 0 = blowing out to CF, diff near 180/-180 = blowing in from CF
 
   const absDiff = Math.abs(diff);
-  const spdNote = windSpeed >= 15 ? 'Strong' : windSpeed >= 9 ? 'Moderate' : 'Light';
+  const spdNote = windSpeed >= 13 ? 'Strong' : windSpeed >= 8 ? 'Moderate' : 'Light';
 
   if (absDiff <= 45) {
     // Blowing out
@@ -5826,7 +5826,7 @@ async function loadWeather(gamePk, venueName, away, home, time, venueId) {
   _wxLoadingFor = gamePk;
   const { data, error } = await sb
     .from('weather')
-    .select('temp_f,feels_like_f,humidity,wind_speed,wind_dir,wind_deg,conditions,precip_pct,delay_risk,forecaster_notes,is_outdoor')
+    .select('temp_f,feels_like_f,humidity,wind_speed,wind_dir,wind_deg,conditions,precip_pct,delay_risk,forecaster_notes,is_outdoor,cf_bearing')
     .eq('game_pk', gamePk)
     .maybeSingle();
   // If game changed while we were fetching, discard stale result
@@ -5951,14 +5951,14 @@ async function loadWeather(gamePk, venueName, away, home, time, venueId) {
     const spd = Math.round(data.wind_speed || 0);
     if (spd <= 3)       { windTagEl.textContent = 'Calm';          windTagEl.style.color = 'var(--muted)'; windTagEl.style.background = 'transparent'; windTagEl.style.border = 'none'; }
     else if (spd <= 8)  { windTagEl.textContent = spd + 'mph Light';    windTagEl.style.color = ''; windTagEl.style.background = ''; windTagEl.style.border = ''; }
-    else if (spd <= 14) { windTagEl.textContent = spd + 'mph Moderate'; windTagEl.style.color = ''; windTagEl.style.background = ''; windTagEl.style.border = ''; }
+    else if (spd <= 12) { windTagEl.textContent = spd + 'mph Moderate'; windTagEl.style.color = ''; windTagEl.style.background = ''; windTagEl.style.border = ''; }
     else                { windTagEl.textContent = spd + 'mph Strong';   windTagEl.style.color = '#ef4444'; windTagEl.style.background = 'rgba(239,68,68,.1)'; windTagEl.style.border = '1px solid rgba(239,68,68,.25)'; }
   }
 
   // Wind effect banner (In / Out / Cross)
   const wefBanner = document.getElementById('windEffectBanner');
   if (wefBanner) {
-    const cfBearing = VENUE_CF_BEARING[venueId] ?? null;
+    const cfBearing = data.cf_bearing ?? VENUE_CF_BEARING[venueId] ?? null;
     const wSpd = Math.round(data.wind_speed || 0);
     const wEffect = classifyWindEffect(data.wind_deg, cfBearing, wSpd);
     const wefI = document.getElementById('wefIcon');
@@ -5989,7 +5989,7 @@ async function loadWeather(gamePk, venueName, away, home, time, venueId) {
     const prcp = Math.round(data.precip_pct || 0);
     const dir  = data.wind_dir || '';
     const parts = [];
-    if (spd >= 10) parts.push(`<strong>${dir} ${spd}mph</strong> — ${spd >= 16 ? 'strong wind factor' : 'moderate wind factor'}.`);
+    if (spd >= 8) parts.push(`<strong>${dir} ${spd}mph</strong> — ${spd >= 13 ? 'strong wind factor' : 'moderate wind factor'}.`);
     if (tmp >= 82) parts.push(`Warm air (${tmp}°F) — ball carries well.`);
     else if (tmp <= 50) parts.push(`Cold conditions (${tmp}°F) — ball dies at the plate.`);
     if (prcp >= 40) parts.push(`${prcp}% precip chance — monitor for delays.`);
