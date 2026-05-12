@@ -46,6 +46,10 @@ W_VALUE     = 0.05   # pts per $1k — near-zero correlation but kept
 # Was 5.0, then 3.0 — kept at 3.0 since pitcher magnitude is right; SP temp handles concentration.
 PITCHER_BOOST = 3.0
 
+# Global ownership scale: 45-day review shows persistent +4.7-5.9% over-projection across all tiers.
+# Applied after position re-normalization — corrects magnitude without changing rank order.
+OWN_GLOBAL_SCALE = 0.95
+
 # Confirmed/unconfirmed modifiers
 CONFIRMED_BOOST = 1.5
 UNCONFIRMED_PENALTY = 0.4
@@ -474,6 +478,10 @@ def calibrate_ownership(pool, raw_ownership, target_date):
             scale = target_sum / current_sum
             for pid in pids:
                 calibrated[pid] = calibrated[pid] * scale
+
+    # Apply global bias correction — 45-day review shows +5% persistent over-projection
+    for pid in calibrated:
+        calibrated[pid] *= OWN_GLOBAL_SCALE
 
     for pid in calibrated:
         calibrated[pid] = clip(calibrated[pid], 0.0, 100.0)

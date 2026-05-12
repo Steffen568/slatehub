@@ -1028,7 +1028,8 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
         park_hr *= 1.0 + pull_dev * porch_factor * 3.0  # pull hitters amplified at short porches
 
     # Fly ball hitters have higher HR/FB rates — their batted ball profile drives more HRs
-    fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
+    # Coefficient dampened 0.30→0.22: 45-day review shows Power archetype over-projected +1.4-1.8 pts
+    fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.22, 0.85, 1.20)
 
     wx_hr = weather_hr_mult(weather)
     pitcher_hr_ratio = (pitcher['hr9'] / LEAGUE_AVG_HR9) if pitcher else 1.0
@@ -1039,7 +1040,8 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     effective_wx_hr = 1.0 + (wx_hr - 1.0) * park_sens
 
     # Blast%: highest-quality contact tier (league avg ~8%)
-    blast_adj = clip(1.0 + (talent.get('blast', 0.08) - 0.08) * 2.5, 0.90, 1.12)
+    # Coefficient dampened 2.5→1.8: stacks with fb_adj, causing HR over-projection for power hitters
+    blast_adj = clip(1.0 + (talent.get('blast', 0.08) - 0.08) * 1.8, 0.90, 1.12)
     # Attack angle vs arm angle: swing plane alignment drives HR over/underperformance
     aa_hr_adj = arm_angle_hr_interaction(talent.get('attack_angle'), pitcher.get('arm_angle') if pitcher else None)
 
@@ -1107,8 +1109,9 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
         # 3. Pitcher SB vulnerability: high sb_per_9 = easier to run on
         on_base = is_1b | is_bb | is_hbp
         base_sb_rate = talent['sb_per_pa']
-        # Sprint speed multiplier (home-to-first seconds): 3.97s → 1.50x, 4.40s → 1.0x, 4.80s → 0.50x
-        speed_mult = clip(1.0 + (4.40 - talent.get('sprint_speed', 4.40)) * 1.16, 0.50, 1.60)
+        # Sprint speed multiplier (home-to-first seconds): 3.97s → 1.39x, 4.40s → 1.0x, 4.80s → 0.64x
+        # Coefficient dampened 1.16→0.90: 45-day review shows Speed archetype over-projected +1.3-1.5 pts
+        speed_mult = clip(1.0 + (4.40 - talent.get('sprint_speed', 4.40)) * 0.90, 0.50, 1.50)
         # Catcher/pitcher context multiplier
         ctx_mult = 1.0
         if sb_context:
@@ -1173,7 +1176,8 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
                      opp_hand_pct: float = None,
                      lineup_k_adj: float = 1.0,
                      lineup_contact_adj: float = 1.0,
-                     is_opener: bool = False) -> np.ndarray:
+                     is_opener: bool = False,
+                     opp_bb_pct: float = None) -> np.ndarray:
     """
     Simulate n_sims starts for one pitcher. Returns array of DK points per sim.
 
@@ -1269,6 +1273,13 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     effective_opp_quality = clip(opp_quality / lineup_contact_adj, 0.65, 1.55)
 
     bb_rate = clip(split_bb * (1.0 + (effective_opp_quality - 1.0) * 0.20) * park_bb, 0.03, 0.16)
+
+    # Opposing lineup patience: patient lineups work counts, draw more walks, shorten outings
+    # opp_bb_pct r=-0.490 vs pitcher DK pts — strongest untapped signal from 45-day review
+    if opp_bb_pct is not None:
+        bb_dev = opp_bb_pct - LEAGUE_AVG_BB_PCT   # deviation from league avg (e.g. 0.095 - 0.082 = +0.013)
+        k_rate  = clip(k_rate  * (1.0 - bb_dev * 2.5), 0.10, 0.45)   # patient lineup → fewer Ks
+        bb_rate = clip(bb_rate * (1.0 + bb_dev * 1.5), 0.03, 0.16)   # patient lineup → pitcher walks more
     contact_rate = max(0.15, 1.0 - k_rate - bb_rate)
 
     # Hit rate when ball in play
@@ -1553,7 +1564,8 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     # No multiplier — direct calc uses career SB rate at face value.
     # The 2.0x was for sim multi-PA windows which no longer drives the mean.
     base_sb = talent.get('sb_per_pa', 0.01)
-    speed_mult = clip(1.0 + (4.40 - talent.get('sprint_speed', 4.40)) * 1.16, 0.50, 1.60)
+    # Coefficient dampened 1.16→0.90: matches change in sim path above
+    speed_mult = clip(1.0 + (4.40 - talent.get('sprint_speed', 4.40)) * 0.90, 0.50, 1.50)
     sb_rate = clip(base_sb * speed_mult, 0.0, 0.35)
 
     return {
@@ -2044,7 +2056,12 @@ def fetch_data(target_date: str) -> dict:
         rows = sb.table('park_factors').select(
             'venue_id,basic_factor,hr_factor,k_factor,bb_factor,'
             'lf_dist,rf_dist,lf_wall_height,rf_wall_height,altitude'
-        ).in_('venue_id', venue_ids).execute().data or []
+        ).in_('venue_id', venue_ids).eq('season', SEASON).execute().data or []
+        if not rows:  # fall back to any available season if current year not seeded yet
+            rows = sb.table('park_factors').select(
+                'venue_id,basic_factor,hr_factor,k_factor,bb_factor,'
+                'lf_dist,rf_dist,lf_wall_height,rf_wall_height,altitude'
+            ).in_('venue_id', venue_ids).order('season', desc=True).execute().data or []
         park_factors = {r['venue_id']: r for r in rows}
 
     # Weather
@@ -2149,19 +2166,25 @@ def fetch_data(target_date: str) -> dict:
 
 def compute_opp_quality(lineups, batter_stats, batter_splits, opp_team_id,
                          pitcher_hand, odds, is_home):
-    """PA-weighted wRC+ of opposing lineup vs pitcher hand.
+    """PA-weighted wRC+ and BB% of opposing lineup vs pitcher hand.
+
+    Returns (quality_ratio, opp_bb_pct):
+    - quality_ratio: 0.65-1.45 blended wRC+/Vegas ratio (existing signal)
+    - opp_bb_pct: PA-weighted opposing lineup walk rate (r=-0.490 vs pitcher DK pts)
 
     Data quality guards:
     - Split wRC+ capped at [30, 200] to prevent small-sample extremes
     - Split requires min 30 PA to be used (else fall back to overall)
     - Overall wRC+ capped at [40, 180]
-    - Unknown/no-data batters default to 95 (slightly below avg)
+    - Unknown/no-data batters default to 95 wRC+ and LEAGUE_AVG_BB_PCT
     """
     opp_batters = [lu for lu in lineups
                    if lu.get('team_id') == opp_team_id and lu.get('batting_order')]
     stats_wrc = None
+    opp_bb_pct = LEAGUE_AVG_BB_PCT
     if opp_batters:
         tw, tp = 0.0, 0.0
+        tw_bb = 0.0
         for lu in opp_batters:
             pid = lu['player_id']
             order = lu.get('batting_order', 5)
@@ -2176,9 +2199,9 @@ def compute_opp_quality(lineups, batter_stats, batter_splits, opp_team_id,
                     if split_wrc is not None and split_pa >= 30:
                         wrc = clip(split_wrc, 30, 200)
             # Fall back to overall wRC+ (capped)
+            s = batter_stats.get(pid, {})
+            curr = s.get(SEASON) or s.get(SEASON-1) or s.get(SEASON-2)
             if wrc is None:
-                s = batter_stats.get(pid, {})
-                curr = s.get(SEASON) or s.get(SEASON-1) or s.get(SEASON-2)
                 if curr:
                     raw = safe(curr.get('wrc_plus'))
                     if raw is not None:
@@ -2188,8 +2211,12 @@ def compute_opp_quality(lineups, batter_stats, batter_splits, opp_team_id,
                 wrc = 95
             tw += wrc * pa_wt
             tp += pa_wt
+            # BB% for patience signal (opp_bb_pct r=-0.490 vs pitcher DK pts)
+            bb = safe(curr.get('bb_pct')) if curr else None
+            tw_bb += (bb if bb is not None else LEAGUE_AVG_BB_PCT) * pa_wt
         if tp > 0:
             stats_wrc = tw / tp
+            opp_bb_pct = clip(tw_bb / tp, 0.03, 0.18)
 
     vegas_opp = None
     if odds:
@@ -2208,8 +2235,8 @@ def compute_opp_quality(lineups, batter_stats, batter_splits, opp_team_id,
     elif vegas_opp is not None:
         blended = vegas_opp
     else:
-        return 1.0
-    return clip(blended / 100.0, 0.65, 1.45)
+        return 1.0, opp_bb_pct
+    return clip(blended / 100.0, 0.65, 1.45), opp_bb_pct
 
 
 # ── Platoon Adjustment ────────────────────────────────────────────────────────
@@ -2465,13 +2492,15 @@ def run():
             exp_hbp = proj_pa * blended['hbp']
             exp_sb = proj_pa * blended['sb']
 
-            # R and RBI: career rates regressed 30% toward league average.
-            # Raw career rates inflate power hitters who played on good teams.
-            # K% discount: high-K hitters have fewer productive PAs for R/RBI.
+            # R and RBI: use Marcel-weighted career rates directly.
+            # _counting_rate() already blends 3yr weighted data with a prior — no additional
+            # regression needed here. The old 30% flat pull toward league avg was double-
+            # regressing and suppressing elite cleanup hitters.
+            # K% discount: high-K hitters have fewer productive contact PAs for R/RBI.
             league_r, league_rbi = 0.11, 0.10
             k_discount = clip(1.0 - (talent['k_pct'] - 0.22) * 1.0, 0.85, 1.05)
-            exp_r = (talent.get('r_per_pa', league_r) * 0.70 + league_r * 0.30) * proj_pa * k_discount
-            exp_rbi = (talent.get('rbi_per_pa', league_rbi) * 0.70 + league_rbi * 0.30) * proj_pa * k_discount
+            exp_r   = talent.get('r_per_pa', league_r)   * proj_pa * k_discount
+            exp_rbi = talent.get('rbi_per_pa', league_rbi) * proj_pa * k_discount
 
             # DK Classic hitter scoring — direct calculation
             direct_dk = (
@@ -2569,7 +2598,7 @@ def run():
             sp_hand = game.get('home_sp_hand' if is_home else 'away_sp_hand')
             opp_team_id = game.get('away_team_id' if is_home else 'home_team_id')
 
-            opp_qual = compute_opp_quality(
+            opp_qual, opp_bb = compute_opp_quality(
                 data['lineups'], data['batter_stats'], data['batter_splits'],
                 opp_team_id, sp_hand, odds_row, is_home
             )
@@ -2639,7 +2668,7 @@ def run():
                 vegas_ip=v_ip, vegas_ks=v_ks,
                 pitcher_split_data=p_splits, opp_hand_pct=opp_hand_pct,
                 lineup_k_adj=lineup_k_adj, lineup_contact_adj=lineup_contact_adj,
-                is_opener=is_opener
+                is_opener=is_opener, opp_bb_pct=opp_bb,
             )
 
             mean   = float(np.mean(dk_dist))

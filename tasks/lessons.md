@@ -739,3 +739,15 @@ requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leader
 ### Auto-fixed DK ID mismatches: Carlos Cortes, Jesus Rodriguez, Tyler O'Neill
 **What happened:** Pipeline auto-fixed 3 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Session 52 — Archetype over-projection: Power/Speed hitter adjustments
+**What happened:** 45-day postgame review showed Power hitters (ISO>.200) over-projected +1.4-1.8 pts and Speed hitters over-projected +1.3-1.5 pts consistently for 4+ weeks. Root causes: `blast_adj` (coeff 2.5) and `fb_adj` (coeff 0.30) stacked multiplicatively for power hitters; `speed_mult` (coeff 1.16) over-boosted elite sprint-speed runners.
+**Rule:** Dampened `blast_adj` to 1.8 and `fb_adj` to 0.22. Dampened `speed_mult` coefficient to 0.90 in both `sim_full_game` (line ~1111) and `_compute_batter_rates` (line ~1556). After any 4-week archetype bias, adjust the driving coefficient before it compounds further.
+
+### Session 52 — opp_bb_pct added as pitcher matchup signal
+**What happened:** 45-day review showed r=-0.490 correlation between opposing lineup BB% and pitcher DK pts. The existing `compute_opp_quality` only used wRC+ and Vegas implied runs — no patience/patience signal.
+**Rule:** `compute_opp_quality` now returns a tuple `(quality_ratio, opp_bb_pct)`. Callers must unpack both. `sim_pitcher_game` accepts `opp_bb_pct` kwarg and adjusts k_rate and bb_rate: each 1% above league avg BB% → -2.5% k_rate and +1.5% bb_rate. When adding signals that change a function's return type, grep for all call sites first.
+
+### Session 52 — Ownership global -5% bias correction
+**What happened:** 45-day review showed persistent +4.7-5.9% ownership over-projection across all tiers. Position re-normalization preserves relative ownership but doesn't correct absolute magnitude. Added `OWN_GLOBAL_SCALE = 0.95` applied after position re-normalization in `calibrate_ownership`.
+**Rule:** Ownership calibration should be re-evaluated after every 4-6 weeks of data. If the systematic bias exceeds 3%, adjust `OWN_GLOBAL_SCALE`. The scale is applied AFTER position re-norm so rank order is preserved.
