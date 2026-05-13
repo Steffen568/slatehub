@@ -300,17 +300,18 @@ print(f"  {len(all_rows):,} player-game rows in {time.time()-t1:.1f}s")
 unique_players = len(set(r['player_id'] for r in all_rows))
 print(f"  {unique_players:,} unique players")
 
-# ── Enrich with R / RBI / HBP from MLB Stats API boxscores ────────────────────
-# Statcast is pitch-level only — runs, RBI, HBP require box score data.
+# ── Enrich with R / RBI / HBP / SB from MLB Stats API boxscores ───────────────
+# Statcast is pitch-level only — runs, RBI, HBP, SB require box score data.
+# SB via on_1b/on_2b/on_3b is unreliable (post-play state); boxscore is authoritative.
 
 MLB_API = "https://statsapi.mlb.com/api/v1"
 
-print("\nFetching boxscores for R / RBI / HBP...")
+print("\nFetching boxscores for R / RBI / HBP / SB...")
 game_rows = supabase.table('games').select('game_pk,game_date') \
     .gte('game_date', str(start_dt)).lte('game_date', str(end_dt)) \
     .execute().data or []
 
-# Build (player_id, game_date) → {r, rbi, hbp} lookup
+# Build (player_id, game_date) → {r, rbi, hbp, sb} lookup
 box_lookup = {}
 for gr in game_rows:
     gpk   = gr['game_pk']
@@ -331,9 +332,10 @@ for gr in game_rows:
             if not batting or batting.get('plateAppearances', 0) == 0:
                 continue
             box_lookup[(int(pid_int), gdate)] = {
-                'r':   batting.get('runs',        0),
-                'rbi': batting.get('rbi',         0),
-                'hbp': batting.get('hitByPitch',  0),
+                'r':   batting.get('runs',         0),
+                'rbi': batting.get('rbi',          0),
+                'hbp': batting.get('hitByPitch',   0),
+                'sb':  batting.get('stolenBases',  0),
             }
 
 # Merge into all_rows
@@ -345,6 +347,7 @@ for row in all_rows:
         row['r']   = box['r']
         row['rbi'] = box['rbi']
         row['hbp'] = box['hbp']
+        row['sb']  = box['sb']
         matched += 1
 
 print(f"  {len(game_rows)} games fetched, {matched}/{len(all_rows)} player-game rows enriched")

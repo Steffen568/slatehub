@@ -5822,7 +5822,7 @@ async function loadWeather(gamePk, venueName, away, home, time, venueId) {
   _wxLoadingFor = gamePk;
   const { data, error } = await sb
     .from('weather')
-    .select('temp_f,feels_like_f,humidity,wind_speed,wind_dir,wind_deg,conditions,precip_pct,delay_risk,forecaster_notes,is_outdoor')
+    .select('temp_f,feels_like_f,humidity,wind_speed,wind_dir,wind_deg,conditions,precip_pct,delay_risk,forecaster_notes,is_outdoor,cf_bearing')
     .eq('game_pk', gamePk)
     .maybeSingle();
   // If game changed while we were fetching, discard stale result
@@ -9286,14 +9286,16 @@ function computeHES(parkFactors, weather) {
       else if (temp < 60) score -= 0.5;
     }
 
-    // Wind: out = hitter-friendly, in = pitcher-friendly
-    const outDirs = ['S','SSW','SW','WSW','W','WNW','SSE','SE','ESE'];
-    const inDirs  = ['N','NNE','NE','ENE','NNW','NW'];
+    // Wind: bearing-based cosine (windToward vs CF bearing)
     if (wspd >= 5) {
-      const mag = Math.min(wspd / 9, 1.6);
-      if      (outDirs.includes(wdir)) score += mag;
-      else if (inDirs.includes(wdir))  score -= mag;
-      // Crosswind: no HR boost but some suppression on popups
+      const wdeg = parseFloat(weather.wind_deg);
+      const cfBrg = parseFloat(weather.cf_bearing);
+      if (!isNaN(wdeg) && !isNaN(cfBrg)) {
+        const windToward = (wdeg + 180) % 360;
+        let diff = Math.abs(windToward - cfBrg) % 360;
+        if (diff > 180) diff = 360 - diff;
+        score += Math.cos(diff * Math.PI / 180) * Math.min(wspd / 9, 1.6);
+      }
     }
   }
 
@@ -9432,10 +9434,11 @@ function renderBatterHESTab(rowId) {
       html += pill('Temperature', `${Math.round(temp)}°F`, tCol, tDesc);
     }
     if (wspd >= 5) {
-      const outDirs = ['S','SSW','SW','WSW','W','WNW','SSE','SE','ESE'];
-      const inDirs  = ['N','NNE','NE','ENE','NNW','NW'];
-      const wCol  = outDirs.includes(wdir) ? '#4ade80' : inDirs.includes(wdir) ? '#f87171' : '#94a3b8';
-      const wDesc = outDirs.includes(wdir) ? 'Blowing out' : inDirs.includes(wdir) ? 'Blowing in' : 'Crosswind';
+      const wdeg = parseFloat(wx.wind_deg), cfBrg = parseFloat(wx.cf_bearing);
+      let wc = 0;
+      if (!isNaN(wdeg) && !isNaN(cfBrg)) { const wt=(wdeg+180)%360; let d=Math.abs(wt-cfBrg)%360; if(d>180)d=360-d; wc=Math.cos(d*Math.PI/180); }
+      const wCol  = wc > 0.3 ? '#4ade80' : wc < -0.3 ? '#f87171' : '#94a3b8';
+      const wDesc = wc > 0.3 ? 'Blowing out' : wc < -0.3 ? 'Blowing in' : 'Crosswind';
       html += pill('Wind', `${Math.round(wspd)} mph ${wdir}`, wCol, wDesc);
     }
   }
@@ -9708,18 +9711,19 @@ function renderEnvironmentBreakdown() {
     }
 
     if (wspd >= 5) {
-      const outDirs = ['S','SSW','SW','WSW','W','WNW','SSE','SE','ESE'];
-      const inDirs  = ['N','NNE','NE','ENE','NNW','NW'];
-      const mag     = Math.min(wspd / 9, 1.6);
+      const wdeg = parseFloat(wx.wind_deg), cfBrg = parseFloat(wx.cf_bearing);
+      let wc = 0;
+      if (!isNaN(wdeg) && !isNaN(cfBrg)) { const wt=(wdeg+180)%360; let d=Math.abs(wt-cfBrg)%360; if(d>180)d=360-d; wc=Math.cos(d*Math.PI/180); }
+      const contribution = wc * Math.min(wspd / 9, 1.6);
       let wDelta, wCol, wDesc;
-      if (outDirs.includes(wdir)) {
-        wDelta = `+${mag.toFixed(1)}`; wCol = '#4ade80';
+      if (wc > 0.3) {
+        wDelta = `+${contribution.toFixed(1)}`; wCol = '#4ade80';
         wDesc  = `${Math.round(wspd)}mph blowing out — fly balls carry`;
-      } else if (inDirs.includes(wdir)) {
-        wDelta = `-${mag.toFixed(1)}`; wCol = '#f87171';
+      } else if (wc < -0.3) {
+        wDelta = contribution.toFixed(1); wCol = '#f87171';
         wDesc  = `${Math.round(wspd)}mph blowing in — suppresses fly balls`;
       } else {
-        wDelta = '0.0'; wCol = '#94a3b8';
+        wDelta = contribution.toFixed(1); wCol = '#94a3b8';
         wDesc  = `${Math.round(wspd)}mph crosswind — neutral effect`;
       }
       html += factorRow(wCol, 'Wind', `${wdir}`, wDelta, wDesc);
@@ -10138,12 +10142,13 @@ function renderPitcherSignals() {
       dev: temp - 88 });
 
     if (windSpd != null && windSpd >= 12) {
-      const outDirs = ['S','SSW','SW','WSW','W','WNW','SSE','SE','ESE'];
-      const inDirs  = ['N','NNE','NE','ENE','NNW','NW'];
-      if (outDirs.includes(windDir)) signals.push({ cat:8, tone:'bad', label:'Wind Blowing Out', val:`${Math.round(windSpd)}mph ${weather.wind_dir}`,
+      const wdeg = parseFloat(weather.wind_deg), cfBrg = parseFloat(weather.cf_bearing);
+      let wc = 0;
+      if (!isNaN(wdeg) && !isNaN(cfBrg)) { const wt=(wdeg+180)%360; let d=Math.abs(wt-cfBrg)%360; if(d>180)d=360-d; wc=Math.cos(d*Math.PI/180); }
+      if (wc > 0.3) signals.push({ cat:8, tone:'bad', label:'Wind Blowing Out', val:`${Math.round(windSpd)}mph ${weather.wind_dir}`,
         text:`${Math.round(windSpd)}mph blowing out (${weather.wind_dir}). Fly balls carry further — HR risk elevated for hitters.`,
         dev: windSpd });
-      else if (inDirs.includes(windDir)) signals.push({ cat:8, tone:'good', label:'Wind Blowing In', val:`${Math.round(windSpd)}mph ${weather.wind_dir}`,
+      else if (wc < -0.3) signals.push({ cat:8, tone:'good', label:'Wind Blowing In', val:`${Math.round(windSpd)}mph ${weather.wind_dir}`,
         text:`${Math.round(windSpd)}mph blowing in from ${weather.wind_dir}. Natural suppressor of fly ball distance — pitcher-friendly.`,
         dev: windSpd });
       else signals.push({ cat:8, tone:'warn', label:'High Crosswind', val:`${Math.round(windSpd)}mph ${weather.wind_dir}`,

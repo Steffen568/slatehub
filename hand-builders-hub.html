@@ -5478,17 +5478,24 @@ async function loadPlayerPool(date, slate) {
   // 6. Park factors (keyed by venue_id — the home park for each game)
   const venueIds = [...new Set(_games.map(g=>g.venue_id).filter(Boolean))];
   const pfRaw = venueIds.length
-    ? (await sb.from('park_factors').select('venue_id,basic_factor,hr_factor,woba_con,xwoba_con,bb_factor,k_factor').in('venue_id',venueIds).order('season',{ascending:false})).data || []
+    ? (await sb.from('park_factors').select('venue_id,basic_factor,hr_factor,woba_con,xwoba_con,bb_factor,k_factor,altitude,lf_dist,cf_dist,rf_dist,lf_wall_height,rf_wall_height,roof_type').in('venue_id',venueIds).order('season',{ascending:false})).data || []
     : [];
   _parkFactors = {};
   pfRaw.forEach(r => { if (!_parkFactors[r.venue_id]) _parkFactors[r.venue_id] = r; });
 
   // 7. Weather
   const wxRaw = gamePks.length
-    ? (await sb.from('weather').select('game_pk,temp_f,wind_speed,wind_dir,precip_pct').in('game_pk',gamePks)).data || []
+    ? (await sb.from('weather').select('game_pk,temp_f,wind_speed,wind_dir,wind_deg,precip_pct,is_outdoor,delay_risk,cf_bearing').in('game_pk',gamePks)).data || []
     : [];
   _weather = {};
   wxRaw.forEach(r => { _weather[r.game_pk] = r; });
+
+  // 7b. Game odds (implied totals for HES)
+  const oddsRaw = gamePks.length
+    ? (await sb.from('game_odds').select('game_pk,game_total,home_implied,away_implied').in('game_pk',gamePks)).data || []
+    : [];
+  const _oddsMap = {};
+  oddsRaw.forEach(r => { _oddsMap[r.game_pk] = r; });
 
   // 8. SP stats for game starters (for hitter SP grade + PMS)
   // Load current + prior seasons, blend weighted by IP (current season gets 2x weight if 18+ IP)
@@ -5632,7 +5639,7 @@ async function loadPlayerPool(date, slate) {
 
   _games.forEach(g => {
     const wx = _weather[g.game_pk];
-    gameHesMap[g.game_pk] = computeHES(_parkFactors[g.venue_id], wx);
+    gameHesMap[g.game_pk] = computeHES(_parkFactors[g.venue_id], wx, _oddsMap[g.game_pk]);
 
     const homeSp = spStatMap[g.home_sp_id];
     const awaySp = spStatMap[g.away_sp_id];
@@ -10668,9 +10675,11 @@ function _simulatePortfolioScenarios(pool, nSims) {
   pool.forEach(c => {
     Object.values(c.lineup).forEach(p => {
       if (!p?.player_id || playerData[p.player_id]) return;
-      const proj   = p.proj_dk_pts  || 0;
-      const ceil_  = p.proj_ceiling || 0;
-      const floor_ = p.proj_floor   || 0;
+      const baseProj = p.proj_dk_pts || 0;
+      const proj   = projOverrides[p.player_id] ?? baseProj;
+      const scale  = baseProj > 0 ? proj / baseProj : 1;
+      const ceil_  = p.proj_ceiling != null ? p.proj_ceiling * scale : proj * 1.5;
+      const floor_ = p.proj_floor   != null ? p.proj_floor   * scale : proj * 0.5;
       const rawSd = (ceil_ > floor_) ? (ceil_ - floor_) / 4 : proj * 0.45;
       const sd = Math.min(rawSd, proj * 0.25);
       playerData[p.player_id] = {
@@ -12529,20 +12538,91 @@ function exportSavedCSV() {
 }
 
 // ── HES ──────────────────────────────────────────────────────────────────────
-function computeHES(pf, wx) {
-  let s=5; const p=pf||{};
-  const basic=parseFloat(p.basic_factor)||100, hr=parseFloat(p.hr_factor)||100;
-  const wc=parseFloat(p.woba_con)||100, xwc=parseFloat(p.xwoba_con)||100;
-  const bb=parseFloat(p.bb_factor)||100, k=parseFloat(p.k_factor)||100;
-  s+=(xwc*.55+wc*.45-100)/18; s+=(hr-100)/20; s+=(bb-k)/80; s+=(basic-100)/50;
-  const w=wx||{}, temp=parseFloat(w.temp_f)||72, wind=parseFloat(w.wind_speed)||0;
-  const dir=(w.wind_dir||'').toUpperCase();
-  if(temp<45) s-=1.2; else if(temp<55) s-=.6; else if(temp>80) s+=.3;
-  const out=dir.includes('OUT')||dir.includes('OUTWARD');
-  const inw=dir.includes('IN')&&!out;
-  if(wind>10) s+=out?wind/14:inw?-(wind/14):0;
-  if(parseFloat(w.precip_pct)>70) s-=.5;
-  return { score:Math.max(1,Math.min(10,s)) };
+function computeHES(pf, wx, odds) {
+  const p = pf || {};
+  let score = 5.0;
+
+  // ── Pillar 1: Park Factors ──────────────────────────────────────────────────
+  const basic  = parseFloat(p.basic_factor) || 100;
+  const hr     = parseFloat(p.hr_factor)    || 100;
+  const wc     = parseFloat(p.woba_con)     || 100;
+  const xwc    = parseFloat(p.xwoba_con)    || 100;
+  const bb     = parseFloat(p.bb_factor)    || 100;
+  const k      = parseFloat(p.k_factor)     || 100;
+  score += (xwc * 0.55 + wc * 0.45 - 100) / 18;
+  score += (hr - 100) / 20;
+  score += (bb - k) / 80;
+  score += (basic - 100) / 50;
+
+  // ── Pillar 2: Park Dimensions ───────────────────────────────────────────────
+  const alt    = parseFloat(p.altitude)       || 0;
+  const lfDist = parseFloat(p.lf_dist)        || 330;
+  const rfDist = parseFloat(p.rf_dist)        || 330;
+  const cfDist = parseFloat(p.cf_dist)        || 400;
+  const lfHt   = parseFloat(p.lf_wall_height) || 10;
+  const rfHt   = parseFloat(p.rf_wall_height) || 10;
+  if (alt > 500) score += Math.min((alt - 500) / 4700, 1.0);
+  const avgPorch = (lfDist + rfDist) / 2;
+  if      (avgPorch < 325) score += 0.5;
+  else if (avgPorch < 335) score += 0.25;
+  if      (cfDist >= 420)  score -= 0.3;
+  else if (cfDist >= 410)  score -= 0.1;
+  const avgWallHt = (lfHt + rfHt) / 2;
+  if      (avgWallHt >= 25) score -= 0.5;
+  else if (avgWallHt >= 18) score -= 0.25;
+  else if (avgWallHt <= 7)  score += 0.3;
+
+  // ── Pillar 3: Weather ───────────────────────────────────────────────────────
+  const roofType = (p.roof_type || '').toLowerCase();
+  const isDome   = roofType === 'dome';
+  const w = wx || {};
+  if (!isDome && w.is_outdoor !== false) {
+    const temp = parseFloat(w.temp_f) || null;
+    const wspd = parseFloat(w.wind_speed) || 0;
+    const wdeg = parseFloat(w.wind_deg);
+    const cfBrg = parseFloat(w.cf_bearing);
+
+    if (temp != null) {
+      if      (temp > 90) score += 1.2;
+      else if (temp > 85) score += 0.9;
+      else if (temp > 75) score += 0.4;
+      else if (temp < 40) score -= 1.8;
+      else if (temp < 50) score -= 1.2;
+      else if (temp < 60) score -= 0.5;
+    }
+
+    // Wind: compare bearing wind is blowing TOWARD vs CF bearing
+    // windToward = (from + 180) % 360; diff 0 = out, 90 = cross, 180 = in
+    if (wspd >= 5 && !isNaN(wdeg) && !isNaN(cfBrg)) {
+      const windToward = (wdeg + 180) % 360;
+      let diff = Math.abs(windToward - cfBrg) % 360;
+      if (diff > 180) diff = 360 - diff;
+      const windComponent = Math.cos(diff * Math.PI / 180);
+      score += windComponent * Math.min(wspd / 9, 1.6);
+    }
+
+    if (parseFloat(w.precip_pct) > 70) score -= 0.5;
+    const risk = (w.delay_risk || '').toLowerCase();
+    if (risk.includes('delay') || risk.includes('postpone')) score -= 1.0;
+  }
+
+  // ── Pillar 4: Vegas ─────────────────────────────────────────────────────────
+  const gameTotal = parseFloat((odds || {}).game_total);
+  if (!isNaN(gameTotal)) {
+    score += Math.max(-1.0, Math.min(1.0, (gameTotal - 8.5) * 0.44));
+  }
+
+  score = Math.max(1, Math.min(10, score));
+  const rounded = Math.round(score * 10) / 10;
+
+  let grade, color;
+  if      (score >= 7.5) { grade = 'Hot Park';   color = '#ef4444'; }
+  else if (score >= 6.0) { grade = 'Hitter+';    color = '#fb923c'; }
+  else if (score >= 4.5) { grade = 'Neutral';    color = 'var(--muted)'; }
+  else if (score >= 3.0) { grade = 'Suppressed'; color = '#60a5fa'; }
+  else                   { grade = "Pitcher's";  color = '#a78bfa'; }
+
+  return { score: rounded, grade, color };
 }
 
 // ── SP GRADE ─────────────────────────────────────────────────────────────────

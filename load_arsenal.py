@@ -21,7 +21,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 from config import SEASON
 
-PITCH_TYPES = ["FF", "SI", "FC", "SL", "ST", "CH", "CU", "FS"]
+PITCH_TYPES = ["FF", "SI", "FC", "SL", "ST", "CH", "CU", "FS", "KC"]
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -81,23 +81,43 @@ def fetch_stuff():
            f"?min=1&pos=&year={SEASON}&team=&type=stuff&csv=true")
     df = _get_csv(url)
     stuff_map = {}
-    pt_cols = {
-        'ff_stuff': 'FF', 'si_stuff': 'SI', 'fc_stuff': 'FC',
-        'sl_stuff': 'SL', 'ch_stuff': 'CH', 'cu_stuff': 'CU',
-        'fs_stuff': 'FS', 'kn_stuff': 'KC', 'st_stuff': 'ST', 'sv_stuff': 'SV',
+
+    # Savant uses "pitcher" for player ID on this endpoint; fall back to "player_id"
+    pid_col = 'pitcher' if 'pitcher' in df.columns else 'player_id' if 'player_id' in df.columns else None
+    if not pid_col:
+        print(f"  WARNING fetch_stuff: no pitcher ID column found. Columns: {list(df.columns[:10])}")
+        return stuff_map
+
+    # Pitch prefix → Savant pitch type code.
+    # Column names can be "ff_stuff" or "ff_stuff+" depending on Savant CSV version —
+    # match by startswith so either convention works.
+    prefix_to_pt = {
+        'ff': 'FF', 'si': 'SI', 'fc': 'FC', 'sl': 'SL', 'ch': 'CH',
+        'cu': 'CU', 'fs': 'FS', 'kn': 'KC', 'st': 'ST', 'sv': 'SV',
     }
+    col_to_pt = {}
+    for col in df.columns:
+        for prefix, pt in prefix_to_pt.items():
+            if col.startswith(prefix + '_stuff'):
+                col_to_pt[col] = pt
+                break
+
+    if not col_to_pt:
+        print(f"  WARNING fetch_stuff: no stuff+ columns found. Columns: {list(df.columns[:20])}")
+        return stuff_map
+
     for _, row in df.iterrows():
         try:
-            pid = int(row.get("pitcher", 0))
-        except:
+            pid = int(row.get(pid_col, 0))
+        except (TypeError, ValueError):
             continue
         if not pid:
             continue
-        for col, pt in pt_cols.items():
-            if col in row.index and pd.notna(row[col]):
+        for col, pt in col_to_pt.items():
+            if pd.notna(row.get(col)):
                 try:
                     stuff_map[(pid, pt)] = round(float(row[col]), 1)
-                except:
+                except (TypeError, ValueError):
                     pass
     return stuff_map
 
@@ -219,10 +239,16 @@ def run():
                     "release_height" : a.get("release_height"),
                     "extension"      : a.get("extension"),
                     "arm_angle"      : a.get("arm_angle"),
-                    "stuff_plus"     : stuff_map.get((pid, pitch_code)),
-                    "location_plus"  : _safe(row, "location_plus", "pa_loc"),
-                    "pitching_plus"  : _safe(row, "pitching_plus", "pa_pitching"),
                 }
+                # Only include plus-grades when we actually have values — omitting a key
+                # preserves the existing DB value on upsert (prevents a failed fetch from
+                # wiping data that load_fangraphs_excel.py already wrote).
+                sp = stuff_map.get((pid, pitch_code))
+                lp = _safe(row, "location_plus", "pa_loc")
+                pp = _safe(row, "pitching_plus", "pa_pitching")
+                if sp is not None: record["stuff_plus"]    = sp
+                if lp is not None: record["location_plus"] = lp
+                if pp is not None: record["pitching_plus"] = pp
                 all_rows.append(record)
 
             time.sleep(0.4)

@@ -1097,7 +1097,7 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
                 wrc_z = (p.get('wrc_plus', 100) - 100) / 30
                 iso_z = (p.get('iso', 0.150) - 0.150) / 0.080
                 talent_z = wrc_z * 0.5 + iso_z * 0.5
-                talent_mult = max(0.85, min(1.15, 1.0 + talent_z * 0.08))
+                talent_mult = max(0.85, min(1.18, 1.0 + talent_z * 0.10))
 
             scores[i] *= talent_mult
 

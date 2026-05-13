@@ -751,3 +751,11 @@ requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leader
 ### Session 52 — Ownership global -5% bias correction
 **What happened:** 45-day review showed persistent +4.7-5.9% ownership over-projection across all tiers. Position re-normalization preserves relative ownership but doesn't correct absolute magnitude. Added `OWN_GLOBAL_SCALE = 0.95` applied after position re-normalization in `calibrate_ownership`.
 **Rule:** Ownership calibration should be re-evaluated after every 4-6 weeks of data. If the systematic bias exceeds 3%, adjust `OWN_GLOBAL_SCALE`. The scale is applied AFTER position re-norm so rank order is preserved.
+
+### Auto-fixed DK ID mismatches: Omar Martinez
+**What happened:** Pipeline auto-fixed 1 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: A.J. Ewing, Carlos Cortes, Tyler O'Neill
+**What happened:** Pipeline auto-fixed 3 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
