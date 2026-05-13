@@ -1739,6 +1739,14 @@ html{font-size:14px;}
       </div>
     </div>
   </div>
+  <div style="display:flex;align-items:center;gap:8px;margin-left:auto;padding-right:6px;flex-shrink:0;">
+    <input type="file" id="projCsvInput" accept=".csv" style="display:none;" onchange="handleProjCsvUpload(event)">
+    <button class="ssb-btn" onclick="document.getElementById('projCsvInput').click()" title="Upload your own projection CSV" style="white-space:nowrap;">&#11014; Projections</button>
+    <div id="projStatus" style="display:none;align-items:center;gap:6px;font-size:11px;font-weight:700;">
+      <span id="projStatusText" style="color:#4ade80;white-space:nowrap;"></span>
+      <button onclick="clearCustomProj()" title="Clear uploaded projections" style="background:rgba(248,113,113,.12);color:#f87171;border:1px solid rgba(248,113,113,.25);border-radius:3px;padding:1px 7px;cursor:pointer;font-size:11px;font-weight:700;">&#10005;</button>
+    </div>
+  </div>
 </div><!-- /slate-selector-bar -->
 
 <!-- PARK & WEATHER BAR -->
@@ -5381,6 +5389,162 @@ const SUPA_URL = 'https://rzgmnjfxlthxpoecyvnv.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ6Z21uamZ4bHRoeHBvZWN5dm52Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTMwMjUsImV4cCI6MjA4ODIyOTAyNX0.WCAkPKJCH5KM4E15QVOYr7BR6aW2M4dmu6WzsGnYlio';
 const sb = supabase.createClient(SUPA_URL, SUPA_KEY);
 
+// ── OWNER / CUSTOM PROJECTIONS ────────────────────────────────────────────────
+let _isOwner    = false;
+let _customProj = {};   // normName → { proj_dk_pts, proj_ownership, proj_floor, proj_ceiling }
+let _csvParsed  = null; // { headers, rows } from last file upload
+const LS_PROJ_KEY  = 'sh_proj_csv';
+const LS_OWNER_KEY = 'sh_owner_h';
+
+async function initOwnerMode() {
+  // Hash is SHA-256 of the owner password — never store the password itself
+  const CORRECT_HASH = 'e3c652f0ba0b4801205814f8b6bc49672c4c74e25b497770bb89b22cdeb4e951';
+  const stored = localStorage.getItem(LS_OWNER_KEY);
+  if (stored === CORRECT_HASH) { _isOwner = true; }
+  const param = new URLSearchParams(location.search).get('unlock');
+  if (param === '0') {
+    localStorage.removeItem(LS_OWNER_KEY); _isOwner = false;
+  } else if (param === '1' && !_isOwner) {
+    const pw = prompt('Enter owner password:');
+    if (pw) {
+      const buf  = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pw));
+      const hash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+      if (hash === CORRECT_HASH) { localStorage.setItem(LS_OWNER_KEY, hash); _isOwner = true; }
+      else alert('Incorrect password.');
+    }
+  }
+  // Restore previously uploaded CSV projections
+  try {
+    const raw = localStorage.getItem(LS_PROJ_KEY);
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (p && typeof p === 'object') { _customProj = p; _updateProjStatus(Object.keys(p).length); }
+    }
+  } catch(e) {}
+}
+
+function _normName(raw) {
+  let s = (raw || '').toLowerCase().trim().replace(/\s+(jr\.?|sr\.?|ii|iii|iv)$/i, '');
+  if (s.includes(',')) { const [last, first] = s.split(',').map(p => p.trim()); s = first + ' ' + last; }
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function _mergeProjByName(projMap, players, customProj) {
+  players.forEach(p => {
+    const cp = customProj[_normName(p.player_name || '')];
+    if (!cp) return;
+    const key = String(p.player_id);
+    if (!projMap[key]) projMap[key] = { player_id: p.player_id };
+    if (cp.proj_dk_pts    != null) projMap[key].proj_dk_pts    = cp.proj_dk_pts;
+    if (cp.proj_ownership != null) projMap[key].proj_ownership = cp.proj_ownership;
+    if (cp.proj_floor     != null) projMap[key].proj_floor     = cp.proj_floor;
+    if (cp.proj_ceiling   != null) projMap[key].proj_ceiling   = cp.proj_ceiling;
+  });
+}
+
+function _parseCSV(text) {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  function parseLine(line) {
+    const cols = []; let cur = '', inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { if (inQ && line[i+1]==='"') { cur+='"'; i++; } else inQ=!inQ; }
+      else if (c === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
+      else cur += c;
+    }
+    cols.push(cur.trim()); return cols;
+  }
+  const nonempty = lines.filter(l => l.trim());
+  if (!nonempty.length) return { headers: [], rows: [] };
+  return { headers: parseLine(nonempty[0]), rows: nonempty.slice(1).map(parseLine) };
+}
+
+function _autoDetectCols(headers) {
+  const h = headers.map(x => x.toLowerCase());
+  const find = (...terms) => { const i = h.findIndex(x => terms.some(t => x.includes(t))); return i >= 0 ? i : null; };
+  return {
+    name:  find('name', 'player'),
+    pts:   find('pts', 'dk pts', 'fpts', 'proj', 'points'),
+    own:   find('own', '%', 'ownership'),
+    floor: find('floor', 'low', 'min'),
+    ceil:  find('ceil', 'ceiling', 'high', 'max'),
+  };
+}
+
+const PROJ_FIELDS = [
+  { key:'name',  label:'Player Name', req:true  },
+  { key:'pts',   label:'DK Pts',      req:true  },
+  { key:'own',   label:'Ownership %', req:false },
+  { key:'floor', label:'Floor',       req:false },
+  { key:'ceil',  label:'Ceiling',     req:false },
+];
+
+function openProjModal(parsed) {
+  _csvParsed = parsed;
+  const det  = _autoDetectCols(parsed.headers);
+  const opts = ['-- skip --', ...parsed.headers].map((h, i) => `<option value="${i-1}">${h}</option>`).join('');
+  document.getElementById('projMapFields').innerHTML = PROJ_FIELDS.map(f =>
+    `<div style="font-size:11px;font-weight:700;color:var(--text2);text-align:right;">${f.label}${f.req ? '<span style="color:#f87171;margin-left:2px;">*</span>' : ''}</div>
+     <select id="pmap_${f.key}" style="background:var(--s2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;width:100%;">${opts}</select>`
+  ).join('');
+  PROJ_FIELDS.forEach(f => { const el = document.getElementById('pmap_' + f.key); const idx = det[f.key]; if (el) el.value = idx != null ? idx : -1; });
+  document.getElementById('projMapOverlay').style.display = 'flex';
+}
+function closeProjModal() { document.getElementById('projMapOverlay').style.display = 'none'; }
+
+function applyProjMapping() {
+  const g = k => parseInt(document.getElementById('pmap_'+k).value);
+  const nameIdx=g('name'), ptsIdx=g('pts'), ownIdx=g('own'), floorIdx=g('floor'), ceilIdx=g('ceil');
+  if (nameIdx < 0 || ptsIdx < 0) { alert('Player Name and DK Pts are required.'); return; }
+  const result = {};
+  (_csvParsed.rows || []).forEach(row => {
+    const nm = row[nameIdx]; if (!nm) return;
+    result[_normName(nm)] = {
+      proj_dk_pts:    ptsIdx   >= 0 && row[ptsIdx]   ? +row[ptsIdx]   : null,
+      proj_ownership: ownIdx   >= 0 && row[ownIdx]   ? +row[ownIdx]   : null,
+      proj_floor:     floorIdx >= 0 && row[floorIdx] ? +row[floorIdx] : null,
+      proj_ceiling:   ceilIdx  >= 0 && row[ceilIdx]  ? +row[ceilIdx]  : null,
+    };
+  });
+  _customProj = result;
+  try { localStorage.setItem(LS_PROJ_KEY, JSON.stringify(result)); } catch(e) {}
+  closeProjModal();
+  _updateProjStatus(Object.keys(result).length);
+  _refreshProjections();
+}
+
+function handleProjCsvUpload(e) {
+  const file = e.target.files?.[0]; if (!file) return;
+  e.target.value = '';
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const parsed = _parseCSV(ev.target.result);
+    if (!parsed.headers.length) { alert('Could not parse CSV — no headers found.'); return; }
+    openProjModal(parsed);
+  };
+  reader.readAsText(file);
+}
+
+function _updateProjStatus(count) {
+  const el = document.getElementById('projStatus'), tx = document.getElementById('projStatusText');
+  if (!el || !tx) return;
+  if (count > 0) { el.style.display='flex'; tx.textContent=count+' projections loaded'; }
+  else           { el.style.display='none'; }
+}
+
+function clearCustomProj() {
+  _customProj = {};
+  try { localStorage.removeItem(LS_PROJ_KEY); } catch(e) {}
+  _updateProjStatus(0);
+  _refreshProjections();
+}
+
+function _refreshProjections() {
+  if (window._lastBatterStatsArgs) loadBatterStats(...window._lastBatterStatsArgs);
+  if (window._lastSPArgs)          loadStartingPitcher(...window._lastSPArgs);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Active game state
 let activeGame = null;
 let allGames   = [];
@@ -6704,7 +6868,9 @@ async function showPitcherPicker(teamId) {
   const [{ data: statsRows }, { data: salaryRows }, { data: projRows }] = await Promise.all([
     sb.from('pitcher_stats').select('player_id, era, k_pct, whip').in('player_id', pids).eq('season', statSeason),
     sb.from('dk_salaries').select('player_id, salary').in('player_id', pids),
-    sb.from('player_projections').select('player_id, proj_dk_pts, proj_floor, proj_ceiling, stats_level, proj_ownership').in('player_id', pids).eq('game_date', activeDate),
+    _isOwner
+      ? sb.from('player_projections').select('player_id, proj_dk_pts, proj_floor, proj_ceiling, stats_level, proj_ownership').in('player_id', pids).eq('game_date', activeDate)
+      : Promise.resolve({ data: [] }),
   ]);
 
   const statsMap = {};
@@ -6718,7 +6884,7 @@ async function showPitcherPicker(teamId) {
   (projRows || []).forEach(r => projMap[r.player_id] = r);
 
   // Per-slate ownership overlay
-  if (activeSlate && activeSlate !== 'all' && activeDate) {
+  if (_isOwner && activeSlate && activeSlate !== 'all' && activeDate) {
     const { data: slateOwnRows } = await sb.from('slate_ownership')
       .select('player_id,proj_ownership')
       .eq('game_date', activeDate)
@@ -6728,6 +6894,7 @@ async function showPitcherPicker(teamId) {
       if (projMap[r.player_id]) projMap[r.player_id].proj_ownership = r.proj_ownership;
     });
   }
+  if (Object.keys(_customProj).length) _mergeProjByName(projMap, pitchers, _customProj);
 
   const enriched = pitchers.map(p => ({
     ...p,
@@ -6870,6 +7037,7 @@ function spPickerSelect(pid, name, hand) {
 }
 
 async function loadStartingPitcher(spId, spName, homeTeam) {
+  window._lastSPArgs = [spId, spName, homeTeam];
   // Reset signal state so stale signals don't linger while new data loads
   _activePd = null; _activeSplits = {}; _activeArsenal = [];
   const _topChips   = document.getElementById('signalChipsTop');
@@ -6920,7 +7088,7 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
   loadArsenal(spId);
   loadPitcherSplits(spId);
 
-  const [{ data, error }, { data: salaryData }, { data: projData }] = await Promise.all([
+  const [{ data, error }, { data: salaryData }, { data: projData_ }] = await Promise.all([
     activePitcherYear === '3yr'
       ? sb.from('pitcher_stats').select('*').eq('player_id', spId).in('season', [2023, 2024, 2025])
       : sb.from('pitcher_stats').select('*').eq('player_id', spId).eq('season', parseInt(activePitcherYear)).maybeSingle(),
@@ -6928,20 +7096,34 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
       .select('salary, position, dk_slate')
       .eq('player_id', spId)
       .maybeSingle(),
-    sb.from('player_projections')
-      .select('proj_dk_pts, proj_floor, proj_ceiling, proj_ip, proj_ks, proj_er, win_prob, stats_level, proj_ownership')
-      .eq('player_id', spId)
-      .eq('game_date', activeDate)
-      .maybeSingle(),
+    _isOwner
+      ? sb.from('player_projections')
+          .select('proj_dk_pts, proj_floor, proj_ceiling, proj_ip, proj_ks, proj_er, win_prob, stats_level, proj_ownership')
+          .eq('player_id', spId)
+          .eq('game_date', activeDate)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
   ]);
+  let projData = projData_;
 
   // Per-slate ownership overlay for SP hero
-  if (projData && activeSlate && activeSlate !== 'all' && activeDate) {
+  if (_isOwner && projData && activeSlate && activeSlate !== 'all' && activeDate) {
     const { data: soRow } = await sb.from('slate_ownership')
       .select('proj_ownership')
       .eq('player_id', spId).eq('game_date', activeDate).eq('dk_slate', activeSlate)
       .maybeSingle();
     if (soRow) projData.proj_ownership = soRow.proj_ownership;
+  }
+  // Custom projection override (non-owner CSV upload)
+  if (Object.keys(_customProj).length) {
+    const cp = _customProj[_normName(spName || '')];
+    if (cp) {
+      if (!projData) projData = {};
+      if (cp.proj_dk_pts    != null) projData.proj_dk_pts    = cp.proj_dk_pts;
+      if (cp.proj_ownership != null) projData.proj_ownership = cp.proj_ownership;
+      if (cp.proj_floor     != null) projData.proj_floor     = cp.proj_floor;
+      if (cp.proj_ceiling   != null) projData.proj_ceiling   = cp.proj_ceiling;
+    }
   }
 
   // Update projection display in hero
@@ -8470,6 +8652,7 @@ async function loadBatterHands(playerIds, lineupPlayers) {
 }
 
 async function loadBatterStats(playerIds, lineupPlayers, year = '2026') {
+  window._lastBatterStatsArgs = [playerIds, lineupPlayers, year];
   // Map year selector to season(s)
   const is3yr  = year === '3yr';
   const season = year === '2026' ? 2026 : year === '2025' ? 2025 : year === '2024' ? 2024 : year === '2023' ? 2023 : 2026;
@@ -8502,10 +8685,12 @@ async function loadBatterStats(playerIds, lineupPlayers, year = '2026') {
     sb.from('dk_salaries')
       .select('player_id, salary, position, dk_slate')
       .in('player_id', playerIds),
-    sb.from('player_projections')
-      .select('player_id, proj_dk_pts, proj_floor, proj_ceiling, proj_pa, proj_1b, proj_2b, proj_3b, proj_hr, proj_bb, proj_r, proj_rbi, proj_sb, proj_ownership')
-      .in('player_id', playerIds)
-      .eq('game_date', activeDate),
+    _isOwner
+      ? sb.from('player_projections')
+          .select('player_id, proj_dk_pts, proj_floor, proj_ceiling, proj_pa, proj_1b, proj_2b, proj_3b, proj_hr, proj_bb, proj_r, proj_rbi, proj_sb, proj_ownership')
+          .in('player_id', playerIds)
+          .eq('game_date', activeDate)
+      : Promise.resolve({ data: [] }),
   ]);
 
   if (statsRes.error) { console.log('No batter stats:', statsRes.error); return; }
@@ -8574,7 +8759,7 @@ async function loadBatterStats(playerIds, lineupPlayers, year = '2026') {
   (projRes.data || []).forEach(p => { projMap[String(p.player_id)] = p; });
 
   // Per-slate ownership overlay
-  if (activeSlate && activeSlate !== 'all' && activeDate && playerIds.length) {
+  if (_isOwner && activeSlate && activeSlate !== 'all' && activeDate && playerIds.length) {
     const { data: slateOwnRows } = await sb.from('slate_ownership')
       .select('player_id,proj_ownership')
       .eq('game_date', activeDate)
@@ -8585,6 +8770,7 @@ async function loadBatterStats(playerIds, lineupPlayers, year = '2026') {
       if (projMap[key]) projMap[key].proj_ownership = r.proj_ownership;
     });
   }
+  if (Object.keys(_customProj).length) _mergeProjByName(projMap, lineupPlayers, _customProj);
 
   // Build splits map: player_id -> { L: {...}, R: {...} }
   // For 3yr: group by (player_id, split) and average rate stats across seasons
@@ -11075,7 +11261,8 @@ function _tourHookHitterExpand() {
 }
 // ─────────────────────────────────────────────────────────────────────────
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  await initOwnerMode();
   loadGames();
   injectPMSTabs();
   if (!localStorage.getItem('slateHubTourDone')) {
@@ -11083,6 +11270,22 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 </script>
+
+<!-- CSV Column Mapping Modal -->
+<div id="projMapOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:400;align-items:center;justify-content:center;" onclick="if(event.target===this)closeProjModal()">
+  <div style="background:var(--surface);border:1px solid var(--border2);border-radius:10px;width:min(460px,92vw);padding:24px 24px 20px;box-shadow:0 12px 40px rgba(0,0,0,.6);">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <span style="font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:1.2px;color:var(--text);">Map CSV Columns</span>
+      <button onclick="closeProjModal()" style="background:none;border:1px solid var(--border);color:var(--text2);cursor:pointer;width:26px;height:26px;border-radius:4px;font-size:16px;line-height:1;">&times;</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:16px;">Match your CSV headers to the expected fields. <strong style="color:var(--text2);">Player Name</strong> and <strong style="color:var(--text2);">DK Pts</strong> are required. Ownership, Floor, and Ceiling are optional.</div>
+    <div id="projMapFields" style="display:grid;grid-template-columns:110px 1fr;gap:8px 12px;align-items:center;margin-bottom:20px;"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button onclick="closeProjModal()" style="padding:6px 16px;border-radius:5px;border:1px solid var(--border);background:var(--s2);color:var(--text2);cursor:pointer;font-size:12px;">Cancel</button>
+      <button onclick="applyProjMapping()" style="padding:6px 16px;border-radius:5px;border:1px solid rgba(96,165,250,.35);background:#1e3a5f;color:#60a5fa;cursor:pointer;font-weight:700;font-size:12px;">Apply</button>
+    </div>
+  </div>
+</div>
 
 </body>
 </html>
