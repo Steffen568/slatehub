@@ -9468,9 +9468,9 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
   if (pp != null || sp != null || xf != null) {
     let p = 0;
     if (pp != null) {
-      p = pp <= 80 ? 2 : pp <= 95 ? 1 : 0;
+      p = pp <= 80 ? 2 : pp <= 100 ? 1 : 0;
     } else if (sp != null) {
-      p = sp <= 80 ? 2 : sp <= 95 ? 1 : 0;
+      p = sp <= 80 ? 2 : sp <= 100 ? 1 : 0;
     } else {
       p = xf >= 4.50 ? 2 : xf >= 4.00 ? 1 : 0;
     }
@@ -9507,7 +9507,7 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
   const swRaw = pd?.swstr_pct;
   if (kRaw != null) {
     const k = toD(kRaw);
-    let p = k <= 0.18 ? 2 : k <= 0.22 ? 1 : 0;
+    let p = k <= 0.18 ? 2 : k <= 0.24 ? 1 : 0;
     // Bonus: very low swinging strike rate means pitcher can't miss bats
     if (p < 2 && swRaw != null && toD(swRaw) <= 0.09) p = Math.min(p + 1, 2);
     components.push({ name: 'K Environment', pts: p, max: 2, k, sw: toD(swRaw) });
@@ -9519,7 +9519,7 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
   const pHH = toR(pSplit?.hard_hit_pct) ?? toR(pd?.hard_hit_pct);
   if (bxw != null || sqUp != null) {
     const strongBatter = (bxw != null && bxw >= 0.370) || (sqUp != null && sqUp >= 13);
-    const strongPitcher = pHH != null && pHH >= 38; // pitcher gives up hard contact
+    const strongPitcher = (pHH != null && pHH >= 38) || (pBrl != null && pBrl >= 10); // hard contact or high barrels
     let p = 0;
     if (strongBatter && strongPitcher) p = 2;
     else if (strongBatter || strongPitcher) p = 1;
@@ -10852,7 +10852,7 @@ function renderPMSBreakdown(rowId) {
       case 'K Environment': {
         const kPct = c.k != null ? (c.k * 100).toFixed(1) : '—';
         const swPct = c.sw != null ? (c.sw * 100).toFixed(1) : null;
-        value = `K% ${kPct}%${swPct ? ` · SwStr% ${swPct}%` : ''} (avg ~22% K)`;
+        value = `K% ${kPct}%${swPct ? ` · SwStr% ${swPct}%` : ''} (avg ~22-24% K)`;
         desc = c.pts === 2 ? `Low K rate — batter consistently puts the ball in play`
              : c.pts === 1 ? 'Moderate K rate — strikeout risk is manageable'
              : `High K rate — strikeout is a real threat in this matchup`;
