@@ -55,11 +55,11 @@ CONFIRMED_BOOST = 1.5
 UNCONFIRMED_PENALTY = 0.4
 
 # Softmax temperature per position — lower = sharper (more concentrated at top players)
-# SP at 0.40: produces ~55-65% for clear #1 on early slate, ~35-45% for #1 on main slate.
-# Prior history: 0.38→0.30 on 2026-05-04 to compensate for a 35% hard cap. Cap raised to 70%
-# so temperature now controls distribution naturally without needing cap suppression.
-SOFTMAX_TEMP = {'SP': 0.40, 'C': 0.50, '1B': 0.50, '2B': 0.50,
-                '3B': 0.50, 'SS': 0.50, 'OF': 0.50}
+# Session 53 study (8,766 records, 39 dates): top SPs (>25% actual) bias=-11.85%,
+# chalk hitters (>20% actual) bias=-7.33% — model too flat, not concentrating enough.
+# SP: 0.40→0.30, hitters: 0.50→0.42. Confirmed by grid search (weights unchanged).
+SOFTMAX_TEMP = {'SP': 0.30, 'C': 0.42, '1B': 0.42, '2B': 0.42,
+                '3B': 0.42, 'SS': 0.42, 'OF': 0.42}
 
 # Per-position ownership ceiling — a true physical cap, not a GPP strategy cap.
 # SP raised from 35% to 70%: no real pitcher is ever 70%+ owned, so this never binds

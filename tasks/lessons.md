@@ -759,3 +759,32 @@ requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leader
 ### Auto-fixed DK ID mismatches: A.J. Ewing, Carlos Cortes, Tyler O'Neill
 **What happened:** Pipeline auto-fixed 3 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+
+### Session 53 — Ownership Study: actual_ownership data has critical gaps
+**What happened:** First full ownership accuracy study (study_ownership.py) ran against 842 actual_ownership rows across 2 dates. Matched only 657 records — zero SPs matched, zero $7K+ players matched, all slate labels were 'unknown'. The matched sample is biased toward low-salary hitters only.
+**Rule:** `actual_ownership` quality depends on load_actual_ownership.py resolving DK player IDs → MLBAM IDs correctly. SPs and expensive players fail to match because of ID mismatches. Investigate DK_TO_MLBAM coverage for these players. Also: `dk_slate` in actual_ownership is stored as 'unknown' instead of the real slate label — fix the load script to carry slate through from the dg_id → slate lookup.
+
+### Session 53 — Ownership weight grid search: 2 dates is insufficient
+**What happened:** Grid search over 233 weight combinations using 657 matched records yielded only 0.007% MAE improvement. Only 6 position-date-slate groups existed for evaluation (2 dates × 1 slate × 3 positions). Results not statistically reliable.
+**Rule:** Ownership weight optimization requires ≥10 dates of actual ownership data and ≥50 position-date groups. Re-run study_ownership.py after accumulating more post-game imports. Don't update sim_ownership.py weights based on <10 dates of data.
+
+### Session 53 — Ownership feature correlations updated
+**What happened:** study_ownership.py computed feature correlations against actual_ownership. Key changes from initial values: proj_dk_pts r=0.337 (was 0.557), salary r=0.374 (was 0.536), value/PPK r=+0.166 (was -0.055), bo_score r=+0.417 (was +0.203). Correlation decline for proj/salary is likely due to biased sample (only drafted players). PPK value signal has strengthened and batting order signal has improved significantly.
+**Rule:** Re-check feature correlations once ≥10 dates of data available with proper SP and high-salary coverage. PPK (value/PPK) may warrant increasing from W_VALUE=0.05 if trend holds.
+
+### Session 53 — Chalk tier under-projected, low-ownership tier over-projected
+**What happened:** Chalk players (>20% actual) showed bias=-7.81% (we under-project them). Mid/low tiers showed +2.36%/+3.42% over-projection. This means the model is too "flat" — it distributes ownership too evenly rather than concentrating on real chalk.
+**Rule:** If this pattern persists with ≥50 chalk player observations, consider lowering hitter softmax temperature (SOFTMAX_TEMP hitters: 0.50 → 0.42) to sharpen concentration. Don't change based on 16 chalk samples.
+
+### Session 53 — Ownership softmax temperatures too flat (data-confirmed)
+**What happened:** 8,766 matched records across 39 dates showed chalk players (>20% actual) under-projected by -7.33% for hitters and -11.85% for top SPs (>25% actual). Low-owned players over-projected +2.20%. Root cause: SOFTMAX_TEMP too high → model distributes ownership too evenly.
+**Rule:** SP temp 0.40→0.30, hitter temp 0.50→0.42. Weights and OWN_GLOBAL_SCALE=0.95 are correct — do not change them. Re-check after 4 weeks of data if chalk bias persists.
+
+### Session 53 — SP systematic bias is pitcher-archetype driven
+**What happened:** 112 players with ≥5 appearances show |bias|>3%. Top under-projected SPs are K-upside aces the public loves (Glasnow, Skubal, Cease, Peralta). Top over-projected SPs are injury-history/unfamiliar pitchers the public fades (deGrom, Bradish, Nola). This is a public-perception effect beyond raw DK projection.
+**Rule:** Consider adding a K-rate or public-perception signal to SP scoring if SP MAE stays >7% after temperature fix. Do not add player-specific hardcoded corrections until temperature changes are validated.
+
+### Session 53 — bulk_import_ownership.py auto-detects dates from player name voting
+**What happened:** 61 contest CSVs in Contest_CSVs were never imported into actual_ownership. load_actual_ownership.py --csv required manual date per file.
+**Rule:** Use bulk_import_ownership.py to batch-import all contest CSVs. Auto-detects game_date by voting across player name → player_projections matches (needs ≥5 matches at ≥50% agreement). Run this whenever new CSVs are downloaded.

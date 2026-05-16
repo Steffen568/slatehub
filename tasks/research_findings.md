@@ -3468,3 +3468,121 @@
 ## Winner Pattern Analysis — 2026-05-12 (60 contests, 801,622 entries)
 - Top 1% profile: 138% total own, 3.9 booms, 0.7 busts, 48 pitcher pts
 - Target: ownership 100-150%, 3+ booms, <1 bust, 25+ pitcher pts
+
+
+## Ownership Study — 2026-05-16 (657 player-slate records, 2 dates)
+
+### Overall Accuracy
+- **Matched records**: 657
+- **Bias**: +2.86% (positive = over-project)
+- **MAE**: 5.63%
+- **Correlation**: r=0.330
+
+### By Tier
+- Chalk  (actual >20%): n=16, bias=-7.81%, MAE=14.82%, r=-0.296
+- Mid    (actual 5-20%): n=176, bias=+2.36%, MAE=7.89%, r=0.172
+- Low    (actual <5%): n=465, bias=+3.42%, MAE=4.46%, r=0.165
+
+### Feature Correlations
+- proj_dk_pts (raw): r=+0.337 (was +0.557)
+- proj_dk_pts^1.5: r=+0.387
+- salary (raw): r=+0.374 (was +0.536)
+- salary^1.3: r=+0.397
+- game_total: r=+0.017
+- batting_order: r=-0.431 (was +0.203)
+- bo_score (mapped): r=+0.417
+- env_score: r=+0.026
+- value (PPK): r=+0.166 (was -0.055)
+- value_score^0.6: r=+0.197
+
+### Weight Optimization
+- Current MAE: 3.347%
+- Best MAE: 3.340% (improvement: +0.007%)
+
+### Recommendations
+- KEEP WEIGHTS: current weights within 0.007% of optimal
+- UPDATE OWN_GLOBAL_SCALE: 0.95 → 0.81  (residual bias=+2.86%)
+- PLAYER CORRECTIONS: insufficient data (0 players qualify) — skip for now
+
+### Top Over-Projected Players
+- 695734 (OF): proj=58.4% actual=2.6%  bias=+55.8%  n=3
+- 682928 (SS): proj=30.8% actual=1.0%  bias=+29.8%  n=3
+- 543807 (OF): proj=41.8% actual=15.6%  bias=+26.2%  n=3
+- 660821 (OF): proj=26.4% actual=3.6%  bias=+22.8%  n=3
+- 656941 (OF): proj=30.5% actual=9.2%  bias=+21.3%  n=3
+- 680718 (3B): proj=23.4% actual=4.5%  bias=+18.9%  n=3
+- 607208 (SS): proj=24.5% actual=6.4%  bias=+18.1%  n=3
+- 664770 (OF): proj=21.0% actual=2.9%  bias=+18.1%  n=3
+- 669127 (C): proj=27.0% actual=9.0%  bias=+18.0%  n=3
+- 691016 (OF): proj=21.8% actual=4.0%  bias=+17.8%  n=3
+
+### Top Under-Projected Players
+- 683737 (1B): proj=8.1% actual=21.0%  bias=-12.9%  n=3
+- 691718 (OF): proj=12.6% actual=23.6%  bias=-11.0%  n=3
+- 608324 (3B): proj=8.8% actual=19.7%  bias=-10.9%  n=3
+- 665161 (SS): proj=0.0% actual=9.6%  bias=-9.6%  n=3
+- 596115 (SS): proj=5.0% actual=14.2%  bias=-9.2%  n=3
+- 664023 (OF): proj=10.1% actual=18.8%  bias=-8.7%  n=3
+- 670541 (OF): proj=11.1% actual=19.6%  bias=-8.5%  n=3
+- 575929 (1B): proj=1.4% actual=9.4%  bias=-8.0%  n=3
+- 656775 (OF): proj=0.0% actual=7.1%  bias=-7.1%  n=3
+- 514888 (2B): proj=9.0% actual=15.5%  bias=-6.5%  n=3
+
+
+## Ownership Study — 2026-05-16 (8,766 player-slate records, 39 dates)
+
+### Overall Accuracy
+- **Matched records**: 8,766
+- **Bias**: +0.66% (positive = over-project)
+- **MAE**: 4.04%
+- **Correlation**: r=0.666
+
+### By Tier
+- Chalk  (actual >20%): n=506, bias=-7.33%, MAE=12.61%, r=0.505
+- Mid    (actual 5-20%): n=2817, bias=-0.87%, MAE=4.85%, r=0.379
+- Low    (actual <5%): n=5443, bias=+2.20%, MAE=2.83%, r=0.149
+
+### Feature Correlations
+- proj_dk_pts (raw): r=+0.491 (was +0.557)
+- proj_dk_pts^1.5: r=+0.547
+- salary (raw): r=+0.401 (was +0.536)
+- salary^1.3: r=+0.437
+- game_total: r=+0.186
+- batting_order: r=-0.274 (was +0.203)
+- bo_score (mapped): r=+0.273
+- env_score: r=+0.078
+- value (PPK): r=+0.073 (was -0.055)
+- value_score^0.6: r=+0.110
+
+### Weight Optimization
+- Current MAE: 3.635%
+- Best MAE: 3.624% (improvement: +0.011%)
+
+### Recommendations
+- KEEP WEIGHTS: current weights within 0.011% of optimal
+- KEEP OWN_GLOBAL_SCALE: 0.95 (bias=+0.66%, within tolerance)
+- ADD PLAYER_BIAS_CORRECTIONS: 112 players with |bias|>3% and ≥5 appearances
+
+### Top Over-Projected Players
+- 837227 (SP): proj=41.6% actual=14.2%  bias=+27.4%  n=4
+- 605400 (SP): proj=23.9% actual=9.3%  bias=+14.6%  n=6
+- 691783 (3B): proj=13.6% actual=2.0%  bias=+11.6%  n=6
+- 669302 (SP): proj=25.5% actual=15.7%  bias=+9.8%  n=3
+- 666200 (SP): proj=44.5% actual=34.8%  bias=+9.7%  n=6
+- 543135 (SP): proj=17.8% actual=8.7%  bias=+9.1%  n=6
+- 594798 (SP): proj=38.0% actual=29.0%  bias=+8.9%  n=5
+- 571945 (SP): proj=9.1% actual=0.4%  bias=+8.7%  n=6
+- 680694 (SP): proj=21.6% actual=13.0%  bias=+8.6%  n=7
+- 624133 (SP): proj=17.9% actual=9.4%  bias=+8.5%  n=5
+
+### Top Under-Projected Players
+- 656849 (SP): proj=17.6% actual=39.6%  bias=-22.0%  n=3
+- 607192 (SP): proj=38.1% actual=53.3%  bias=-15.2%  n=5
+- 656302 (SP): proj=29.5% actual=44.5%  bias=-15.0%  n=7
+- 695505 (SP): proj=24.5% actual=38.3%  bias=-13.8%  n=3
+- 681293 (SP): proj=10.8% actual=24.3%  bias=-13.5%  n=3
+- 686218 (SP): proj=13.0% actual=25.7%  bias=-12.7%  n=7
+- 642547 (SP): proj=15.5% actual=26.6%  bias=-11.1%  n=6
+- 667755 (SP): proj=20.5% actual=31.2%  bias=-10.7%  n=3
+- 592662 (SP): proj=25.8% actual=35.6%  bias=-9.8%  n=4
+- 693645 (SP): proj=17.3% actual=27.0%  bias=-9.7%  n=5
