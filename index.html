@@ -5389,30 +5389,12 @@ const SUPA_URL = 'https://rzgmnjfxlthxpoecyvnv.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ6Z21uamZ4bHRoeHBvZWN5dm52Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTMwMjUsImV4cCI6MjA4ODIyOTAyNX0.WCAkPKJCH5KM4E15QVOYr7BR6aW2M4dmu6WzsGnYlio';
 const sb = supabase.createClient(SUPA_URL, SUPA_KEY);
 
-// ── OWNER / CUSTOM PROJECTIONS ────────────────────────────────────────────────
-let _isOwner    = false;
+// ── CUSTOM PROJECTIONS ────────────────────────────────────────────────────────
 let _customProj = {};   // normName → { proj_dk_pts, proj_ownership, proj_floor, proj_ceiling }
 let _csvParsed  = null; // { headers, rows } from last file upload
 const LS_PROJ_KEY  = 'sh_proj_csv';
-const LS_OWNER_KEY = 'sh_owner_h';
 
 async function initOwnerMode() {
-  // Hash is SHA-256 of the owner password — never store the password itself
-  const CORRECT_HASH = 'e3c652f0ba0b4801205814f8b6bc49672c4c74e25b497770bb89b22cdeb4e951';
-  const stored = localStorage.getItem(LS_OWNER_KEY);
-  if (stored === CORRECT_HASH) { _isOwner = true; }
-  const param = new URLSearchParams(location.search).get('unlock');
-  if (param === '0') {
-    localStorage.removeItem(LS_OWNER_KEY); _isOwner = false;
-  } else if (param === '1' && !_isOwner) {
-    const pw = prompt('Enter owner password:');
-    if (pw) {
-      const buf  = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pw));
-      const hash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
-      if (hash === CORRECT_HASH) { localStorage.setItem(LS_OWNER_KEY, hash); _isOwner = true; }
-      else alert('Incorrect password.');
-    }
-  }
   // Restore previously uploaded CSV projections
   try {
     const raw = localStorage.getItem(LS_PROJ_KEY);
@@ -6868,9 +6850,7 @@ async function showPitcherPicker(teamId) {
   const [{ data: statsRows }, { data: salaryRows }, { data: projRows }] = await Promise.all([
     sb.from('pitcher_stats').select('player_id, era, k_pct, whip').in('player_id', pids).eq('season', statSeason),
     sb.from('dk_salaries').select('player_id, salary').in('player_id', pids),
-    _isOwner
-      ? sb.from('player_projections').select('player_id, proj_dk_pts, proj_floor, proj_ceiling, stats_level, proj_ownership').in('player_id', pids).eq('game_date', activeDate)
-      : Promise.resolve({ data: [] }),
+    sb.from('player_projections').select('player_id, proj_dk_pts, proj_floor, proj_ceiling, stats_level, proj_ownership').in('player_id', pids).eq('game_date', activeDate),
   ]);
 
   const statsMap = {};
@@ -6884,7 +6864,7 @@ async function showPitcherPicker(teamId) {
   (projRows || []).forEach(r => projMap[r.player_id] = r);
 
   // Per-slate ownership overlay
-  if (_isOwner && activeSlate && activeSlate !== 'all' && activeDate) {
+  if (activeSlate && activeSlate !== 'all' && activeDate) {
     const { data: slateOwnRows } = await sb.from('slate_ownership')
       .select('player_id,proj_ownership')
       .eq('game_date', activeDate)
@@ -7096,18 +7076,16 @@ async function loadStartingPitcher(spId, spName, homeTeam) {
       .select('salary, position, dk_slate')
       .eq('player_id', spId)
       .maybeSingle(),
-    _isOwner
-      ? sb.from('player_projections')
+    sb.from('player_projections')
           .select('proj_dk_pts, proj_floor, proj_ceiling, proj_ip, proj_ks, proj_er, win_prob, stats_level, proj_ownership')
           .eq('player_id', spId)
           .eq('game_date', activeDate)
-          .maybeSingle()
-      : Promise.resolve({ data: null }),
+          .maybeSingle(),
   ]);
   let projData = projData_;
 
   // Per-slate ownership overlay for SP hero
-  if (_isOwner && projData && activeSlate && activeSlate !== 'all' && activeDate) {
+  if (projData && activeSlate && activeSlate !== 'all' && activeDate) {
     const { data: soRow } = await sb.from('slate_ownership')
       .select('proj_ownership')
       .eq('player_id', spId).eq('game_date', activeDate).eq('dk_slate', activeSlate)
@@ -8685,12 +8663,10 @@ async function loadBatterStats(playerIds, lineupPlayers, year = '2026') {
     sb.from('dk_salaries')
       .select('player_id, salary, position, dk_slate')
       .in('player_id', playerIds),
-    _isOwner
-      ? sb.from('player_projections')
+    sb.from('player_projections')
           .select('player_id, proj_dk_pts, proj_floor, proj_ceiling, proj_pa, proj_1b, proj_2b, proj_3b, proj_hr, proj_bb, proj_r, proj_rbi, proj_sb, proj_ownership')
           .in('player_id', playerIds)
-          .eq('game_date', activeDate)
-      : Promise.resolve({ data: [] }),
+          .eq('game_date', activeDate),
   ]);
 
   if (statsRes.error) { console.log('No batter stats:', statsRes.error); return; }
@@ -8759,7 +8735,7 @@ async function loadBatterStats(playerIds, lineupPlayers, year = '2026') {
   (projRes.data || []).forEach(p => { projMap[String(p.player_id)] = p; });
 
   // Per-slate ownership overlay
-  if (_isOwner && activeSlate && activeSlate !== 'all' && activeDate && playerIds.length) {
+  if (activeSlate && activeSlate !== 'all' && activeDate && playerIds.length) {
     const { data: slateOwnRows } = await sb.from('slate_ownership')
       .select('player_id,proj_ownership')
       .eq('game_date', activeDate)

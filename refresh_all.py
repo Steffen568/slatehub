@@ -108,6 +108,7 @@ if STATS:
         print(f"\n  ERROR in Agent 1 (stats): {e}")
         logger.record('Agent 1 — Stats', False, 0.0, str(e))
     run_excel_enrichment(logger)
+    run_script('load_game_logs.py --days 14', 'Game Logs — stats refresh', logger)
 
 # ── MORNING (9:00 AM) ─────────────────────────────────────────────────────────
 if MORNING:
@@ -148,6 +149,7 @@ if MORNING:
 if FULL:
     # Bullpen first — refresh reliever appearances
     run_script('load_bullpen.py', 'Bullpen — full refresh', logger)
+    run_script('load_game_logs.py --days 14', 'Game Logs — full refresh', logger)
     try:
         # Agent 1 and Agent 2 start simultaneously
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
