@@ -3953,6 +3953,8 @@ function selectSlate(btn, slate) {
   btn.classList.add('active');
   activeSlate = slate;
   applySlateFilter();
+  // Compute PMS for every hitter in this slate using their projected opposing SP
+  batchComputeAndStorePMS(activeDate, slate);
 }
 
 function applySlateFilter() {
@@ -9475,6 +9477,110 @@ function renderAllPMS() {
     const p = document.getElementById('row' + i + '-pms');
     if (p?.classList.contains('active')) renderPMSBreakdown('row' + i);
   }
+}
+
+// ── Batch PMS — compute PMS for every hitter in the slate and write to slate_ownership
+// Triggered when a specific slate is selected. Uses allGames (which already has projected SPs
+// from the lineup provider) so no manual pitcher cycling is needed.
+async function batchComputeAndStorePMS(dateStr, slate) {
+  if (!dateStr || !slate || slate === 'all') return;
+
+  const slateGames = allGames.filter(g => g.game_date === dateStr && getSlatesForGame(g).has(slate));
+  if (!slateGames.length) return;
+
+  // Each team faces the OTHER team's SP
+  const teamOppSp = {};
+  slateGames.forEach(g => {
+    if (g.home_team_id && g.away_sp_id) teamOppSp[g.home_team_id] = { spId: g.away_sp_id, hand: g.away_sp_hand || null };
+    if (g.away_team_id && g.home_sp_id) teamOppSp[g.away_team_id] = { spId: g.home_sp_id, hand: g.home_sp_hand || null };
+  });
+
+  const spIds = [...new Set(Object.values(teamOppSp).map(x => x.spId).filter(Boolean))];
+  if (!spIds.length) return;
+
+  const gamePks = slateGames.map(g => g.game_pk);
+
+  // Load hitters (only batting-order starters)
+  const { data: lineupRows } = await sb.from('lineups')
+    .select('player_id,team_id,batting_order').in('game_pk', gamePks);
+  const hitters = (lineupRows || []).filter(r => r.batting_order != null);
+  if (!hitters.length) return;
+
+  const hitterIds = [...new Set(hitters.map(r => r.player_id))];
+
+  // Helper: chunked IN query
+  async function batchFetch(table, cols, column, ids, extra) {
+    const CHUNK = 150; let out = [];
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      let q = sb.from(table).select(cols).in(column, ids.slice(i, i + CHUNK));
+      if (extra) q = extra(q);
+      const { data } = await q;
+      if (data) out = out.concat(data);
+    }
+    return out;
+  }
+
+  const [pitStatsRows, pitSplitRows, arsenalRows,
+         batStatsRows, batSplitRows, batTrackRows, rosterRows] = await Promise.all([
+    batchFetch('pitcher_stats', 'player_id,season,stuff_plus,pitching_plus,xfip,k_pct,bb_pct,swstr_pct,barrel_pct,hard_hit_pct,arm_angle', 'player_id', spIds, q => q.order('season', { ascending: false })),
+    batchFetch('pitcher_splits', 'player_id,season,split,xwoba,woba,k_pct,bb_pct,hard_hit_pct', 'player_id', spIds, q => q.order('season', { ascending: false })),
+    batchFetch('pitch_arsenal', 'player_id,season,pitch_type,usage_pct,ivb,hb,release_height,extension,arm_angle', 'player_id', spIds, q => q.order('season', { ascending: false })),
+    batchFetch('batter_stats', 'player_id,xwoba,barrel_pct,hard_hit_pct,o_swing_pct', 'player_id', hitterIds),
+    batchFetch('batter_splits', 'player_id,split,xwoba,woba', 'player_id', hitterIds),
+    batchFetch('bat_tracking', 'player_id,attack_angle,swing_path_tilt,squared_up_pct', 'player_id', hitterIds),
+    batchFetch('rosters', 'player_id,bats', 'player_id', hitterIds),
+  ]);
+
+  // Build lookup maps (most recent season first — rows are ordered desc)
+  const pitStats = {}, pitSplits = {}, arsenal = {};
+  pitStatsRows.forEach(r => { if (!pitStats[r.player_id]) pitStats[r.player_id] = r; });
+  pitSplitRows.forEach(r => {
+    const s = (r.split || '').toUpperCase();
+    if (s !== 'L' && s !== 'R') return;
+    if (!pitSplits[r.player_id]) pitSplits[r.player_id] = {};
+    if (!pitSplits[r.player_id][s]) pitSplits[r.player_id][s] = r;
+  });
+  arsenalRows.forEach(r => { if (!arsenal[r.player_id]) arsenal[r.player_id] = []; arsenal[r.player_id].push(r); });
+
+  const batStats = {}, batSplits = {}, batTrack = {}, batsMap = {};
+  batStatsRows.forEach(r => { if (!batStats[r.player_id]) batStats[r.player_id] = r; });
+  batSplitRows.forEach(r => {
+    const s = (r.split || '').toUpperCase();
+    if (s !== 'L' && s !== 'R') return;
+    if (!batSplits[r.player_id]) batSplits[r.player_id] = {};
+    if (!batSplits[r.player_id][s]) batSplits[r.player_id][s] = r;
+  });
+  batTrackRows.forEach(r => { if (!batTrack[r.player_id]) batTrack[r.player_id] = r; });
+  rosterRows.forEach(r => { if (r.bats) batsMap[r.player_id] = r.bats; });
+
+  // Compute PMS for each hitter vs their opposing projected SP
+  const upserts = [];
+  hitters.forEach(h => {
+    const opp = teamOppSp[h.team_id];
+    if (!opp?.spId) return;
+    const { score } = computePMS(
+      pitStats[opp.spId] || null,
+      pitSplits[opp.spId] || null,
+      batTrack[h.player_id] || null,
+      batStats[h.player_id] || null,
+      batsMap[h.player_id] || null,
+      batSplits[h.player_id] || null,
+      null,   // VAA — derived inside computePMS from arsenal
+      null,   // L7 xwOBA — not available without game logs
+      arsenal[opp.spId] || [],
+      opp.hand
+    );
+    upserts.push({ player_id: h.player_id, game_date: dateStr, dk_slate: slate, pms_score: score });
+  });
+
+  if (!upserts.length) return;
+
+  for (let i = 0; i < upserts.length; i += 150) {
+    const { error } = await sb.from('slate_ownership')
+      .upsert(upserts.slice(i, i + 150), { onConflict: 'player_id,game_date,dk_slate' });
+    if (error) console.warn('[batchPMS] upsert error:', error.message);
+  }
+  console.log(`[batchPMS] Stored ${upserts.length} PMS scores for ${slate} on ${dateStr}`);
 }
 
 // ── HES — Hitter Environment Score
