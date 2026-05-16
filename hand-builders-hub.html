@@ -12730,8 +12730,8 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
   const xf = parseFloat(pd?.xfip) || null;
   if (pp != null || sp != null || xf != null) {
     let p = 0;
-    if (pp != null) p = pp <= 80 ? 2 : pp <= 95 ? 1 : 0;
-    else if (sp != null) p = sp <= 80 ? 2 : sp <= 95 ? 1 : 0;
+    if (pp != null) p = pp <= 80 ? 2 : pp <= 100 ? 1 : 0;
+    else if (sp != null) p = sp <= 80 ? 2 : sp <= 100 ? 1 : 0;
     else p = xf >= 4.50 ? 2 : xf >= 4.00 ? 1 : 0;
     components.push({ name: 'Pitcher Stuff Quality', pts: p, max: 2, pp, sp, xf });
   }
@@ -12766,7 +12766,7 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
   const swRaw = pd?.swstr_pct;
   if (kRaw != null) {
     const k = toD(kRaw);
-    let p = k <= 0.18 ? 2 : k <= 0.22 ? 1 : 0;
+    let p = k <= 0.18 ? 2 : k <= 0.24 ? 1 : 0;
     if (p < 2 && swRaw != null && toD(swRaw) <= 0.09) p = Math.min(p + 1, 2);
     components.push({ name: 'K Environment', pts: p, max: 2, k, sw: toD(swRaw) });
   }
@@ -12777,7 +12777,7 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
   const pHH = toR(pSplit?.hard_hit_pct) ?? toR(pd?.hard_hit_pct);
   if (bxw != null || sqUp != null) {
     const strongBatter = (bxw != null && bxw >= 0.370) || (sqUp != null && sqUp >= 13);
-    const strongPitcher = pHH != null && pHH >= 38;
+    const strongPitcher = (pHH != null && pHH >= 38) || (pBrl != null && pBrl >= 10);
     let p = 0;
     if (strongBatter && strongPitcher) p = 2;
     else if (strongBatter || strongPitcher) p = 1;
