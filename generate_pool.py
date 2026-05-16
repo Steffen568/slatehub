@@ -372,14 +372,17 @@ def fetch_data(target_date, slate_filter=None):
         ).in_('game_pk', game_pks).execute().data or []
         odds = {r['game_pk']: r for r in rows}
 
-    # Ownership (per-slate if available)
+    # Ownership + SlateHub PMS scores (per-slate if available)
     ownership = {}
+    pms_from_db = {}  # pms_score written by SlateHub frontend — the master oracle
     if slate_filter:
         own_rows = sb.table('slate_ownership').select(
-            'player_id,proj_ownership'
+            'player_id,proj_ownership,pms_score'
         ).eq('game_date', target_date).eq('dk_slate', slate_filter).limit(5000).execute().data or []
         for r in own_rows:
             ownership[r['player_id']] = r.get('proj_ownership', 0)
+            if r.get('pms_score') is not None:
+                pms_from_db[r['player_id']] = r['pms_score']
     if not ownership:
         own_rows = sb.table('player_projections').select(
             'player_id,proj_ownership'
@@ -696,7 +699,8 @@ def build_player_pool(data):
                     _team_batter_ids[t].append(p['player_id'])
 
 
-    # Individual PMS per hitter using all available data
+    # PMS per hitter — read from slate_ownership (written by SlateHub frontend, the master oracle).
+    # Fall back to neutral 5 if SlateHub hasn't run for this slate yet.
     for p in deduped:
         gpk = p.get('game_pk')
         hes = game_hes_map.get(gpk, 5.0)
@@ -706,27 +710,7 @@ def build_player_pool(data):
             p['pms'] = 5.0
             continue
 
-        tid = gpk_abbr_to_id.get((gpk, p['team']))
-        opp_sp_id = game_opp_sp.get(tid)
-        if not opp_sp_id:
-            p['pms'] = 5.0
-            continue
-
-        opp_pd = data['pitcher_stats'].get(opp_sp_id)
-        opp_splits = data['pitcher_splits'].get(opp_sp_id)
-        opp_vaa = data['pitcher_vaa'].get(opp_sp_id)
-        bt = data['bat_tracking'].get(p['player_id'])
-        b_stats = data['batter_stats'].get(p['player_id'])
-        b_splits = data['batter_splits'].get(p['player_id'])
-        bat_hand = data['bats_map'].get(p['player_id'])
-        l7form = data['l7_map'].get(p['player_id'])
-        sp_rows = data['arsenal_rows_by_sp'].get(opp_sp_id, [])
-        arm_angles = [safe(r.get('arm_angle')) for r in sp_rows if safe(r.get('arm_angle')) is not None]
-        sp_arm = sum(arm_angles) / len(arm_angles) if arm_angles else None
-
-        p['pms'] = compute_pms(opp_pd, opp_splits, bt, b_stats, bat_hand,
-                               b_splits, opp_vaa, l7form,
-                               sp_arsenal_rows=sp_rows, sp_arm_angle=sp_arm)
+        p['pms'] = pms_from_db.get(p['player_id'], 5.0)
 
     # Attach talent stats for leverage scoring (from analyze_leverage.py findings)
     for p in deduped:

@@ -9417,6 +9417,8 @@ function renderAllPMS() {
   const pd = _activePd;
   if (!pd) return;
 
+  const pmsUpserts = [];
+
   for (let i = 1; i <= 9; i++) {
     const rowEl = document.getElementById('row' + i);
     if (!rowEl) continue;
@@ -9433,6 +9435,11 @@ function renderAllPMS() {
     const l7xwoba = _l7games.length >= 2 ? _l7games.reduce((s, g) => s + parseFloat(g.xwoba), 0) / _l7games.length : null;
 
     const { score, grade, cls, pSplit } = computePMS(pd, _activeSplits, bt, bStats, batHand, bSplits, null, l7xwoba, _activeArsenal, getOpposingSpHand());
+
+    // Store for DB write — slate_ownership is the shared source of truth for PMS
+    if (activeDate && activeSlate && activeSlate !== 'all') {
+      pmsUpserts.push({ player_id: pid, game_date: activeDate, dk_slate: activeSlate, pms_score: score });
+    }
 
     // Update main row badge
     const badge = rowEl.querySelector('.br-matchup .matchup-badge');
@@ -9452,6 +9459,13 @@ function renderAllPMS() {
         splitWoba.textContent = handLabel;
       }
     }
+  }
+
+  // Write computed PMS scores to slate_ownership so lineup builder + pool generator can read them
+  if (pmsUpserts.length > 0) {
+    supabase.from('slate_ownership')
+      .upsert(pmsUpserts, { onConflict: 'player_id,game_date,dk_slate' })
+      .then(({ error }) => { if (error) console.warn('PMS upsert failed:', error.message); });
   }
 
   renderAllSplitsHighlight();
