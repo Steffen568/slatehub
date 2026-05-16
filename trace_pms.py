@@ -205,7 +205,7 @@ print(f'  8. Recent Form: skipped (no L7 data in pool builder)')
 
 total = sum(pts_list)
 max_total = sum(max_list)
-score = round((total / max_total) * 10) if max_total > 0 else 5
+score = min(10, round((total / max_total) * 10) + 1) if max_total > 0 else 5
 print(f'\n  TOTAL: {total}/{max_total} = {total/max_total:.3f} * 10 = {score}')
 print(f'  Pool builder PMS: {score}')
 print(f'  Frontend PMS:     6 (reported by user)')

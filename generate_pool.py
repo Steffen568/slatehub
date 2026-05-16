@@ -303,7 +303,7 @@ def compute_pms(pd, p_splits, bt, b_stats, bat_hand, b_splits=None, vaa=None, l7
         p = 1 if l7xwoba >= 0.400 else 0
         pts += p; max_pts += 1
 
-    score = round((pts / max_pts) * 10) if max_pts > 0 else 5
+    score = round((pts / max_pts) * 10) + 1 if max_pts > 0 else 5
     return clip(score, 1, 10)
 
 
