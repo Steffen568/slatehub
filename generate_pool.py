@@ -237,9 +237,9 @@ def compute_pms(pd, p_splits, bt, b_stats, bat_hand, b_splits=None, vaa=None, l7
     xf = safe(pd.get('xfip'), None)
     if pp is not None or sp is not None or xf is not None:
         if pp is not None:
-            p = 2 if pp <= 80 else 1 if pp <= 95 else 0
+            p = 2 if pp <= 80 else 1 if pp <= 100 else 0
         elif sp is not None:
-            p = 2 if sp <= 80 else 1 if sp <= 95 else 0
+            p = 2 if sp <= 80 else 1 if sp <= 100 else 0
         else:
             p = 2 if xf >= 4.50 else 1 if xf >= 4.00 else 0
         pts += p; max_pts += 2
@@ -276,7 +276,7 @@ def compute_pms(pd, p_splits, bt, b_stats, bat_hand, b_splits=None, vaa=None, l7
     sw_raw = safe(pd.get('swstr_pct'), None)
     if k_raw is not None:
         k = to_d(k_raw)
-        p = 2 if k <= 0.18 else 1 if k <= 0.22 else 0
+        p = 2 if k <= 0.18 else 1 if k <= 0.24 else 0
         if p < 2 and sw_raw is not None and to_d(sw_raw) <= 0.09:
             p = min(p + 1, 2)
         pts += p; max_pts += 2
@@ -287,7 +287,7 @@ def compute_pms(pd, p_splits, bt, b_stats, bat_hand, b_splits=None, vaa=None, l7
     p_hh = to_r(safe(p_split.get('hard_hit_pct') if p_split else None, None)) or to_r(safe(pd.get('hard_hit_pct'), None))
     if bxw is not None or sq_up is not None:
         strong_bat = (bxw is not None and bxw >= 0.370) or (sq_up is not None and sq_up >= 13)
-        strong_pit = p_hh is not None and p_hh >= 38
+        strong_pit = (p_hh is not None and p_hh >= 38) or (p_brl is not None and p_brl >= 10)
         p = 2 if strong_bat and strong_pit else 1 if strong_bat or strong_pit else 0
         pts += p; max_pts += 2
 

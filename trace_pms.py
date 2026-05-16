@@ -130,9 +130,9 @@ sp = safe(pd.get('stuff_plus'))
 xf = safe(pd.get('xfip'))
 if pp is not None or sp is not None or xf is not None:
     if pp is not None:
-        p = 2 if pp <= 80 else 1 if pp <= 95 else 0
+        p = 2 if pp <= 80 else 1 if pp <= 100 else 0
     elif sp is not None:
-        p = 2 if sp <= 80 else 1 if sp <= 95 else 0
+        p = 2 if sp <= 80 else 1 if sp <= 100 else 0
     else:
         p = 2 if xf >= 4.50 else 1 if xf >= 4.00 else 0
     pts_list.append(p); max_list.append(2)
@@ -169,7 +169,7 @@ k_raw = safe(p_split.get('k_pct') if p_split else None) or safe(pd.get('k_pct'))
 sw_raw = safe(pd.get('swstr_pct'))
 if k_raw is not None:
     k = to_d(k_raw)
-    p = 2 if k <= 0.18 else 1 if k <= 0.22 else 0
+    p = 2 if k <= 0.18 else 1 if k <= 0.24 else 0
     if p < 2 and sw_raw is not None and to_d(sw_raw) <= 0.09:
         p = min(p + 1, 2)
     pts_list.append(p); max_list.append(2)
@@ -183,10 +183,10 @@ bxw = safe(b_split.get('xwoba') if b_split else None) or safe(b_split.get('woba'
 p_hh_val = to_r(safe(p_split.get('hard_hit_pct') if p_split else None)) or to_r(safe(pd.get('hard_hit_pct')))
 if bxw is not None or sq_up is not None:
     strong_bat = (bxw is not None and bxw >= 0.370) or (sq_up is not None and sq_up >= 13)
-    strong_pit = p_hh_val is not None and p_hh_val >= 38
+    strong_pit = (p_hh_val is not None and p_hh_val >= 38) or (p_brl is not None and p_brl >= 10)
     p = 2 if strong_bat and strong_pit else 1 if strong_bat or strong_pit else 0
     pts_list.append(p); max_list.append(2)
-    print(f'  6. Contact Quality: sq_up={sq_up} bxw={bxw} p_hh={p_hh_val} strong_bat={strong_bat} strong_pit={strong_pit} -> {p}/2')
+    print(f'  6. Contact Quality: sq_up={sq_up} bxw={bxw} p_hh={p_hh_val} p_brl={p_brl} strong_bat={strong_bat} strong_pit={strong_pit} -> {p}/2')
 else:
     print(f'  6. Contact Quality: NO DATA (skipped)')
 
