@@ -4031,6 +4031,7 @@ let cachedBatTracking    = {};    // player_id -> bat tracking row
 let currentPitcherVAA    = null;  // estimated VAA (deg, negative) from loadArsenal physics
 let _cachedBatterStats   = {};    // player_id -> batter_stats row (for PMS)
 let _cachedBatterSplits  = {};    // player_id -> { L: split, R: split } (for PMS)
+let _pmsWriteTimer       = null;  // debounce handle for renderAllPMS → slate_ownership write
 let activeStatYear       = '2026';     // '2026', '2025', '3yr'
 let activePitcherYear    = '2026';     // '2026', '2025', '3yr'
 let activeBullpenTeamId  = null;
@@ -5734,7 +5735,7 @@ async function _cacheAllLineupsForDate(dateStr) {
 
 // Compute PMS for every hitter on the date and store to slate_ownership.pms_score.
 // Runs once on date load using the projected SPs already in allGames — no user interaction needed.
-// renderAllPMS() will later overwrite individual games with richer data (L7 xwOBA).
+// computeAllSlatePMS() is the sole writer to slate_ownership.pms_score.
 async function computeAllSlatePMS(dateStr, pool) {
   if (!dateStr || !pool.length) return;
   const games = allGames.filter(g => g.game_date === dateStr);
@@ -5762,14 +5763,16 @@ async function computeAllSlatePMS(dateStr, pool) {
     return out;
   }
 
-  const [pitStatsRows, pitSplitRows, arsenalRows, batStatsRows, batSplitRows, batTrackRows, rosterRows] = await Promise.all([
+  const [pitStatsRows, pitSplitRows, arsenalRows, batStatsRows, batSplitRows, batTrackRows, rosterRows, gameLogRows, pitRosterRows] = await Promise.all([
     batchFetch('pitcher_stats', 'player_id,stuff_plus,pitching_plus,xfip,k_pct,bb_pct,swstr_pct,barrel_pct,hard_hit_pct,arm_angle', 'player_id', spIds, q => q.order('season', { ascending: false })),
     batchFetch('pitcher_splits', 'player_id,split,xwoba,woba,k_pct,bb_pct,hard_hit_pct', 'player_id', spIds, q => q.order('season', { ascending: false })),
     batchFetch('pitch_arsenal', 'player_id,pitch_type,usage_pct,ivb,hb,release_height,extension,arm_angle', 'player_id', spIds, q => q.order('season', { ascending: false })),
-    batchFetch('batter_stats', 'player_id,xwoba,barrel_pct,hard_hit_pct,o_swing_pct', 'player_id', hitterIds),
-    batchFetch('batter_splits', 'player_id,split,xwoba,woba', 'player_id', hitterIds),
-    batchFetch('bat_tracking', 'player_id,attack_angle,swing_path_tilt,squared_up_pct', 'player_id', hitterIds),
+    batchFetch('batter_stats', 'player_id,xwoba,barrel_pct,hard_hit_pct,o_swing_pct,season', 'player_id', hitterIds, q => q.order('season', { ascending: false })),
+    batchFetch('batter_splits', 'player_id,split,xwoba,woba,season', 'player_id', hitterIds, q => q.order('season', { ascending: false })),
+    batchFetch('bat_tracking', 'player_id,attack_angle,swing_path_tilt,squared_up_pct,season', 'player_id', hitterIds, q => q.order('season', { ascending: false })),
     batchFetch('rosters', 'player_id,bats', 'player_id', hitterIds),
+    batchFetch('batter_game_logs', 'player_id,xwoba', 'player_id', hitterIds, q => q.order('game_date', { ascending: false }).limit(5000)),
+    batchFetch('rosters', 'player_id,throws', 'player_id', spIds),
   ]);
 
   const pitStats = {}, pitSplits = {}, arsenal = {};
@@ -5780,9 +5783,15 @@ async function computeAllSlatePMS(dateStr, pool) {
     if (!pitSplits[r.player_id]) pitSplits[r.player_id] = {};
     if (!pitSplits[r.player_id][s]) pitSplits[r.player_id][s] = r;
   });
-  arsenalRows.forEach(r => { if (!arsenal[r.player_id]) arsenal[r.player_id] = []; arsenal[r.player_id].push(r); });
+  const _arsenalSeason = {};
+  arsenalRows.forEach(r => {
+    if (!(_arsenalSeason[r.player_id])) _arsenalSeason[r.player_id] = r.season;
+    if (r.season !== _arsenalSeason[r.player_id]) return;
+    if (!arsenal[r.player_id]) arsenal[r.player_id] = [];
+    arsenal[r.player_id].push(r);
+  });
 
-  const batStats = {}, batSplits = {}, batTrack = {}, batsMap = {};
+  const batStats = {}, batSplits = {}, batTrack = {}, batsMap = {}, l7Map = {};
   batStatsRows.forEach(r => { if (!batStats[r.player_id]) batStats[r.player_id] = r; });
   batSplitRows.forEach(r => {
     const s = (r.split || '').toUpperCase();
@@ -5792,6 +5801,24 @@ async function computeAllSlatePMS(dateStr, pool) {
   });
   batTrackRows.forEach(r => { if (!batTrack[r.player_id]) batTrack[r.player_id] = r; });
   rosterRows.forEach(r => { if (r.bats) batsMap[r.player_id] = r.bats; });
+
+  // Fill null sp_hand from rosters.throws (games table often has null for hand)
+  const pitThrowsMap = {};
+  pitRosterRows.forEach(r => { if (r.throws) pitThrowsMap[r.player_id] = r.throws; });
+  Object.values(teamOppSp).forEach(opp => {
+    if (!opp.hand && opp.spId) opp.hand = pitThrowsMap[opp.spId] || null;
+  });
+
+  // L7 xwOBA — average of last 7 game logs (already sorted desc by date)
+  const logsPerPlayer = {};
+  gameLogRows.forEach(r => {
+    if (!logsPerPlayer[r.player_id]) logsPerPlayer[r.player_id] = [];
+    if (logsPerPlayer[r.player_id].length < 7) logsPerPlayer[r.player_id].push(r);
+  });
+  Object.entries(logsPerPlayer).forEach(([pid, logs]) => {
+    const vals = logs.map(g => g.xwoba).filter(v => v != null);
+    if (vals.length) l7Map[pid] = vals.reduce((a, b) => a + b, 0) / vals.length;
+  });
 
   // Determine which classic slate(s) each game belongs to
   const gameSlates = {};
@@ -5812,7 +5839,8 @@ async function computeAllSlatePMS(dateStr, pool) {
       batStats[h.player_id] || null,
       batsMap[h.player_id] || null,
       batSplits[h.player_id] || null,
-      null, null,
+      null,
+      l7Map[h.player_id] ?? null,
       arsenal[opp.spId] || [],
       opp.hand
     );
@@ -9045,9 +9073,10 @@ async function loadBatterFormData(playerIds, lineupPlayers) {
     .from('batter_game_logs')
     .select('player_id, game_date, woba, xwoba, avg_ev, barrel_pct, barrel_cnt, ab, hits, singles, doubles, triples, hr, r, rbi, bb, hbp, sb, k, opponent_team, opposing_sp_name')
     .in('player_id', playerIds)
-    .order('game_date', { ascending: false });
+    .order('game_date', { ascending: false })
+    .limit(5000);
 
-  if (error || !data) return;
+  if (error || !data) { if (error) console.error('batter_game_logs fetch error:', error); return; }
 
   // Group by player_id
   const grouped = {};
@@ -9102,11 +9131,10 @@ async function loadBatterFormData(playerIds, lineupPlayers) {
     }
   });
 
-  // Refresh form tabs that are currently open
+  // Pre-populate all 9 form panes so data is ready when user opens any tab
   lineupPlayers.slice(0, 9).forEach((player, i) => {
     const rowId = 'row' + (i + 1);
-    const pane  = document.getElementById(rowId + '-form');
-    if (pane?.classList.contains('active')) renderFormBars(rowId, 7);
+    renderFormBars(rowId, 7);
   });
 }
 
@@ -9512,7 +9540,7 @@ function renderAllPMS() {
   const pd = _activePd;
   if (!pd) return;
 
-  const pmsUpserts = [];
+  const _scored = [];
 
   for (let i = 1; i <= 9; i++) {
     const rowEl = document.getElementById('row' + i);
@@ -9531,10 +9559,7 @@ function renderAllPMS() {
 
     const { score, grade, cls, pSplit } = computePMS(pd, _activeSplits, bt, bStats, batHand, bSplits, null, l7xwoba, _activeArsenal, getOpposingSpHand());
 
-    // Store for DB write — slate_ownership is the shared source of truth for PMS
-    if (activeDate && activeSlate && activeSlate !== 'all') {
-      pmsUpserts.push({ player_id: pid, game_date: activeDate, dk_slate: activeSlate, pms_score: score });
-    }
+    _scored.push({ pid, score });
 
     // Update main row badge
     const badge = rowEl.querySelector('.br-matchup .matchup-badge');
@@ -9556,19 +9581,33 @@ function renderAllPMS() {
     }
   }
 
-  // Write computed PMS scores to slate_ownership so lineup builder + pool generator can read them
-  if (pmsUpserts.length > 0) {
-    supabase.from('slate_ownership')
-      .upsert(pmsUpserts, { onConflict: 'player_id,game_date,dk_slate' })
-      .then(({ error }) => { if (error) console.warn('PMS upsert failed:', error.message); });
-  }
-
   renderAllSplitsHighlight();
   renderStackGrade();
   // Refresh any PMS breakdown pane that's currently open
   for (let i = 1; i <= 9; i++) {
     const p = document.getElementById('row' + i + '-pms');
     if (p?.classList.contains('active')) renderPMSBreakdown('row' + i);
+  }
+
+  // Write scores to slate_ownership so lineup builder reads the same value.
+  // Debounced 400ms: pitcher data loads in 3 parallel waves (_activePd, _activeSplits,
+  // _activeArsenal); we write once after the last wave settles.
+  if (_scored.length && activeDate && activeDate !== 'all' && activeGame) {
+    const _snap = { scored: [..._scored], date: activeDate, game: activeGame };
+    if (_pmsWriteTimer) clearTimeout(_pmsWriteTimer);
+    _pmsWriteTimer = setTimeout(async () => {
+      const slates = [...getSlatesForGame(_snap.game)].filter(s => !s.startsWith('sd_'));
+      if (!slates.length) return;
+      const upserts = [];
+      _snap.scored.forEach(({ pid, score }) =>
+        slates.forEach(slate => upserts.push({ player_id: pid, game_date: _snap.date, dk_slate: slate, pms_score: score }))
+      );
+      for (let i = 0; i < upserts.length; i += 150) {
+        const { error } = await sb.from('slate_ownership').upsert(upserts.slice(i, i + 150), { onConflict: 'player_id,game_date,dk_slate' });
+        if (error) console.warn('[PMS write-back] upsert error:', error.message);
+      }
+      console.log(`[PMS write-back] ${upserts.length} scores written for ${_snap.date}`);
+    }, 400);
   }
 }
 

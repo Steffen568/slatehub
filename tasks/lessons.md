@@ -4,6 +4,15 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 
 ---
 
+## Database / Schema
+
+### batter_game_logs missing r / rbi / hbp columns caused silent fetch failure
+**What happened:** `load_game_logs.py` writes `r`, `rbi`, `hbp` to the table but the original `CREATE TABLE` comment didn't include them. The JS `loadBatterFormData` SELECT query referenced those columns. PostgREST returned a 400 error, which was silently swallowed (`if (error || !data) return`), leaving all players' form tabs empty.
+**Rule:** When `load_game_logs.py` writes a column, it must also appear in the `CREATE TABLE` comment AND in the `ALTER TABLE IF NOT EXISTS` block. JS SELECT errors are silent — always add `console.error` to surface them.
+**Fix:** `ALTER TABLE batter_game_logs ADD COLUMN IF NOT EXISTS r/rbi/hbp` then re-run `load_game_logs.py --days 30`.
+
+---
+
 ## Git / Deployment
 
 ### Files must live at repo root — never in subdirectories
@@ -788,3 +797,11 @@ requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leader
 ### Session 53 — bulk_import_ownership.py auto-detects dates from player name voting
 **What happened:** 61 contest CSVs in Contest_CSVs were never imported into actual_ownership. load_actual_ownership.py --csv required manual date per file.
 **Rule:** Use bulk_import_ownership.py to batch-import all contest CSVs. Auto-detects game_date by voting across player name → player_projections matches (needs ≥5 matches at ≥50% agreement). Run this whenever new CSVs are downloaded.
+
+
+### Session 54 — PMS mismatch: slatehub badge vs lineup builder (3 root causes)
+**What happened:** index.html showed PMS 10 for a batter; hand-builders-hub.html showed PMS 8. Three root causes compounded:
+1. `computeAllSlatePMS()` built the arsenal map from ALL seasons (no season pin), while the interactive `loadArsenal()` filters to `season = activePitcherYear` (2026). Multi-year pitch geometry produced different physics matchup scores.
+2. `bat_tracking` batch fetch had no season ordering — Supabase returned rows in undefined DB order (could be 2024 or 2025), while `loadBatTracking()` explicitly filters to `season = 2026`. Different `attack_angle`/`squared_up_pct` drove different physics/contact scores.
+3. `computeAllSlatePMS()` runs ONCE on page load using the projected SP from the games table. When the user later selects the correct pitcher in the SP picker, `renderAllPMS()` recomputes with fresh data — but never wrote those scores back to `slate_ownership`. The lineup builder kept reading the stale page-load value.
+**Rule:** `renderAllPMS()` is the master — it must write back to `slate_ownership` (debounced 400ms) after every pitcher selection so all consumers read the same value. `bat_tracking` fetches must always `order('season', desc)` to pin to current year. Arsenal maps must be season-pinned (first season per pitcher from desc-ordered rows).

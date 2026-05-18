@@ -20,9 +20,12 @@ SQL migration (run once in Supabase):
     doubles           INTEGER,
     triples           INTEGER,
     hr                INTEGER,
+    r                 INTEGER,
+    rbi               INTEGER,
     sb                INTEGER,
     k                 INTEGER,
     bb                INTEGER,
+    hbp               INTEGER,
     avg_ev            FLOAT,
     xwoba             FLOAT,
     barrel_cnt        INTEGER,
@@ -32,6 +35,11 @@ SQL migration (run once in Supabase):
     opposing_sp_name  VARCHAR(100),
     PRIMARY KEY (player_id, game_date)
   );
+  -- If upgrading an existing table, add the columns added after initial creation:
+  ALTER TABLE batter_game_logs
+    ADD COLUMN IF NOT EXISTS r   INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS rbi INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS hbp INTEGER DEFAULT 0;
 """
 
 import sys
