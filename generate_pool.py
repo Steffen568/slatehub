@@ -438,6 +438,7 @@ def fetch_data(target_date, slate_filter=None):
         'batter_stats': batter_stats, 'batter_splits': batter_splits,
         'bat_tracking': bat_tracking, 'bats_map': bats_map, 'l7_map': l7_map,
         'arsenal_rows_by_sp': arsenal_rows_by_sp,
+        'pms_from_db': pms_from_db,
     }
 
 
@@ -593,7 +594,7 @@ def build_player_pool(data):
             p['pms'] = 5.0
             continue
 
-        p['pms'] = pms_from_db.get(p['player_id'], 5.0)
+        p['pms'] = data['pms_from_db'].get(p['player_id'], 5.0)
 
     # Attach talent stats for leverage scoring (from analyze_leverage.py findings)
     for p in deduped:

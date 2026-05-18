@@ -5685,8 +5685,17 @@ async function loadPlayerPool(date, slate) {
     const spInfo  = teamId ? gameSpMap[teamId]   : null;
     const hesInfo = gamePk ? gameHesMap[gamePk]  : null;
 
-    // PMS: read from slate_ownership (written by SlateHub on date load — the single master).
+    // PMS: use stored value from SlateHub if available; compute locally as fallback.
     const storedPms = proj?.pms_score ?? null;
+    const oppSpId    = spInfo?.spId ?? null;
+    const oppPd      = oppSpId ? (spStatMap[oppSpId] || null) : null;
+    const computedPms = (storedPms == null && oppPd)
+      ? computePMS(oppPd, oppSpId ? (pSplitMap[oppSpId] || null) : null,
+          batTrackMap[s.player_id] || null, bs, batsMap[s.player_id] || null,
+          bSplitMap[s.player_id] || null, vaaMap[oppSpId] ?? null,
+          l7Map[s.player_id] ?? null, arsenalMap[oppSpId] || [],
+          throwsMap[oppSpId] || null).score
+      : null;
 
     allHitters.push({
       player_id:        s.player_id,
@@ -5720,7 +5729,7 @@ async function loadPlayerPool(date, slate) {
       sp_name:          spInfo?.name  ?? null,
       sp_grade:         spInfo?.grade ?? null,
       hes:              hesInfo?.score ?? null,
-      pms:              storedPms,
+      pms:              storedPms ?? computedPms,
       sprint_speed:     bs?.sprint_speed ?? null,
     });
   });
