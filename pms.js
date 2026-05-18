@@ -161,7 +161,7 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
   // Score: earned / available * 10, +1 offset so neutral matchups land at 5
   const totalPts = components.reduce((s, c) => s + c.pts, 0);
   const maxPts = components.reduce((s, c) => s + c.max, 0);
-  const score = maxPts > 0 ? Math.min(10, Math.round((totalPts / maxPts) * 10) + 1) : 5;
+  const score = maxPts > 0 ? Math.round((totalPts / maxPts) * 10) + 1 : 5;
 
   let grade, cls;
   if      (score >= 7) { grade = 'Advantage';  cls = 'mb-advantage';    }
