@@ -164,10 +164,10 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
   const score = maxPts > 0 ? Math.round((totalPts / maxPts) * 10) + 1 : 5;
 
   let grade, cls;
-  if      (score >= 7) { grade = 'Advantage';  cls = 'mb-advantage';    }
-  else if (score >= 6) { grade = 'Favorable';  cls = 'mb-favorable';    }
+  if      (score >= 9) { grade = 'Advantage';  cls = 'mb-advantage';    }
+  else if (score >= 7) { grade = 'Favorable';  cls = 'mb-favorable';    }
   else if (score >= 5) { grade = 'Neutral';    cls = 'mb-neutral';      }
-  else if (score >= 4) { grade = 'Tough';      cls = 'mb-tough';        }
+  else if (score >= 3) { grade = 'Tough';      cls = 'mb-tough';        }
   else                 { grade = 'Very Tough'; cls = 'mb-pitcher-edge'; }
 
   return { score, grade, cls, pSplit, components, totalPts, maxPts };

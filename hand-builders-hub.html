@@ -4581,13 +4581,13 @@ function abbrColor(abbr)    {
       || ABBR_COLORS[NAME_TO_ABBR[abbr] || NAME_TO_ABBR[key]]
       || { bg:'#252d38', tx:'#8899b0' };
 }
-// PMS color scale: 1-3 red, 4 orange, 5 neutral, 6 light green, 7+ dark green
+// PMS color scale: 1-2 red, 3-4 orange, 5-6 neutral, 7-8 light green, 9-11 dark green
 function pmsColor(v) {
   if (v == null) return { tx:'var(--muted)', bg:'transparent' };
-  if (v >= 7) return { tx:'#4ade80', bg:'rgba(74,222,128,.15)' };
-  if (v >= 6) return { tx:'#86efac', bg:'rgba(134,239,172,.10)' };
+  if (v >= 9) return { tx:'#4ade80', bg:'rgba(74,222,128,.15)' };
+  if (v >= 7) return { tx:'#86efac', bg:'rgba(134,239,172,.10)' };
   if (v >= 5) return { tx:'#94a3b8', bg:'transparent' };
-  if (v >= 4) return { tx:'#fb923c', bg:'rgba(251,146,60,.10)' };
+  if (v >= 3) return { tx:'#fb923c', bg:'rgba(251,146,60,.10)' };
   return { tx:'#f87171', bg:'rgba(248,113,113,.12)' };
 }
 function teamAbbr(fullName) { return NAME_TO_ABBR[fullName] || (fullName||'').slice(0,3).toUpperCase(); }
