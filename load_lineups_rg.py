@@ -101,7 +101,7 @@ def load_roster_lookup(team_ids):
     roster_lookup = {}  # (normalized_name, team_id) -> mlbam_id
     for tid in team_ids:
         try:
-            url = f'https://statsapi.mlb.com/api/v1/teams/{tid}/roster?rosterType=active'
+            url = f'https://statsapi.mlb.com/api/v1/teams/{tid}/roster?rosterType=40Man'
             r = requests.get(url, timeout=10)
             r.raise_for_status()
             for p in r.json().get('roster', []):
