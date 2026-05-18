@@ -5763,14 +5763,12 @@ async function computeAllSlatePMS(dateStr, pool) {
     return out;
   }
 
-  // Use the same season the interactive path uses — guarantees identical inputs to computePMS.
-  const _pitSeason = parseInt(activePitcherYear) || 2026;
-  const _batSeason = parseInt(activeStatYear)    || 2026;
+  const _batSeason = parseInt(activeStatYear) || 2026;
 
   const [pitStatsRows, pitSplitRows, arsenalRows, batStatsRows, batSplitRows, batTrackRows, rosterRows, gameLogRows, pitRosterRows] = await Promise.all([
-    batchFetch('pitcher_stats', 'player_id,stuff_plus,pitching_plus,xfip,k_pct,bb_pct,swstr_pct,barrel_pct,hard_hit_pct,arm_angle', 'player_id', spIds, q => q.eq('season', _pitSeason)),
-    batchFetch('pitcher_splits', 'player_id,split,xwoba,woba,k_pct,bb_pct,hard_hit_pct', 'player_id', spIds, q => q.eq('season', _pitSeason)),
-    batchFetch('pitch_arsenal', 'player_id,pitch_type,usage_pct,ivb,hb,release_height,extension,arm_angle', 'player_id', spIds, q => q.eq('season', _pitSeason).order('usage_pct', { ascending: false })),
+    batchFetch('pitcher_stats', 'player_id,season,stuff_plus,pitching_plus,xfip,k_pct,bb_pct,swstr_pct,barrel_pct,hard_hit_pct,arm_angle', 'player_id', spIds, q => q.order('season', { ascending: false })),
+    batchFetch('pitcher_splits', 'player_id,season,split,xwoba,woba,k_pct,bb_pct,hard_hit_pct', 'player_id', spIds, q => q.order('season', { ascending: false })),
+    batchFetch('pitch_arsenal', 'player_id,season,pitch_type,usage_pct,ivb,hb,release_height,extension,arm_angle', 'player_id', spIds, q => q.order('season', { ascending: false }).order('usage_pct', { ascending: false })),
     batchFetch('batter_stats', 'player_id,xwoba,barrel_pct,hard_hit_pct,o_swing_pct', 'player_id', hitterIds, q => q.eq('season', _batSeason)),
     batchFetch('batter_splits', 'player_id,split,xwoba,woba', 'player_id', hitterIds, q => q.eq('season', _batSeason)),
     batchFetch('bat_tracking', 'player_id,attack_angle,swing_path_tilt,squared_up_pct', 'player_id', hitterIds, q => q.eq('season', _batSeason)),
@@ -5779,15 +5777,22 @@ async function computeAllSlatePMS(dateStr, pool) {
     batchFetch('rosters', 'player_id,throws', 'player_id', spIds),
   ]);
 
+  // Pin each pitcher to its most recent season (rows ordered desc, first = newest)
   const pitStats = {}, pitSplits = {}, arsenal = {};
-  pitStatsRows.forEach(r => { pitStats[r.player_id] = r; });
+  pitStatsRows.forEach(r => { if (!pitStats[r.player_id]) pitStats[r.player_id] = r; });
+  const _pitSplitSeason = {};
   pitSplitRows.forEach(r => {
+    if (!_pitSplitSeason[r.player_id]) _pitSplitSeason[r.player_id] = r.season;
+    if (r.season !== _pitSplitSeason[r.player_id]) return;
     const s = (r.split || '').toUpperCase();
     if (s !== 'L' && s !== 'R') return;
     if (!pitSplits[r.player_id]) pitSplits[r.player_id] = {};
     pitSplits[r.player_id][s] = r;
   });
+  const _arsenalSeason = {};
   arsenalRows.forEach(r => {
+    if (!_arsenalSeason[r.player_id]) _arsenalSeason[r.player_id] = r.season;
+    if (r.season !== _arsenalSeason[r.player_id]) return;
     if (!arsenal[r.player_id]) arsenal[r.player_id] = [];
     arsenal[r.player_id].push(r);
   });
