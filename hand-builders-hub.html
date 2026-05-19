@@ -5376,7 +5376,6 @@ async function loadPlayerPool(date, slate) {
     if (r.bats)   batsMap[r.player_id]   = r.bats;
     if (r.throws) throwsMap[r.player_id] = r.throws;
   });
-
   // 4e. Batter game logs (L7 form) — recent xwOBA for PMS tiebreaker
   const glRaw = allPlayerIds.length
     ? await batchIn('batter_game_logs','player_id,game_date,xwoba','player_id',allPlayerIds,
@@ -5605,6 +5604,13 @@ async function loadPlayerPool(date, slate) {
     }
   });
 
+  // 8d. Pitcher throws — adds starter handedness to throwsMap for batter L/R split lookup in PMS.
+  // spIds are separate from allPlayerIds, so rosters weren't fetched for them above.
+  if (spIds.length) {
+    const pitRosterRaw = await batchIn('rosters','player_id,throws','player_id',spIds);
+    pitRosterRaw.forEach(r => { if (r.throws) throwsMap[r.player_id] = r.throws; });
+  }
+
   // Name-based fallback: spStatMap uses MLB API ids (from games table) which match pitcher_stats.
   // dk_salaries may use different ids, so we also index by lowercase full_name for fallback lookup.
   const spStatByName = {};
@@ -5685,9 +5691,25 @@ async function loadPlayerPool(date, slate) {
     const spInfo  = teamId ? gameSpMap[teamId]   : null;
     const hesInfo = gamePk ? gameHesMap[gamePk]  : null;
 
-    // PMS: read stored value written by SlateHub — no local computation.
-    const storedPms  = proj?.pms_score ?? null;
-    const computedPms = null;
+    // PMS: compute directly from the data already loaded above.
+    // pms.js (already included) has computePMS() — all required maps are in scope.
+    const spId = spInfo?.spId ?? null;
+    const pmsResult = spId
+      ? computePMS(
+          spStatMap[spId],
+          pSplitMap[spId],
+          batTrackMap[s.player_id],
+          bStatMap[s.player_id],
+          batsMap[s.player_id] ?? null,
+          bSplitMap[s.player_id],
+          vaaMap[spId] ?? null,
+          l7Map[s.player_id] ?? null,
+          arsenalMap[spId] ?? [],
+          throwsMap[spId] ?? null
+        )
+      : null;
+    const storedPms   = proj?.pms_score ?? null;
+    const computedPms = pmsResult?.score ?? null;
 
     allHitters.push({
       player_id:        s.player_id,

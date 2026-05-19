@@ -50,9 +50,25 @@ R_MULT   = {1: 1.25, 2: 1.20, 3: 1.10, 4: 1.00, 5: 0.95,
 RBI_MULT = {1: 0.75, 2: 0.85, 3: 1.15, 4: 1.25, 5: 1.20,
              6: 1.05, 7: 0.95, 8: 0.90, 9: 0.80}
 
-# Wind directions
+# Wind directions (fallback when cf_bearing/wind_deg not available)
 WIND_OUT_DIRS = {"S", "SSW", "SW", "WSW", "SSE", "SE"}
 WIND_IN_DIRS  = {"N", "NNW", "NW", "NNE", "NE", "WNW"}
+
+# Per-park wind sensitivity multipliers (venue_id → scalar).
+# Scales the wind effect magnitude up/down based on stadium exposure.
+# Outdoor parks not listed default to 1.0; domes already handled by is_outdoor=False.
+PARK_WIND_SENSITIVITY = {
+    8:  1.50,  # Wrigley Field — fully exposed, Lake Michigan wind tunnels
+    24: 1.50,  # Great American Ball Park — river valley bowl, small park
+    11: 1.40,  # Oracle Park — SF Bay winds, famously suppresses HRs
+    25: 1.30,  # Coors Field — altitude compounds wind, open bowl
+    28: 1.25,  # Target Field — exposed to Great Plains wind
+    29: 1.25,  # Guaranteed Rate Field — Lake Michigan effect
+    20: 1.20,  # PNC Park — open air, river valley
+    23: 1.20,  # Fenway Park — exposed upper deck, quirky layout
+    26: 1.15,  # Kauffman Stadium — open outfield, Great Plains
+    27: 1.15,  # Comerica Park — open air
+}
 
 # Marcel weights: current season (if enough PA/IP), prior1, prior2
 # Pitcher current-year weight boosted to 10 to react faster to early-season data
@@ -906,29 +922,49 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
 
 # ── Environment Multipliers ──────────────────────────────────────────────────
 
-def weather_hr_mult(weather_row: dict) -> float:
-    """HR probability multiplier from temperature and wind."""
+def weather_hr_mult(weather_row: dict, park: dict = None) -> float:
+    """HR probability multiplier from temperature and wind.
+
+    Uses cf_bearing + wind_deg for park-orientation-aware direction when available,
+    falling back to cardinal WIND_OUT/IN sets otherwise. Scales wind effect by
+    PARK_WIND_SENSITIVITY for stadiums that amplify or suppress wind more than average.
+    """
     if not weather_row or weather_row.get('is_outdoor') is False:
         return 1.0
     temp     = safe(weather_row.get('temp_f'), 72)
     wind_spd = safe(weather_row.get('wind_speed'), 0)
-    wind_dir = (weather_row.get('wind_dir') or '').strip().upper()
 
     temp_effect = ((temp - 72) / 10) * 0.02
     wind_effect = 0.0
     if wind_spd and wind_spd > 5:
-        # Alan Nathan physics: ~2-3% HR increase per mph blowing out.
-        # Use sqrt scaling to capture diminishing returns at extreme speeds:
-        # 10 mph → +13%, 15 mph → +20%, 20 mph → +30%, 25 mph → +38%
-        effective_spd = wind_spd - 5  # subtract threshold
-        if wind_dir in WIND_OUT_DIRS:
-            wind_effect = (effective_spd ** 0.7) * 0.04
-        elif wind_dir in WIND_IN_DIRS:
-            wind_effect = -(effective_spd ** 0.7) * 0.04
+        effective_spd = wind_spd - 5
+        wind_deg   = weather_row.get('wind_deg')
+        cf_bearing = weather_row.get('cf_bearing')
+
+        if wind_deg is not None and cf_bearing is not None:
+            # wind_deg: direction wind blows FROM; adding 180 gives direction it blows TOWARD.
+            # cf_bearing: azimuth from home plate to center field (0=N, 90=E, 180=S, 270=W).
+            # direction_factor: +1.0 = straight out to CF, -1.0 = straight in from CF.
+            wind_toward = (wind_deg + 180) % 360
+            angle_diff  = abs((wind_toward - cf_bearing + 180) % 360 - 180)
+            direction_factor = math.cos(math.radians(angle_diff))
+        else:
+            wind_dir = (weather_row.get('wind_dir') or '').strip().upper()
+            if wind_dir in WIND_OUT_DIRS:
+                direction_factor = 1.0
+            elif wind_dir in WIND_IN_DIRS:
+                direction_factor = -1.0
+            else:
+                direction_factor = 0.0
+
+        venue_id    = (park or {}).get('venue_id')
+        sensitivity = PARK_WIND_SENSITIVITY.get(venue_id, 1.0)
+        wind_effect = direction_factor * (effective_spd ** 0.7) * 0.04 * sensitivity
+
     return clip(1.0 + temp_effect + wind_effect, 0.75, 1.45)
 
 
-def weather_hit_mult(weather_row: dict) -> float:
+def weather_hit_mult(weather_row: dict, park: dict = None) -> float:
     """General hit/scoring multiplier from weather for display purposes.
     Blends temperature effect on contact with wind HR effect (dampened)."""
     if not weather_row or weather_row.get('is_outdoor') is False:
@@ -936,7 +972,7 @@ def weather_hit_mult(weather_row: dict) -> float:
     temp = safe(weather_row.get('temp_f'), 72)
     temp_effect = ((temp - 72) / 10) * 0.008
     # Include wind HR effect (dampened — HR is a subset of all scoring)
-    hr_mult = weather_hr_mult(weather_row)
+    hr_mult = weather_hr_mult(weather_row, park)
     wind_scoring = (hr_mult - 1.0) * 0.40  # ~40% of HR boost flows to total scoring
     return clip(1.0 + temp_effect + wind_scoring, 0.90, 1.15)
 
@@ -996,7 +1032,7 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     loc_hit_suppression = clip(1.0 - (location_quality - 100) * 0.001, 0.96, 1.04)
 
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
-    wx_hit = weather_hit_mult(weather)
+    wx_hit = weather_hit_mult(weather, park)
 
     # Line drive rate adjustment: high ld_pct batters produce more hits than BABIP alone predicts
     ld_adj = 1.0 + (talent.get('ld_pct', 0.21) - 0.21) * 0.5
@@ -1031,7 +1067,7 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     # Coefficient dampened 0.30→0.22: 45-day review shows Power archetype over-projected +1.4-1.8 pts
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.22, 0.85, 1.20)
 
-    wx_hr = weather_hr_mult(weather)
+    wx_hr = weather_hr_mult(weather, park)
     pitcher_hr_ratio = (pitcher['hr9'] / LEAGUE_AVG_HR9) if pitcher else 1.0
 
     # Park/weather sensitivity: low avg_ev batters hit more wall scrapers — more park-sensitive
@@ -1201,7 +1237,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     park_bb  = safe(park.get('bb_factor'), 100) / 100.0 if park else 1.0
     park_hr  = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
-    wx_hr = weather_hr_mult(weather)
+    wx_hr = weather_hr_mult(weather, park)
 
     # ── IP projection: blend Vegas + talent ─────────────────────────────────
     # Talent-based IP (raw — no matchup adjustment; Vegas already prices matchup)
@@ -1500,7 +1536,7 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.0015, 0.94, 1.06)
     loc_hit_suppression = clip(1.0 - (location_quality - 100) * 0.001, 0.96, 1.04)
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
-    wx_hit = weather_hit_mult(weather)
+    wx_hit = weather_hit_mult(weather, park)
     ld_adj = clip(1.0 + (talent.get('ld_pct', 0.21) - 0.21) * 0.5, 0.90, 1.12)
     # Player-specific qoc_mult: compare physical tools to what BABIP already reflects.
     # If BABIP is already "fair" for the player's barrel/HH/EV, qoc_mult is minimal.
@@ -1529,7 +1565,7 @@ def _compute_pa_rates(talent, pitcher, park, weather):
         pull_dev = talent['pull_pct'] - 0.40
         park_hr *= 1.0 + pull_dev * porch_factor * 3.0
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
-    wx_hr = weather_hr_mult(weather)
+    wx_hr = weather_hr_mult(weather, park)
     pitcher_hr_ratio = (pitcher['hr9'] / LEAGUE_AVG_HR9) if pitcher else 1.0
     # Park/weather sensitivity: low avg_ev = wall scrapers = more park-sensitive
     park_sens = clip(1.0 + (88.0 - talent.get('avg_ev', 88.0)) * 0.015, 0.85, 1.20)
@@ -1591,7 +1627,7 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     ev_adj = clip(1.0 + (talent.get('avg_ev', 88.0) - 88.0) * 0.008, 0.92, 1.10)
     qoc_mult = clip(1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3, 0.85, 1.25)
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
-    wx_hit = weather_hit_mult(weather)
+    wx_hit = weather_hit_mult(weather, park)
     # Add HR/BIP back to BABIP for total P(hit|BIP) — same fix as _compute_pa_rates
     bp_contact = max(0.30, 1.0 - talent['k_pct'] - talent['bb_pct'] - 0.01)
     bp_hr_per_bip = clip(talent['iso'] / 3.15, 0.005, 0.07) / bp_contact
@@ -1606,7 +1642,7 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
 
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
-    wx_hr = weather_hr_mult(weather)
+    wx_hr = weather_hr_mult(weather, park)
     park_sens = clip(1.0 + (88.0 - talent.get('avg_ev', 88.0)) * 0.015, 0.85, 1.20)
     # ISO already reflects parks — apply only 50% of deviation (same as _compute_pa_rates)
     effective_park_hr = 1.0 + (park_hr - 1.0) * 0.50 * park_sens
@@ -2068,7 +2104,7 @@ def fetch_data(target_date: str) -> dict:
     weather = {}
     if game_pks:
         rows = sb.table('weather').select(
-            'game_pk,temp_f,wind_speed,wind_dir,precip_pct,is_outdoor,humidity'
+            'game_pk,temp_f,wind_speed,wind_dir,wind_deg,cf_bearing,precip_pct,is_outdoor,humidity'
         ).in_('game_pk', game_pks).execute().data or []
         weather = {r['game_pk']: r for r in rows}
 
@@ -2531,7 +2567,7 @@ def run():
                 _pitcher_mult = round2(0.40 * pq + 0.30 * pk + 0.30 * (1.0/pbr) if pbr > 0 else 1.0)
             _platoon_mult = round2(talent.get('_platoon_adj', 1.0))
             _park_basic = safe(park_row.get('basic_factor'), 100) / 100.0 if park_row else 1.0
-            _wx_hit = weather_hit_mult(wx_row)
+            _wx_hit = weather_hit_mult(wx_row, park_row)
             _implied = None
             if odds_row:
                 _implied = safe(odds_row.get('home_implied' if is_home else 'away_implied'))
@@ -2789,7 +2825,7 @@ def run():
                 era_blend_wt = min(curr_ip_k / 300.0, 0.20)
                 era_anchor = era_anchor * (1.0 - era_blend_wt) + curr_era_val * era_blend_wt
             park_hr_f = safe(park_row.get('hr_factor'), 100) / 100.0 if park_row else 1.0
-            wx_hr = weather_hr_mult(wx_row)
+            wx_hr = weather_hr_mult(wx_row, park_row)
             park_er_adj = 1.0 + (park_hr_f - 1.0) * 0.45
             wx_er_adj = 1.0 + (wx_hr - 1.0) * 0.45
             exp_er = era_anchor * exp_ip / 9.0 * eff_opp_qual * park_er_adj * wx_er_adj

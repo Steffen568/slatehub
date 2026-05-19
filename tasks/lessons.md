@@ -4,6 +4,24 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 
 ---
 
+## Frontend / Lineup Builder
+
+### PMS grades showed null because lineup builder relied on slate_ownership lookup instead of computing locally
+**What happened:** `hand-builders-hub.html` set `computedPms = null` and only sourced PMS from `slate_ownership.pms_score` (written by `index.html`). If that table had no rows for the current date/slate, every hitter showed null PMS. All data needed to compute PMS (pitcher stats, splits, arsenal, bat tracking, batter splits, L7 logs) was already being fetched — just never used.
+**Rule:** When `pms.js` is already loaded and all required datasets are in scope, call `computePMS()` directly rather than depending on a separate pre-computed DB value. Use stored value as primary, computed as fallback: `storedPms ?? computedPms`.
+**Fix:** Added pitcher throws fetch for `spIds` into `throwsMap` (after arsenal maps are built). Replaced the `computedPms = null` stub with a real `computePMS()` call using `spStatMap`, `pSplitMap`, `batTrackMap`, `bStatMap`, `batsMap`, `bSplitMap`, `arsenalMap`, `l7Map`, `throwsMap`.
+
+---
+
+## Projection Engine
+
+### Wind direction was park-orientation-blind; sensitivity was flat across all stadiums
+**What happened:** `weather_hr_mult()` used a hardcoded set of cardinal directions (`WIND_OUT_DIRS = {"S","SW",...}`) assuming every ballpark faces north. Most don't — Wrigley faces east, Oracle northeast, etc. Also, a 15 mph wind at Wrigley had identical impact to Petco Park (no per-park sensitivity).
+**Rule:** Wind direction must be computed from `cf_bearing` (park's center-field azimuth) and `wind_deg` (actual bearing) using `cos(angle_diff)` for a continuous direction factor. Apply `PARK_WIND_SENSITIVITY` dict (keyed by `venue_id`) to scale wind magnitude per stadium. Both fields are already in the `weather` table — just add them to the SELECT.
+**Fix:** Added `PARK_WIND_SENSITIVITY` dict, updated `weather_hr_mult()` and `weather_hit_mult()` to accept `park` param, added `wind_deg,cf_bearing` to weather SELECT, updated all 8+ call sites.
+
+---
+
 ## Database / Schema
 
 ### batter_game_logs missing r / rbi / hbp columns caused silent fetch failure
