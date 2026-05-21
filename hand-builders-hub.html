@@ -7673,11 +7673,17 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
   // A dual-position player contributes 1.0 to both pos_X and pos_Y, so those
   // minimums can be satisfied by one player — but the bipartite assembly still
   // needs 2 distinct players to fill both physical slots. These enforce that.
-  problem.constraints['cov_c1b']  = { min: 2 };  // C/1B
-  problem.constraints['cov_ss2b'] = { min: 2 };  // SS/2B
-  problem.constraints['cov_2b3b'] = { min: 2 };  // 2B/3B
-  problem.constraints['cov_3bss'] = { min: 2 };  // 3B/SS
-  problem.constraints['cov_1b3b'] = { min: 2 };  // 1B/3B
+  // All 10 pairs of single-slot positions (C, 1B, 2B, 3B, SS)
+  problem.constraints['cov_c1b']  = { min: 2 };  // C  / 1B
+  problem.constraints['cov_c2b']  = { min: 2 };  // C  / 2B
+  problem.constraints['cov_c3b']  = { min: 2 };  // C  / 3B
+  problem.constraints['cov_css']  = { min: 2 };  // C  / SS
+  problem.constraints['cov_1b2b'] = { min: 2 };  // 1B / 2B
+  problem.constraints['cov_1b3b'] = { min: 2 };  // 1B / 3B
+  problem.constraints['cov_1bss'] = { min: 2 };  // 1B / SS
+  problem.constraints['cov_2b3b'] = { min: 2 };  // 2B / 3B
+  problem.constraints['cov_ss2b'] = { min: 2 };  // SS / 2B
+  problem.constraints['cov_3bss'] = { min: 2 };  // 3B / SS
 
   // Stack constraints
   if (opts.mainPlayerIds && opts.mainPlayerIds.length >= opts.mainSize && opts.mainSize > 0) {
@@ -7755,12 +7761,20 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
       }
     }
 
-    // Coverage for shared-eligibility pairs — any player eligible at either position counts
-    if (!isPitcher && (positions.includes('C')  || positions.includes('1B'))) varDef['cov_c1b']  = 1;
-    if (!isPitcher && (positions.includes('SS') || positions.includes('2B'))) varDef['cov_ss2b'] = 1;
-    if (!isPitcher && (positions.includes('2B') || positions.includes('3B'))) varDef['cov_2b3b'] = 1;
-    if (!isPitcher && (positions.includes('3B') || positions.includes('SS'))) varDef['cov_3bss'] = 1;
-    if (!isPitcher && (positions.includes('1B') || positions.includes('3B'))) varDef['cov_1b3b'] = 1;
+    // Coverage for all 10 pairs of single-slot positions — any player eligible at either counts
+    if (!isPitcher) {
+      const p = positions;
+      if (p.includes('C')  || p.includes('1B')) varDef['cov_c1b']  = 1;
+      if (p.includes('C')  || p.includes('2B')) varDef['cov_c2b']  = 1;
+      if (p.includes('C')  || p.includes('3B')) varDef['cov_c3b']  = 1;
+      if (p.includes('C')  || p.includes('SS')) varDef['cov_css']  = 1;
+      if (p.includes('1B') || p.includes('2B')) varDef['cov_1b2b'] = 1;
+      if (p.includes('1B') || p.includes('3B')) varDef['cov_1b3b'] = 1;
+      if (p.includes('1B') || p.includes('SS')) varDef['cov_1bss'] = 1;
+      if (p.includes('2B') || p.includes('3B')) varDef['cov_2b3b'] = 1;
+      if (p.includes('SS') || p.includes('2B')) varDef['cov_ss2b'] = 1;
+      if (p.includes('3B') || p.includes('SS')) varDef['cov_3bss'] = 1;
+    }
 
     // Team cap (normalized key so pitchers and hitters share the same constraint)
     if (teamKey) {
