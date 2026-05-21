@@ -11620,6 +11620,18 @@ function lateSwapBuildLP(eligPlayers, unlockedSlotDefs, remainingBudget, lockedP
     problem.constraints[`pos_${pos}`] = { min: cnt };
   }
 
+  // Coverage constraints for every pair of positions in REQ.
+  // A dual-eligible player contributes 1.0 to both pos_X and pos_Y, so one player
+  // can satisfy both minimums — but the bipartite assembly still needs REQ[X]+REQ[Y]
+  // distinct players to fill all those physical slots.
+  const reqPositions = Object.keys(REQ);
+  for (let i = 0; i < reqPositions.length; i++) {
+    for (let j = i + 1; j < reqPositions.length; j++) {
+      const px = reqPositions[i], py = reqPositions[j];
+      problem.constraints[`cov_${px}_${py}`] = { min: REQ[px] + REQ[py] };
+    }
+  }
+
   // Stack constraints — account for locked players already contributing to stacks
   const lockedMainCount = opts.mainPlayerIds
     ? Object.values(lockedSlots).filter(p => p && opts.mainPlayerIds.includes(p.player_id)).length
@@ -11718,9 +11730,18 @@ function lateSwapBuildLP(eligPlayers, unlockedSlotDefs, remainingBudget, lockedP
       total:   1,
     };
 
-    const frac = (isPitcher || eligPos.length === 1) ? 1 : 1 / eligPos.length;
     for (const pos of eligPos) {
-      varDef[`pos_${pos}`] = frac;
+      varDef[`pos_${pos}`] = 1;
+    }
+
+    // Coverage contributions — player counts toward any pair where they're eligible at either side
+    for (let i = 0; i < reqPositions.length; i++) {
+      for (let j = i + 1; j < reqPositions.length; j++) {
+        const px = reqPositions[i], py = reqPositions[j];
+        if (positions.includes(px) || positions.includes(py)) {
+          varDef[`cov_${px}_${py}`] = 1;
+        }
+      }
     }
 
     if (teamKey) {
