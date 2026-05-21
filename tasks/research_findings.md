@@ -3586,3 +3586,390 @@
 - 667755 (SP): proj=20.5% actual=31.2%  bias=-10.7%  n=3
 - 592662 (SP): proj=25.8% actual=35.6%  bias=-9.8%  n=4
 - 693645 (SP): proj=17.3% actual=27.0%  bias=-9.7%  n=5
+
+## Research Findings — 2026-05-12, 2026-05-13, 2026-05-14, 2026-05-15, 2026-05-16, 2026-05-17, 2026-05-18, 2026-05-19
+
+**Projection**: MAE=6.55, Bias=+0.29, Hitter MAE=6.21, Pitcher MAE=9.67
+**Ownership**: MAE=3.16%, Bias=+0.89%
+**Pool**: MAE=26.16, Bias=+1.23
+**Contest**: Winner=183.49677419354836, Top1%=151.17419338709678
+
+### Predictive Diagnostics
+
+**Hitter Missing Predictors** (correlated with error but not in model):
+- `pull_pct` r=-0.185 (n=227)
+- `cent_pct` r=+0.172 (n=227)
+- `ops` r=-0.130 (n=228)
+- `slg` r=-0.124 (n=228)
+- `obp` r=-0.118 (n=228)
+
+**Pitcher Missing Predictors** (correlated with error but not in model):
+- `pickoffs` r=-0.462 (n=20)
+- `swstr_pct` r=-0.383 (n=19)
+- `wild_pitches` r=-0.360 (n=20)
+- `cs_allowed` r=-0.317 (n=20)
+- `fb_pct` r=-0.309 (n=19)
+
+**Opposing Lineup Factors** (for pitcher projections):
+- `opp_gb_pct` r=-0.373 (n=28)
+- `opp_avg_ev` r=+0.321 (n=28)
+- `opp_k_pct` r=+0.310 (n=28)
+- `opp_bb_pct` r=+0.165 (n=28)
+- `opp_iso` r=+0.159 (n=28)
+
+**Optimal Context Weights**: Vegas=80% Park=15% Weather=5% (saves -0.00 MAE)
+
+**Archetype Biases:**
+- Power (ISO>.200): over-projected by 1.7 pts (n=51)
+- Contact (K%<15%): under-projected by 2.1 pts (n=57)
+
+**Recommendations:**
+- POOL: Best performing stack config is 4-4 — increase its weight in STACK_CONFIGS
+- POOL: Projections have 5.7 pt spread — use projection rank as primary sort for portfolio selection
+- CONTEST: Avg Top 1% threshold is 151.2 pts across 62 contests
+- CONTEST: Avg cash line is 111.6 pts — pool floor should exceed this
+- CONTEST: Avg winner scores 183.5 pts — need high-ceiling correlated stacks
+- OWNERSHIP: MAE is 3.2% (needs work)
+- TRACKING: Run this analysis daily to build sample size — patterns stabilize after 2+ weeks
+
+## Sim Validation — 2026-05-18
+
+### Distribution Calibration
+- **Hitters**: 82.8% in P10-P90 [PASS] (below floor=3.6%, above ceiling=13.6%)
+- **Pitchers**: 64.3% in P10-P90 [FAIL] (below floor=17.9%, above ceiling=17.9%)
+
+### Projection Accuracy
+- Overall: MAE=6.55, Bias=+0.29, r=0.207
+- Hitters: MAE=6.21 [WARN]
+- Pitchers: MAE=9.67 [WARN]
+
+### Pitcher Components
+- IP: MAE=1.08, Bias=-0.47
+- Ks: MAE=1.84, Bias=-0.38
+- ER: MAE=1.74, Bias=-0.53
+
+### Multiplier Effectiveness
+
+## Slate Review — 2026-05-18 / main
+
+- **Pool**: 1200 lineups, avg actual=74.6, cash line=73.2, GPP line=142.6, best=173.0
+- **Proj accuracy**: r=0.197, MAE=32.1, bias=+25.8
+- **Overlap**: 0/20 top-by-proj were actual winners
+- **Best strategy**: PMS (highest avg_pms)
+- **Top stack**: MIL (avg actual=105.5, 4.5% exposure)
+- **Biggest bust**: MacKenzie Gore (proj=16.9, actual=-0.7, 30% exp)
+- **Biggest missed opp**: Josh Bell (actual=35.0, 2.3% exp)
+
+
+## Ownership Calibration — 4 large-field contests (≥1000 entries)
+
+- **Matched players**: 379 (34 0%-actual ghosts excluded)
+- **Bias**: +5.65% (positive = over-project ownership)
+- **MAE**: 6.48%
+- **Correlation**: r=0.616
+
+- Chalk (>20% actual): n=12, bias=-1.48%, MAE=12.40%
+- Mid (5-20% actual): n=93, bias=+5.26%, MAE=6.82%
+- Low (<5% actual): n=274, bias=+6.10%, MAE=6.11%
+
+**Over-projected:**
+- Jacob deGrom: proj=41.8% actual=0.2%
+- Nathan Eovaldi: proj=34.4% actual=2.9%
+- Jose Soriano: proj=31.3% actual=0.7%
+- Shota Imanaga: proj=38.3% actual=9.4%
+- Jesus Luzardo: proj=49.9% actual=21.9%
+
+**Under-projected:**
+- Sandy Alcantara: proj=14.9% actual=37.9%
+- Eury Perez: proj=20.4% actual=40.9%
+- Pete Crow-Armstrong: proj=9.3% actual=23.6%
+- Dylan Cease: proj=34.4% actual=47.3%
+- Michael Busch: proj=8.5% actual=21.0%
+
+## Leverage Analysis — 2026-05-19 (43 contests, 4025 players)
+
+**Dataset**: 3648 hitters, 377 pitchers across 35 dates
+**Leverage hits**: 435 (10.8%) | **Chalk traps**: 99 (2.5%) | **Ceiling hits**: 379 (9.4%)
+
+### Hitter Predictors (correlation with outperformance)
+- `wRC+` r=+0.152 (n=3642)
+- `ISO` r=+0.122 (n=3642)
+- `xwOBA` r=+0.102 (n=3642)
+- `Salary` r=+0.073 (n=3648)
+- `Barrel%` r=+0.039 (n=3642)
+
+### Pitcher Predictors
+- `K%` r=+0.275 (n=377)
+- `Salary` r=+0.211 (n=377)
+- `xFIP` r=-0.247 (n=377)
+- `Win Prob` r=+0.090 (n=377)
+- `Stuff+` r=+0.178 (n=377)
+
+### Actionable Rules
+- **Hitter leverage**: ISO > 0.200 AND own < 10% -> 27% leverage rate (+17pp vs base)
+- **Hitter leverage**: wRC+ > 120 AND own < 10% -> 22% leverage rate (+12pp vs base)
+- **Hitter trap**: Own > 20% AND K% > 0.28 -> 68% chalk trap rate
+- **Pitcher leverage**: K% > 0.25 AND own < 15% -> 33% leverage rate (+17pp vs base)
+- **Pitcher leverage**: Stuff+ > 105 AND own < 15% -> 31% leverage rate (+14pp vs base)
+- **Pitcher trap**: Own > 25% AND Stuff+ < 100 -> 59% chalk trap rate
+- **Pitcher trap**: Own > 25% AND xFIP > 4.0 -> 56% chalk trap rate
+
+## Winner Pattern Analysis — 2026-05-19 (62 contests, 857,180 entries)
+- Top 1% profile: 137% total own, 3.8 booms, 0.7 busts, 49 pitcher pts
+- Target: ownership 100-150%, 3+ booms, <1 bust, 25+ pitcher pts
+
+## Research Findings — 2026-05-13, 2026-05-14, 2026-05-15, 2026-05-16, 2026-05-17, 2026-05-18, 2026-05-19, 2026-05-20
+
+**Projection**: MAE=6.14, Bias=+0.75, Hitter MAE=5.89, Pitcher MAE=8.32
+**Ownership**: MAE=5.33%, Bias=+4.55%
+**Pool**: MAE=27.76, Bias=+18.36
+**Contest**: Winner=183.73174603174604, Top1%=151.2166665079365
+
+### Predictive Diagnostics
+
+**Hitter Missing Predictors** (correlated with error but not in model):
+- `pull_pct` r=-0.153 (n=471)
+- `oppo_pct` r=+0.106 (n=471)
+- `cent_pct` r=+0.105 (n=471)
+- `avg_ev` r=+0.075 (n=476)
+- `rbi` r=+0.074 (n=472)
+
+**Pitcher Missing Predictors** (correlated with error but not in model):
+- `era` r=+0.267 (n=48)
+- `avg` r=+0.228 (n=48)
+- `whip` r=+0.194 (n=48)
+- `ip` r=-0.091 (n=48)
+
+**Opposing Lineup Factors** (for pitcher projections):
+- `opp_k_pct` r=+0.272 (n=58)
+- `opp_gb_pct` r=-0.251 (n=58)
+- `opp_avg_ev` r=+0.208 (n=58)
+- `opp_o_swing_pct` r=-0.124 (n=58)
+- `opp_bb_pct` r=+0.120 (n=58)
+
+**Optimal Context Weights**: Vegas=80% Park=15% Weather=5% (saves 0.00 MAE)
+
+**Archetype Biases:**
+- Power (ISO>.200): over-projected by 0.9 pts (n=109)
+
+**Recommendations:**
+- PROJECTION: increase context multiplier weights — hitter bias is -0.75 pts
+- OWNERSHIP: increase baseline ownership estimates — bias is +4.5%
+- POOL: Best performing stack config is 5-0 — increase its weight in STACK_CONFIGS
+- POOL: Projections have 11.6 pt spread — use projection rank as primary sort for portfolio selection
+- CONTEST: Avg Top 1% threshold is 151.2 pts across 63 contests
+- CONTEST: Avg cash line is 111.6 pts — pool floor should exceed this
+- CONTEST: Avg winner scores 183.7 pts — need high-ceiling correlated stacks
+- OWNERSHIP: increase baseline estimates — bias is +4.5%
+- OWNERSHIP: MAE is 5.3% — needs significant model improvement
+- TRACKING: Run this analysis daily to build sample size — patterns stabilize after 2+ weeks
+
+## Sim Validation — 2026-05-19
+
+### Distribution Calibration
+- **Hitters**: 90.7% in P10-P90 [WARN] (below floor=1.1%, above ceiling=8.2%)
+- **Pitchers**: 70.0% in P10-P90 [WARN] (below floor=16.7%, above ceiling=13.3%)
+
+### Projection Accuracy
+- Overall: MAE=5.75, Bias=+1.18, r=0.353
+- Hitters: MAE=5.6 [PASS]
+- Pitchers: MAE=7.06 [PASS]
+
+### Pitcher Components
+- IP: MAE=0.82, Bias=-0.12
+- Ks: MAE=1.82, Bias=-0.07
+- ER: MAE=1.47, Bias=-0.51
+
+### Multiplier Effectiveness
+
+## Slate Review — 2026-05-19 / main
+
+- **Pool**: 10000 lineups, avg actual=85.8, cash line=83.6, GPP line=151.6, best=200.6
+- **Proj accuracy**: r=0.037, MAE=25.5, bias=+15.1
+- **Overlap**: 0/20 top-by-proj were actual winners
+- **Best strategy**: PMS (highest avg_pms)
+- **Top stack**: ATH (avg actual=124.7, 3.2% exposure)
+- **Biggest bust**: Emmet Sheehan (proj=18.5, actual=1.4, 31% exp)
+- **Biggest missed opp**: Jarren Duran (actual=34.0, 7.4% exp)
+
+
+## Ownership Calibration — 4 large-field contests (≥1000 entries)
+
+- **Matched players**: 412 (36 0%-actual ghosts excluded)
+- **Bias**: +5.76% (positive = over-project ownership)
+- **MAE**: 6.53%
+- **Correlation**: r=0.614
+
+- Chalk (>20% actual): n=12, bias=-1.30%, MAE=12.70%
+- Mid (5-20% actual): n=95, bias=+5.38%, MAE=6.93%
+- Low (<5% actual): n=305, bias=+6.15%, MAE=6.16%
+
+**Over-projected:**
+- Jacob deGrom: proj=41.8% actual=0.2%
+- Nathan Eovaldi: proj=34.4% actual=2.9%
+- Jose Soriano: proj=31.3% actual=0.7%
+- Shota Imanaga: proj=38.3% actual=9.4%
+- Jesus Luzardo: proj=49.8% actual=21.9%
+
+**Under-projected:**
+- Sandy Alcantara: proj=14.9% actual=37.9%
+- Eury Perez: proj=20.4% actual=40.9%
+- Pete Crow-Armstrong: proj=9.2% actual=23.6%
+- Dylan Cease: proj=33.8% actual=47.3%
+- Michael Busch: proj=8.5% actual=21.0%
+
+## Leverage Analysis — 2026-05-20 (44 contests, 4657 players)
+
+**Dataset**: 4217 hitters, 440 pitchers across 36 dates
+**Leverage hits**: 503 (10.8%) | **Chalk traps**: 102 (2.2%) | **Ceiling hits**: 445 (9.6%)
+
+### Hitter Predictors (correlation with outperformance)
+- `wRC+` r=+0.161 (n=4209)
+- `ISO` r=+0.128 (n=4209)
+- `xwOBA` r=+0.111 (n=4209)
+- `Salary` r=+0.079 (n=4217)
+- `Barrel%` r=+0.049 (n=4208)
+
+### Pitcher Predictors
+- `K%` r=+0.263 (n=439)
+- `Salary` r=+0.226 (n=440)
+- `xFIP` r=-0.248 (n=439)
+- `Win Prob` r=+0.077 (n=440)
+- `Stuff+` r=+0.170 (n=439)
+
+### Actionable Rules
+- **Hitter leverage**: ISO > 0.200 AND own < 10% -> 27% leverage rate (+17pp vs base)
+- **Hitter leverage**: wRC+ > 120 AND own < 10% -> 22% leverage rate (+12pp vs base)
+- **Hitter trap**: Own > 20% AND K% > 0.28 -> 68% chalk trap rate
+- **Pitcher leverage**: K% > 0.25 AND own < 15% -> 33% leverage rate (+17pp vs base)
+- **Pitcher leverage**: Stuff+ > 105 AND own < 15% -> 31% leverage rate (+14pp vs base)
+- **Pitcher trap**: Own > 25% AND Stuff+ < 100 -> 59% chalk trap rate
+- **Pitcher trap**: Own > 25% AND xFIP > 4.0 -> 56% chalk trap rate
+
+## Winner Pattern Analysis — 2026-05-20 (63 contests, 866,660 entries)
+- Top 1% profile: 136% total own, 3.8 booms, 0.7 busts, 49 pitcher pts
+- Target: ownership 100-150%, 3+ booms, <1 bust, 25+ pitcher pts
+
+## Research Findings — 2026-05-14, 2026-05-15, 2026-05-16, 2026-05-17, 2026-05-18, 2026-05-19, 2026-05-20, 2026-05-21
+
+**Projection**: MAE=5.99, Bias=+0.91, Hitter MAE=5.74, Pitcher MAE=8.19
+**Ownership**: MAE=5.33%, Bias=+4.55%
+**Pool**: MAE=34.57, Bias=+30.05
+**Contest**: Winner=183.59921875, Top1%=151.09999984375
+
+### Predictive Diagnostics
+
+**Hitter Missing Predictors** (correlated with error but not in model):
+- `pull_pct` r=-0.127 (n=714)
+- `oppo_pct` r=+0.097 (n=714)
+- `cent_pct` r=+0.078 (n=714)
+- `fb_pct` r=-0.075 (n=716)
+- `gb_pct` r=+0.054 (n=716)
+
+**Pitcher Missing Predictors** (correlated with error but not in model):
+- `whip` r=+0.152 (n=76)
+- `avg` r=+0.145 (n=76)
+- `k9` r=+0.125 (n=76)
+- `era` r=+0.123 (n=76)
+- `gb_pct` r=+0.091 (n=76)
+
+**Opposing Lineup Factors** (for pitcher projections):
+- `opp_gb_pct` r=-0.197 (n=87)
+- `opp_avg_ev` r=+0.181 (n=87)
+- `opp_o_swing_pct` r=-0.156 (n=87)
+- `opp_k_pct` r=+0.145 (n=87)
+- `opp_iso` r=+0.139 (n=87)
+
+**Optimal Context Weights**: Vegas=80% Park=5% Weather=15% (saves 0.00 MAE)
+
+**Archetype Biases:**
+- Power (ISO>.200): over-projected by 1.3 pts (n=159)
+- Speed (SB pace>15): over-projected by 1.0 pts (n=216)
+
+**Recommendations:**
+- PROJECTION: increase context multiplier weights — hitter bias is -0.97 pts
+- OWNERSHIP: increase baseline ownership estimates — bias is +4.5%
+- POOL: Best performing stack config is 5-0 — increase its weight in STACK_CONFIGS
+- POOL: Projections have 9.3 pt spread — use projection rank as primary sort for portfolio selection
+- CONTEST: Avg Top 1% threshold is 151.1 pts across 64 contests
+- CONTEST: Avg cash line is 111.5 pts — pool floor should exceed this
+- CONTEST: Avg winner scores 183.6 pts — need high-ceiling correlated stacks
+- OWNERSHIP: increase baseline estimates — bias is +4.5%
+- OWNERSHIP: MAE is 5.3% — needs significant model improvement
+- TRACKING: Run this analysis daily to build sample size — patterns stabilize after 2+ weeks
+
+## Sim Validation — 2026-05-20
+
+### Distribution Calibration
+- **Hitters**: 89.9% in P10-P90 [WARN] (below floor=1.5%, above ceiling=8.6%)
+- **Pitchers**: 75.9% in P10-P90 [PASS] (below floor=13.8%, above ceiling=10.3%)
+
+### Projection Accuracy
+- Overall: MAE=5.69, Bias=+1.23, r=0.381
+- Hitters: MAE=5.45 [PASS]
+- Pitchers: MAE=7.92 [PASS]
+
+### Pitcher Components
+- IP: MAE=0.86, Bias=-0.57
+- Ks: MAE=1.7, Bias=-0.05
+- ER: MAE=1.5, Bias=-0.20
+
+### Multiplier Effectiveness
+
+
+## Ownership Calibration — 4 large-field contests (≥1000 entries)
+
+- **Matched players**: 412 (37 0%-actual ghosts excluded)
+- **Bias**: +5.80% (positive = over-project ownership)
+- **MAE**: 6.57%
+- **Correlation**: r=0.617
+
+- Chalk (>20% actual): n=12, bias=-1.09%, MAE=12.93%
+- Mid (5-20% actual): n=95, bias=+5.40%, MAE=6.95%
+- Low (<5% actual): n=305, bias=+6.19%, MAE=6.20%
+
+**Over-projected:**
+- Jacob deGrom: proj=41.8% actual=0.2%
+- Nathan Eovaldi: proj=34.4% actual=2.9%
+- Jose Soriano: proj=31.3% actual=0.7%
+- Shota Imanaga: proj=38.3% actual=9.4%
+- Jesus Luzardo: proj=49.8% actual=21.9%
+
+**Under-projected:**
+- Sandy Alcantara: proj=14.9% actual=37.9%
+- Eury Perez: proj=20.4% actual=40.9%
+- Pete Crow-Armstrong: proj=9.1% actual=23.6%
+- Dylan Cease: proj=33.8% actual=47.3%
+- Michael Busch: proj=8.4% actual=21.0%
+
+## Leverage Analysis — 2026-05-21 (45 contests, 2882 players)
+
+**Dataset**: 2599 hitters, 283 pitchers across 37 dates
+**Leverage hits**: 324 (11.2%) | **Chalk traps**: 65 (2.3%) | **Ceiling hits**: 278 (9.6%)
+
+### Hitter Predictors (correlation with outperformance)
+- `wRC+` r=+0.148 (n=2592)
+- `ISO` r=+0.131 (n=2592)
+- `xwOBA` r=+0.094 (n=2590)
+- `Salary` r=+0.083 (n=2599)
+- `Barrel%` r=+0.049 (n=2592)
+
+### Pitcher Predictors
+- `K%` r=+0.260 (n=283)
+- `Salary` r=+0.216 (n=283)
+- `xFIP` r=-0.258 (n=283)
+- `Win Prob` r=+0.075 (n=283)
+- `Stuff+` r=+0.216 (n=283)
+
+### Actionable Rules
+- **Hitter leverage**: ISO > 0.200 AND own < 10% -> 27% leverage rate (+17pp vs base)
+- **Hitter leverage**: wRC+ > 120 AND own < 10% -> 22% leverage rate (+12pp vs base)
+- **Hitter trap**: Own > 20% AND K% > 0.28 -> 68% chalk trap rate
+- **Pitcher leverage**: K% > 0.25 AND own < 15% -> 33% leverage rate (+17pp vs base)
+- **Pitcher leverage**: Stuff+ > 105 AND own < 15% -> 31% leverage rate (+14pp vs base)
+- **Pitcher trap**: Own > 25% AND Stuff+ < 100 -> 59% chalk trap rate
+- **Pitcher trap**: Own > 25% AND xFIP > 4.0 -> 56% chalk trap rate
+
+## Winner Pattern Analysis — 2026-05-21 (64 contests, 873,786 entries)
+- Top 1% profile: 136% total own, 3.8 booms, 0.7 busts, 49 pitcher pts
+- Target: ownership 100-150%, 3+ booms, <1 bust, 25+ pitcher pts
