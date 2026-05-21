@@ -7669,6 +7669,12 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
     problem.constraints[`pos_${pos}`] = { min: cnt };
   }
 
+  // Coverage constraint for shared-eligibility position pairs.
+  // A C/1B player contributes 1.0 to both pos_C and pos_1B, so those minimums
+  // can be satisfied by one player — but the bipartite assembly still needs 2
+  // distinct players to fill both physical slots. cov_c1b >= 2 enforces that.
+  problem.constraints['cov_c1b'] = { min: 2 };
+
   // Stack constraints
   if (opts.mainPlayerIds && opts.mainPlayerIds.length >= opts.mainSize && opts.mainSize > 0) {
     problem.constraints.stk_main = { min: opts.mainSize };
@@ -7743,6 +7749,11 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
       for (const pos of eligPos) {
         varDef[`pos_${pos}`] = 1;
       }
+    }
+
+    // Coverage for shared C/1B slots — any player eligible at C or 1B counts
+    if (!isPitcher && (positions.includes('C') || positions.includes('1B'))) {
+      varDef['cov_c1b'] = 1;
     }
 
     // Team cap (normalized key so pitchers and hitters share the same constraint)

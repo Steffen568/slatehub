@@ -6,10 +6,11 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 
 ## Frontend / Lineup Builder
 
-### Dual-position players (C/1B, 3B/SS) were always blocked from optimizer lineups
-**What happened:** `optoBuildLP` used fractional position contributions (`1/N` per eligible position) for multi-position players. A C/1B player contributed 0.5 to pos_C and 0.5 to pos_1B — neither reaching the `min: 1` constraint. To compensate you'd need both a separate C AND 1B, but that's 3 players in 2 slots, leaving only 7 players for 8 remaining required positions → infeasible. The LP always excluded them.
-**Rule:** LP position contributions for multi-position players must be 1.0 per eligible position, not fractional. With `total: { equal: 10 }` equaling `sum(REQ)`, a dual-pos player "double-satisfies" two constraints and the freed slot goes to the best remaining player.
-**Fix:** Removed `1 / eligPos.length` fraction; always contribute `1` to each eligible position.
+### Dual-position players (C/1B) were blocked from optimizer, then caused blank lineup slots
+**What happened (part 1):** `optoBuildLP` used `1/N` fractional position contributions. A C/1B player contributed 0.5 to pos_C and 0.5 to pos_1B — never reaching `min: 1`. Adding separate C + 1B to compensate used 3 players for 2 slots, leaving 7 for 8 remaining required positions → infeasible. The LP always excluded dual-position players.
+**What happened (part 2):** Fixing to 1.0 contributions caused blank slots: Hicks satisfied both pos_C ≥ 1 and pos_1B ≥ 1 alone, so the LP never picked a second C/1B-eligible player. Assembly assigned Hicks to C and left 1B empty.
+**Rule:** Multi-position players need 1.0 position contributions (not fractional) PLUS a coverage constraint (`cov_c1b: { min: 2 }`) ensuring at least 2 C-or-1B-eligible players are selected. The `pos_` minimum constraints guarantee positions are filled; the `cov_` constraint guarantees enough distinct players for the bipartite assembly match.
+**Fix:** Changed frac to 1.0; added `cov_c1b >= 2` constraint and `cov_c1b = 1` contribution for any C- or 1B-eligible hitter.
 
 ### PMS grades showed null because lineup builder relied on slate_ownership lookup instead of computing locally
 **What happened:** `hand-builders-hub.html` set `computedPms = null` and only sourced PMS from `slate_ownership.pms_score` (written by `index.html`). If that table had no rows for the current date/slate, every hitter showed null PMS. All data needed to compute PMS (pitcher stats, splits, arsenal, bat tracking, batter splits, L7 logs) was already being fetched — just never used.
