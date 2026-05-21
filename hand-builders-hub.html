@@ -7732,15 +7732,16 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
       total:   1,
     };
 
-    // Position contributions — multi-position hitters get fractional contribution
-    // (1/N per position) so a 3B/SS player can't satisfy both pos_3B and pos_SS
-    // with a single selection. Forces the LP to pick a distinct player per slot.
-    // Pitchers and single-position players always contribute 1.0.
+    // Position contributions: always 1.0 per eligible position.
+    // Fractional (1/N) was tried but makes C/1B dual-position players mathematically
+    // unselectable: 0.5 alone never reaches the min:1 constraint, and adding separate
+    // C + 1B players to compensate leaves too few slots for the remaining positions.
+    // With total:10 = sum(REQ), a dual-pos player "double-satisfies" both constraints
+    // and the extra freed slot goes to the best remaining player.
     const eligPos = positions.filter(pos => REQ[pos] !== undefined);
     if (eligPos.length > 0) {
-      const frac = (isPitcher || eligPos.length === 1) ? 1 : 1 / eligPos.length;
       for (const pos of eligPos) {
-        varDef[`pos_${pos}`] = frac;
+        varDef[`pos_${pos}`] = 1;
       }
     }
 

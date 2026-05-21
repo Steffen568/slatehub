@@ -6,6 +6,11 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 
 ## Frontend / Lineup Builder
 
+### Dual-position players (C/1B, 3B/SS) were always blocked from optimizer lineups
+**What happened:** `optoBuildLP` used fractional position contributions (`1/N` per eligible position) for multi-position players. A C/1B player contributed 0.5 to pos_C and 0.5 to pos_1B — neither reaching the `min: 1` constraint. To compensate you'd need both a separate C AND 1B, but that's 3 players in 2 slots, leaving only 7 players for 8 remaining required positions → infeasible. The LP always excluded them.
+**Rule:** LP position contributions for multi-position players must be 1.0 per eligible position, not fractional. With `total: { equal: 10 }` equaling `sum(REQ)`, a dual-pos player "double-satisfies" two constraints and the freed slot goes to the best remaining player.
+**Fix:** Removed `1 / eligPos.length` fraction; always contribute `1` to each eligible position.
+
 ### PMS grades showed null because lineup builder relied on slate_ownership lookup instead of computing locally
 **What happened:** `hand-builders-hub.html` set `computedPms = null` and only sourced PMS from `slate_ownership.pms_score` (written by `index.html`). If that table had no rows for the current date/slate, every hitter showed null PMS. All data needed to compute PMS (pitcher stats, splits, arsenal, bat tracking, batter splits, L7 logs) was already being fetched — just never used.
 **Rule:** When `pms.js` is already loaded and all required datasets are in scope, call `computePMS()` directly rather than depending on a separate pre-computed DB value. Use stored value as primary, computed as fallback: `storedPms ?? computedPms`.
