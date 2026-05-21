@@ -7673,7 +7673,7 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
   // A dual-position player contributes 1.0 to both pos_X and pos_Y, so those
   // minimums can be satisfied by one player — but the bipartite assembly still
   // needs 2 distinct players to fill both physical slots. These enforce that.
-  // All 10 pairs of single-slot positions (C, 1B, 2B, 3B, SS)
+  // All 10 pairs of single-slot positions (C, 1B, 2B, 3B, SS) — need 2 players per pair
   problem.constraints['cov_c1b']  = { min: 2 };  // C  / 1B
   problem.constraints['cov_c2b']  = { min: 2 };  // C  / 2B
   problem.constraints['cov_c3b']  = { min: 2 };  // C  / 3B
@@ -7684,6 +7684,12 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
   problem.constraints['cov_2b3b'] = { min: 2 };  // 2B / 3B
   problem.constraints['cov_ss2b'] = { min: 2 };  // SS / 2B
   problem.constraints['cov_3bss'] = { min: 2 };  // 3B / SS
+  // OF pairs — OF has 3 slots, so 3+1=4 distinct players needed to fill both sides
+  problem.constraints['cov_ofc']  = { min: 4 };  // OF / C
+  problem.constraints['cov_of1b'] = { min: 4 };  // OF / 1B
+  problem.constraints['cov_of2b'] = { min: 4 };  // OF / 2B
+  problem.constraints['cov_of3b'] = { min: 4 };  // OF / 3B
+  problem.constraints['cov_ofss'] = { min: 4 };  // OF / SS
 
   // Stack constraints
   if (opts.mainPlayerIds && opts.mainPlayerIds.length >= opts.mainSize && opts.mainSize > 0) {
@@ -7761,9 +7767,10 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
       }
     }
 
-    // Coverage for all 10 pairs of single-slot positions — any player eligible at either counts
+    // Coverage for all position pairs — any player eligible at either position counts
     if (!isPitcher) {
       const p = positions;
+      // Single-slot pairs (min:2)
       if (p.includes('C')  || p.includes('1B')) varDef['cov_c1b']  = 1;
       if (p.includes('C')  || p.includes('2B')) varDef['cov_c2b']  = 1;
       if (p.includes('C')  || p.includes('3B')) varDef['cov_c3b']  = 1;
@@ -7774,6 +7781,12 @@ function optoBuildLP(eligPlayers, opts, pastSets, perturbedProj = null) {
       if (p.includes('2B') || p.includes('3B')) varDef['cov_2b3b'] = 1;
       if (p.includes('SS') || p.includes('2B')) varDef['cov_ss2b'] = 1;
       if (p.includes('3B') || p.includes('SS')) varDef['cov_3bss'] = 1;
+      // OF pairs (min:4 — 3 OF slots + 1 other)
+      if (p.includes('OF') || p.includes('C'))  varDef['cov_ofc']  = 1;
+      if (p.includes('OF') || p.includes('1B')) varDef['cov_of1b'] = 1;
+      if (p.includes('OF') || p.includes('2B')) varDef['cov_of2b'] = 1;
+      if (p.includes('OF') || p.includes('3B')) varDef['cov_of3b'] = 1;
+      if (p.includes('OF') || p.includes('SS')) varDef['cov_ofss'] = 1;
     }
 
     // Team cap (normalized key so pitchers and hitters share the same constraint)
