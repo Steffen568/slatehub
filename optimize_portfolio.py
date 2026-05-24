@@ -2,25 +2,31 @@
 """
 optimize_portfolio.py — DFS Portfolio Optimizer
 
-Two selection strategies:
+Three selection strategies:
 
-1. Coverage-based (greedy_portfolio): rewards lineups that cover new high-upside
-   players not yet represented. Fast. Uses gpp_score + context_mult as signal.
+1. Leverage-based (leverage_portfolio) [DEFAULT]: sorts pool by gpp_score,
+   applies per-player caps derived from leverage = proj × (1 − ownership).
+   K-independent — same proportions at K=20 and K=150.
+   Backed by industry-standard leverage theory (4for4, FantasyLabs, SaberSim).
 
-2. Simulation-based (sim_greedy_portfolio): generates N game-outcome scenarios
+2. Coverage-based (greedy_portfolio): rewards lineups that cover new high-upside
+   players not yet represented. Known issue: K-dependent flip (chalk at 100% for
+   K=20, near 0% for K=150). Kept for comparison.
+
+3. Simulation-based (sim_greedy_portfolio): generates N game-outcome scenarios
    from player distributions, then greedily maximizes E[max score across portfolio].
-   No arbitrary parameters — diversity emerges from the math.
-   Backed by Hunter/Vielma/Zaman (2016) and Mlcoch (2024, 34% ROI in production).
+   Backed by Hunter/Vielma/Zaman (2016).
 
 Usage:
     py -3.12 optimize_portfolio.py --date 2026-05-01 --slate main --k 20
-    py -3.12 optimize_portfolio.py --date 2026-05-01 --slate main --k 20 --mode sim
     py -3.12 optimize_portfolio.py --date 2026-05-01 --slate main --k 150
+    py -3.12 optimize_portfolio.py --date 2026-05-01 --slate main --k 20 --mode sim
 
 Outputs: selected lineup IDs + diversity stats (avg pairwise overlap %).
 """
 import os
 import sys
+import math
 import argparse
 import numpy as np
 from datetime import date
@@ -31,15 +37,25 @@ load_dotenv()
 sb = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'])
 
 
-# ── Coverage reward weight by contest type ───────────────────────────────────
-# How aggressively to reward covering new high-upside players not yet in the portfolio.
-# Large GPP (100k+ field): maximize coverage of all boom opportunities.
-# Single entry: no coverage incentive — just pick the highest gpp_score lineup.
+# ── Coverage reward weight by contest type (coverage mode only) ──────────────
 COVERAGE_ALPHA = {
-    'large':  0.30,   # large GPP — strong coverage incentive
-    'mid':    0.20,   # mid-size GPP (1k–10k entries)
-    'small':  0.10,   # small field (20–100 players)
-    'single': 0.00,   # single-entry — pure gpp_score, no diversification
+    'large':  0.10,
+    'mid':    0.07,
+    'small':  0.04,
+    'single': 0.00,
+}
+
+# ── Exposure target range by contest type (leverage mode) ─────────────────────
+# (min_exp, max_exp) — leverage-proportional target percentage per player.
+# min_exp = low-leverage players (chalk); max_exp = high-leverage contrarians.
+# Larger field → lower caps needed (must be unique); smaller field → higher caps OK.
+EXP_RANGES = {
+    'gpp_large': (0.12, 0.35),   # 15k+ entries — diversify hard
+    'gpp_mid':   (0.15, 0.42),   # 10k–15k entries
+    'gpp_small': (0.18, 0.50),   # 5k–10k entries
+    'se_large':  (0.25, 0.60),   # single-entry, 1.5k+ field
+    'se_mid':    (0.30, 0.70),   # single-entry, 500–1k field
+    'se_small':  (0.35, 0.80),   # single-entry, <500 field — just play your best stuff
 }
 
 
@@ -63,22 +79,93 @@ def load_pool(game_date: str, slate: str) -> list[dict]:
 
 
 def load_player_quality(game_date: str, player_ids: list[int]) -> dict[int, float]:
-    """Load per-player quality score = proj_ceiling × context_mult (game-adjusted boom potential).
-    High quality = high ceiling AND favorable game environment (Vegas/park/weather).
-    Used as both coverage reward weights in selection and overlap weights in diversity reporting."""
+    """Load per-player leverage-weighted quality = sqrt(ceiling × context_mult / ownership).
+    Rewards high-ceiling plays that are underowned relative to their upside (Haugh/Singal 2021).
+    sqrt dampens extreme outliers; falls back to ceiling × ctx when ownership is missing."""
     quality = {}
     for i in range(0, len(player_ids), 500):
         chunk_ids = player_ids[i:i + 500]
         rows = (sb.table('player_projections')
-                  .select('player_id,proj_ceiling,context_mult')
+                  .select('player_id,proj_ceiling,context_mult,proj_ownership')
                   .eq('game_date', game_date)
                   .in_('player_id', chunk_ids)
                   .execute())
         for r in rows.data:
             ceil_ = r.get('proj_ceiling') or 0.0
             ctx   = r.get('context_mult') or 1.0
-            quality[r['player_id']] = max(ceil_ * ctx, 0.01)
+            own_  = r.get('proj_ownership') or 10.0
+            quality[r['player_id']] = max(ceil_ * ctx / max(own_, 1.0), 0.01) ** 0.5
     return quality
+
+
+def load_player_leverage(game_date: str, player_ids: list[int]) -> dict[int, float]:
+    """Load leverage = proj_dk_pts × (1 − ownership_fraction) for each player.
+    High leverage = well-projected AND underowned. Caps derived from these values
+    are proportional to leverage, giving K-independent portfolio exposure."""
+    leverage = {}
+    for i in range(0, len(player_ids), 500):
+        chunk_ids = player_ids[i:i + 500]
+        rows = (sb.table('player_projections')
+                  .select('player_id,proj_dk_pts,proj_ownership')
+                  .eq('game_date', game_date)
+                  .in_('player_id', chunk_ids)
+                  .execute())
+        for r in rows.data:
+            proj = r.get('proj_dk_pts') or 0.0
+            own  = (r.get('proj_ownership') or 10.0) / 100.0
+            leverage[r['player_id']] = max(proj * (1.0 - own), 0.01)
+    return leverage
+
+
+def leverage_portfolio(pool: list[dict], leverage: dict[int, float],
+                       k: int, contest: str = 'gpp_mid') -> list[dict]:
+    """Rank pool lineups by gpp_score with K-independent percentage-based exposure caps.
+
+    Each player gets a target exposure percentage derived from their leverage score
+    and the contest type (EXP_RANGES). A lineup is blocked if adding it would push
+    any player's running percentage above their target.
+
+    This check uses counts[pid] / selected_so_far — no K in the formula — so the
+    ranking order is identical regardless of K. Top 20 of a K=150 run == K=20 run.
+    """
+    for lu in pool:
+        lu['_pids'] = set(lu['player_ids'])
+
+    min_exp, max_exp = EXP_RANGES.get(contest, EXP_RANGES['gpp_mid'])
+    fallback_pct     = (min_exp + max_exp) / 2
+
+    levs    = list(leverage.values())
+    min_lev = min(levs) if levs else 0.01
+    max_lev = max(levs) if levs else 1.0
+    lev_rng = max_lev - min_lev or 1.0
+
+    target_pct: dict[int, float] = {}
+    for pid, lev in leverage.items():
+        norm = (lev - min_lev) / lev_rng
+        target_pct[pid] = min_exp + (max_exp - min_exp) * norm
+
+    sorted_pool   = sorted(pool, key=lambda x: x.get('gpp_score') or 0.0, reverse=True)
+    player_counts: dict[int, int] = {}
+    selected      = []
+
+    print(f"  Running leverage portfolio (contest={contest}, "
+          f"exp={min_exp:.0%}–{max_exp:.0%}) over {len(sorted_pool):,} candidates...")
+
+    for lu in sorted_pool:
+        if len(selected) >= k:
+            break
+        n = len(selected)
+        if n > 0 and any(
+            player_counts.get(pid, 0) / n > target_pct.get(pid, fallback_pct)
+            for pid in lu['_pids']
+        ):
+            continue
+        for pid in lu['_pids']:
+            player_counts[pid] = player_counts.get(pid, 0) + 1
+        lu['_rank'] = n + 1
+        selected.append(lu)
+
+    return selected
 
 
 def lineup_corr(pids_a: set, pids_b: set, player_quality: dict) -> float:
@@ -302,18 +389,24 @@ def main():
     parser.add_argument('--date',   default=str(date.today()), help='Game date (YYYY-MM-DD)')
     parser.add_argument('--slate',  default='main', help='Slate: main/early/turbo/night/all')
     parser.add_argument('--k',      type=int, default=20, help='Number of lineups to select')
-    parser.add_argument('--contest', default='large',
-                        choices=['large', 'mid', 'small', 'single'],
-                        help='Contest type: large/mid/small/single (controls coverage reward strength)')
-    parser.add_argument('--mode', default='coverage', choices=['coverage', 'sim'],
-                        help='Selection mode: coverage (fast) or sim (simulation-based)')
+    parser.add_argument('--contest', default='gpp_mid',
+                        choices=list(EXP_RANGES.keys()) + ['large', 'mid', 'small', 'single'],
+                        help='Contest type: gpp_large/gpp_mid/gpp_small/se_large/se_mid/se_small')
+    parser.add_argument('--mode', default='leverage',
+                        choices=['leverage', 'coverage', 'sim'],
+                        help='Selection mode: leverage (default, K-independent) / coverage / sim')
     parser.add_argument('--sims', type=int, default=N_SIMS,
                         help=f'Number of scenarios for sim mode (default: {N_SIMS})')
     args = parser.parse_args()
 
-    alpha = COVERAGE_ALPHA[args.contest]
+    # Map legacy contest names and derive coverage alpha
+    _contest_map = {'large': 'gpp_large', 'mid': 'gpp_mid', 'small': 'gpp_small', 'single': 'se_small'}
+    contest = _contest_map.get(args.contest, args.contest)
+    _alpha_map = {'gpp_large': 0.10, 'gpp_mid': 0.07, 'gpp_small': 0.04,
+                  'se_large': 0.02, 'se_mid': 0.01, 'se_small': 0.00}
+    alpha = _alpha_map.get(contest, 0.07)
     print(f"\nPortfolio Optimizer — {args.date} / {args.slate} / K={args.k} / "
-          f"mode={args.mode} / contest={args.contest} (alpha={alpha:.2f})")
+          f"mode={args.mode} / contest={contest}")
     print('=' * 65)
 
     # Load pool
@@ -327,17 +420,25 @@ def main():
     # Collect all unique player IDs
     all_pids = list({p for lu in pool for p in (lu['player_ids'] or [])})
 
-    if args.mode == 'sim':
+    if args.mode == 'leverage':
+        print(f"  Loading player leverage for {len(all_pids):,} players...")
+        leverage = load_player_leverage(args.date, all_pids)
+        print(f"  Leverage loaded for {len(leverage):,} players")
+        selected = leverage_portfolio(pool, leverage, args.k, contest)
+        # Use leverage as quality proxy for diversity reporting
+        player_quality = leverage
+
+    elif args.mode == 'sim':
         print(f"  Loading player sim data for {len(all_pids):,} players...")
         player_sim_data = load_player_sim_data(args.date, all_pids)
         print(f"  Simulating {args.sims:,} game scenarios...")
         scenario_scores = simulate_scenarios(player_sim_data, n_sims=args.sims)
         score_lineups_scenarios(pool, scenario_scores, n_sims=args.sims)
         selected = sim_greedy_portfolio(pool, args.k)
-        # Still need player_quality for diversity_stats reporting
         player_quality = {pid: d['ceil'] * d['ctx']
                           for pid, d in player_sim_data.items()}
-    else:
+
+    else:  # coverage
         print(f"  Loading player quality for {len(all_pids):,} players...")
         player_quality = load_player_quality(args.date, all_pids)
         print(f"  Quality loaded for {len(player_quality):,} players")
@@ -363,7 +464,37 @@ def main():
     avg_proj = np.mean([lu.get('proj', 0) for lu in selected])
     avg_gpp  = np.mean([lu.get('gpp_score', 0) for lu in selected])
     print(f"\n  Avg proj: {avg_proj:.1f}  |  Avg GPP score: {avg_gpp:.3f}")
-    print(f"  Pool IDs (for DB lookup): "
+
+    # Player exposure summary (top 12 by appearance count)
+    from collections import Counter
+    pid_counts = Counter(pid for lu in selected for pid in (lu['player_ids'] or []))
+    print(f"\n  Top player exposure (appearances / {len(selected)} lineups):")
+    # Load names for display from dk_salaries (no date filter — names don't change)
+    pid_names: dict[int, str] = {}
+    name_rows = (sb.table('dk_salaries')
+                   .select('player_id,name,position')
+                   .in_('player_id', list(pid_counts.keys()))
+                   .limit(500)
+                   .execute().data)
+    for r in name_rows:
+        if r['player_id'] not in pid_names:
+            pid_names[r['player_id']] = f"{r.get('name','?')[:18]:18s} ({r.get('position','?')[:3]})"
+    for pid, cnt in pid_counts.most_common(12):
+        pct = cnt / len(selected) * 100
+        label = pid_names.get(pid, f"pid={pid}")
+        bar = '#' * int(pct / 5)
+        print(f"    {label}  {cnt:3d} / {len(selected)}  {pct:4.0f}%  {bar}")
+
+    # Stack distribution
+    from collections import Counter as Ctr
+    team_counts = Ctr(lu.get('stack_team', '??') for lu in selected)
+    print(f"\n  Stack distribution:")
+    for team, cnt in team_counts.most_common():
+        pct = cnt / len(selected) * 100
+        bar = '#' * int(pct / 3)
+        print(f"    {team:<6}  {cnt:3d} / {len(selected)}  {pct:4.0f}%  {bar}")
+
+    print(f"\n  Pool IDs (for DB lookup): "
           f"{[lu.get('pool_id') for lu in selected[:10]]}...")
 
 

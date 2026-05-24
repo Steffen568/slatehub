@@ -4391,9 +4391,16 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-ui);font-feat
       <option value="portfolioScore">Portfolio</option>
     </select>
     <span style="color:var(--border);margin:0 4px;">|</span>
-    <label style="color:var(--muted);font-weight:700;">Portfolio:</label>
-    <input type="number" id="portfolio-k" value="20" min="1" max="500" style="width:44px;" class="opto-input" title="Number of entries to optimize for">
-    <button onclick="applyPortfolioRank()" style="font-weight:700;cursor:pointer;padding:2px 8px;background:rgba(167,139,250,.2);color:#a78bfa;border:1px solid rgba(167,139,250,.4);border-radius:4px;font-size:10px;" title="Rank lineups for portfolio selection — maximize E[max score across K lineups]">Portfolio Rank</button>
+    <label style="color:var(--muted);font-weight:700;">Contest:</label>
+    <select id="portfolio-contest-type" class="opto-input" style="width:108px;" title="Contest type — sets how unique/contrarian the portfolio needs to be">
+      <option value="gpp_large">GPP 15k+</option>
+      <option value="gpp_mid" selected>GPP 10-15k</option>
+      <option value="gpp_small">GPP 5-10k</option>
+      <option value="se_large">SE 1.5k+</option>
+      <option value="se_mid">SE 500-1k</option>
+      <option value="se_small">SE &lt;500</option>
+    </select>
+    <button onclick="applyPortfolioRank()" style="font-weight:700;cursor:pointer;padding:2px 8px;background:rgba(167,139,250,.2);color:#a78bfa;border:1px solid rgba(167,139,250,.4);border-radius:4px;font-size:10px;" title="Rank all pool lineups for portfolio — contest type controls exposure caps">Portfolio Rank</button>
     <span id="gpp-slider-wrap" style="display:inline-flex;align-items:center;gap:3px;margin-left:4px;">
       <span style="font-size:8px;color:var(--muted);font-weight:700;">Stack</span>
       <input type="range" id="gpp-leverage-wt" min="0" max="100" value="50" style="width:120px;height:16px;" oninput="debouncedGppUpdate()" title="0=Stack structure (gpp_score: ceiling/boom/bust/implied runs) ← → 100=Matchup quality (win%/boom/variance)">
@@ -10818,7 +10825,16 @@ function _simulatePortfolioScenarios(pool, nSims) {
 }
 
 function applyPortfolioRank() {
-  const k = Math.max(1, +(document.getElementById('portfolio-k')?.value || 20));
+  const EXP_RANGES = {
+    gpp_large: [0.12, 0.35],
+    gpp_mid:   [0.15, 0.42],
+    gpp_small: [0.18, 0.50],
+    se_large:  [0.25, 0.60],
+    se_mid:    [0.30, 0.70],
+    se_small:  [0.35, 0.80],
+  };
+  const contestType = document.getElementById('portfolio-contest-type')?.value || 'gpp_mid';
+  const [minExp, maxExp] = EXP_RANGES[contestType] || EXP_RANGES.gpp_mid;
 
   const fullPool = filterPoolCandidates();
   if (!fullPool.length) { showToast('No lineups in pool — adjust filters first'); return; }
@@ -10830,11 +10846,9 @@ function applyPortfolioRank() {
     c._portfolioPids = new Set(Object.values(c.lineup).map(p => p?.player_id).filter(Boolean));
   });
 
-  // Build leverage and pool-frequency from all pool lineups
+  // Build leverage from pool player data (proj × (1-own))
   const leverage = {};
-  const poolPlayerFreq = {};
   for (const c of fullPool) {
-    for (const pid of c._portfolioPids) poolPlayerFreq[pid] = (poolPlayerFreq[pid] || 0) + 1;
     for (const p of Object.values(c.lineup)) {
       if (!p?.player_id || leverage[p.player_id] !== undefined) continue;
       const proj = (projOverrides[p.player_id] ?? p.proj_dk_pts) || 0;
@@ -10843,20 +10857,17 @@ function applyPortfolioRank() {
     }
   }
 
-  // Per-player caps: min-max normalize leverage → 15%–50% of K, with pool-frequency floor
+  // Per-player target exposure % — K-independent, contest-type-driven
   const levVals = Object.values(leverage);
   const minLev  = levVals.length ? Math.min(...levVals) : 0.01;
   const maxLev  = levVals.length ? Math.max(...levVals) : 1.0;
   const levRng  = (maxLev - minLev) || 1.0;
-  const playerCaps = {};
+  const targetPct = {};
   for (const [pid, lev] of Object.entries(leverage)) {
-    const exposurePct = 0.15 + 0.35 * (lev - minLev) / levRng;
-    const leverageCap = Math.max(1, Math.round(k * exposurePct));
-    const freqFloor   = Math.max(1, Math.ceil(k * ((poolPlayerFreq[pid] || 0) / fullPool.length) * 0.20));
-    playerCaps[pid]   = Math.max(leverageCap, freqFloor);
+    const norm = (lev - minLev) / levRng;
+    targetPct[pid] = minExp + (maxExp - minExp) * norm;
   }
-  const capVals = Object.values(playerCaps).sort((a, b) => a - b);
-  const fallbackCap = capVals.length ? capVals[Math.floor(capVals.length / 2)] : Math.max(1, Math.round(k * 0.33));
+  const fallbackPct = (minExp + maxExp) / 2;
 
   // Sort full pool by GPP score descending
   const sorted = fullPool.slice().sort((a, b) =>
@@ -10864,10 +10875,11 @@ function applyPortfolioRank() {
     (a.gppScore || a.blendedScore || a.dbGppScore || a.metrics?.proj || 0)
   );
 
-  // Cap-based selection pass
+  // Percentage-based selection — K-independent ranking
+  // A player is blocked if their running % (count/selected) exceeds their target_pct.
+  // Same state at step N regardless of K → same lineup chosen → stable ordering.
   const playerCounts = {};
   const selected = [];
-  const selectedSet = new Set();
 
   const _pidsOverlap = (a, b) => {
     let shared = 0;
@@ -10875,39 +10887,31 @@ function applyPortfolioRank() {
     return (a.size + b.size - shared) > 0 ? shared / (a.size + b.size - shared) : 0;
   };
 
-  const _addLineup = (c) => {
-    if (selected.length > 0) {
+  for (const c of sorted) {
+    const n = selected.length;
+    if (n > 0) {
+      const blocked = [...c._portfolioPids].some(pid =>
+        (playerCounts[pid] || 0) / n > (targetPct[pid] ?? fallbackPct)
+      );
+      if (blocked) continue;
+    }
+    // Overlap badge vs previously selected
+    if (n > 0) {
       let ovSum = 0;
       for (const prev of selected) ovSum += _pidsOverlap(c._portfolioPids, prev._portfolioPids);
-      c._portfolioOverlap = Math.round(ovSum / selected.length * 100);
+      c._portfolioOverlap = Math.round(ovSum / n * 100);
     } else {
       c._portfolioOverlap = 0;
     }
-    c._portfolioRank = selected.length + 1;
+    c._portfolioRank = n + 1;
     selected.push(c);
-    selectedSet.add(c);
     for (const pid of c._portfolioPids) playerCounts[pid] = (playerCounts[pid] || 0) + 1;
-  };
-
-  for (const c of sorted) {
-    if (selected.length >= k) break;
-    const blocked = [...c._portfolioPids].some(pid =>
-      (playerCounts[pid] || 0) >= (playerCaps[pid] ?? fallbackCap)
-    );
-    if (!blocked) _addLineup(c);
   }
 
-  // Fill remaining slots uncapped if cap pass fell short
-  if (selected.length < k) {
-    for (const c of sorted) {
-      if (selected.length >= k) break;
-      if (!selectedSet.has(c)) _addLineup(c);
-    }
-  }
-
-  // Assign portfolioScore
+  // Assign portfolioScore (higher rank = higher score)
+  const total = selected.length;
   fullPool.forEach(c => { c.portfolioScore = 0; });
-  selected.forEach(c => { c.portfolioScore = k - c._portfolioRank + 1; });
+  selected.forEach(c => { c.portfolioScore = total - c._portfolioRank + 1; });
 
   // Aggregate overlap stats
   let overlapSum = 0, overlapCount = 0, overlapMax = 0;
@@ -10929,7 +10933,7 @@ function applyPortfolioRank() {
   renderPoolCards();
   renderPoolExposure();
 
-  showToast(`Portfolio: ${selected.length} lineups | avg overlap ${avgOverlap}% | max ${maxOverlap}% | ${elapsed}s`);
+  showToast(`Portfolio (${contestType}): ${total} ranked | avg overlap ${avgOverlap}% | max ${maxOverlap}% | ${elapsed}s`);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
