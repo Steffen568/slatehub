@@ -10826,12 +10826,12 @@ function _simulatePortfolioScenarios(pool, nSims) {
 
 function applyPortfolioRank() {
   const EXP_RANGES = {
-    gpp_large: [0.12, 0.35],
-    gpp_mid:   [0.15, 0.42],
-    gpp_small: [0.18, 0.50],
-    se_large:  [0.25, 0.60],
-    se_mid:    [0.30, 0.70],
-    se_small:  [0.35, 0.80],
+    gpp_large: [0.02, 0.65],
+    gpp_mid:   [0.03, 0.70],
+    gpp_small: [0.05, 0.75],
+    se_large:  [0.10, 0.80],
+    se_mid:    [0.15, 0.85],
+    se_small:  [0.20, 0.90],
   };
   const contestType = document.getElementById('portfolio-contest-type')?.value || 'gpp_mid';
   const [minExp, maxExp] = EXP_RANGES[contestType] || EXP_RANGES.gpp_mid;
@@ -10869,11 +10869,17 @@ function applyPortfolioRank() {
   }
   const fallbackPct = (minExp + maxExp) / 2;
 
-  // Sort full pool by GPP score descending
-  const sorted = fullPool.slice().sort((a, b) =>
-    (b.gppScore || b.blendedScore || b.dbGppScore || b.metrics?.proj || 0) -
-    (a.gppScore || a.blendedScore || a.dbGppScore || a.metrics?.proj || 0)
-  );
+  // Pre-compute lineup-level leverage (sum of player leverage scores) for sort
+  // This has much higher variance than gpp_score (flat 0.55-0.70) and naturally
+  // surfaces contrarian high-ceiling lineups over chalk-heavy ones.
+  for (const c of fullPool) {
+    let levSum = 0;
+    for (const pid of c._portfolioPids) levSum += (leverage[pid] || 0.01);
+    c._lineupLev = levSum;
+  }
+
+  // Sort by lineup leverage descending
+  const sorted = fullPool.slice().sort((a, b) => (b._lineupLev || 0) - (a._lineupLev || 0));
 
   // Percentage-based selection — K-independent ranking
   // A player is blocked if their running % (count/selected) exceeds their target_pct.

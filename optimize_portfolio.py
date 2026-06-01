@@ -50,12 +50,23 @@ COVERAGE_ALPHA = {
 # min_exp = low-leverage players (chalk); max_exp = high-leverage contrarians.
 # Larger field → lower caps needed (must be unique); smaller field → higher caps OK.
 EXP_RANGES = {
-    'gpp_large': (0.12, 0.35),   # 15k+ entries — diversify hard
-    'gpp_mid':   (0.15, 0.42),   # 10k–15k entries
-    'gpp_small': (0.18, 0.50),   # 5k–10k entries
-    'se_large':  (0.25, 0.60),   # single-entry, 1.5k+ field
-    'se_mid':    (0.30, 0.70),   # single-entry, 500–1k field
-    'se_small':  (0.35, 0.80),   # single-entry, <500 field — just play your best stuff
+    'gpp_large': (0.02, 0.65),   # 15k+ entries — concentrate leverage, fade chalk hard
+    'gpp_mid':   (0.03, 0.70),   # 10k–15k entries
+    'gpp_small': (0.05, 0.75),   # 5k–10k entries
+    'se_large':  (0.10, 0.80),   # single-entry, 1.5k+ field
+    'se_mid':    (0.15, 0.85),   # single-entry, 500–1k field
+    'se_small':  (0.20, 0.90),   # single-entry, <500 field — just play your best stuff
+}
+
+# ── Field percentile target by contest type (contest mode) ────────────────────
+# Larger field = higher bar to reach the money. Override with --field-percentile.
+CONTEST_PERCENTILE = {
+    'gpp_large': 99.5,   # 15k+ entries — need to be elite to win
+    'gpp_mid':   99.0,   # 10k–15k entries
+    'gpp_small': 97.0,   # 5k–10k entries
+    'se_large':  95.0,   # single-entry, 1.5k+ field
+    'se_mid':    90.0,   # single-entry, 500–1k field
+    'se_small':  85.0,   # single-entry, <500 field
 }
 
 
@@ -68,6 +79,25 @@ def load_pool(game_date: str, slate: str) -> list[dict]:
                .select('pool_id,player_ids,proj,gpp_score,avg_pms,stack_team,salary')
                .eq('game_date', game_date)
                .eq('pool_type', 'user'))
+        if slate != 'all':
+            q = q.eq('dk_slate', slate)
+        chunk = q.range(offset, offset + 999).execute()
+        rows += chunk.data
+        if len(chunk.data) < 1000:
+            break
+        offset += 1000
+    return rows
+
+
+def load_contest_pool(game_date: str, slate: str) -> list[dict]:
+    """Load contest (field) pool lineups from sim_pool table."""
+    rows = []
+    offset = 0
+    while True:
+        q = (sb.table('sim_pool')
+               .select('pool_id,player_ids')
+               .eq('game_date', game_date)
+               .eq('pool_type', 'contest'))
         if slate != 'all':
             q = q.eq('dk_slate', slate)
         chunk = q.range(offset, offset + 999).execute()
@@ -144,7 +174,9 @@ def leverage_portfolio(pool: list[dict], leverage: dict[int, float],
         norm = (lev - min_lev) / lev_rng
         target_pct[pid] = min_exp + (max_exp - min_exp) * norm
 
-    sorted_pool   = sorted(pool, key=lambda x: x.get('gpp_score') or 0.0, reverse=True)
+    for lu in pool:
+        lu['_lineup_lev'] = sum(leverage.get(pid, 0.01) for pid in (lu.get('player_ids') or []))
+    sorted_pool   = sorted(pool, key=lambda x: x.get('_lineup_lev', 0.0), reverse=True)
     player_counts: dict[int, int] = {}
     selected      = []
 
@@ -322,6 +354,44 @@ def score_lineups_scenarios(pool: list[dict],
         lu['_sim_scores'] = score_mat[indices].sum(axis=0) if indices else zeros.copy()
 
 
+def compute_field_thresholds(contest_pool: list[dict],
+                              scenario_scores: dict[int, np.ndarray],
+                              n_sims: int = N_SIMS,
+                              percentile: float = 99.0) -> np.ndarray:
+    """
+    Score all field (contest pool) lineups across scenarios, then return
+    the Pth percentile field score per scenario.
+
+    Returns: np.array(n_sims,) — the threshold your lineup must beat
+    to finish in the top (100-P)% of the field in each scenario.
+
+    Haugh & Singal (2021): treating this threshold as fixed per scenario
+    (not a free random variable) preserves the submodular structure of the
+    HVZ objective and its greedy approximation guarantee.
+    """
+    if not contest_pool:
+        return np.zeros(n_sims)
+
+    all_pids   = list(scenario_scores.keys())
+    pid_to_idx = {pid: i for i, pid in enumerate(all_pids)}
+    score_mat  = np.stack([scenario_scores[pid] for pid in all_pids])  # (n_players, n_sims)
+
+    n_field = len(contest_pool)
+    field_scores = np.zeros((n_field, n_sims))
+    for i, lu in enumerate(contest_pool):
+        pids    = lu.get('player_ids') or []
+        indices = [pid_to_idx[pid] for pid in pids if pid in pid_to_idx]
+        if indices:
+            field_scores[i] = score_mat[indices].sum(axis=0)
+
+    thresholds = np.percentile(field_scores, percentile, axis=0)  # (n_sims,)
+    print(f"  Field threshold (p{percentile:g}): "
+          f"mean={thresholds.mean():.1f}  "
+          f"p10={np.percentile(thresholds, 10):.1f}  "
+          f"p90={np.percentile(thresholds, 90):.1f}")
+    return thresholds
+
+
 def sim_greedy_portfolio(pool: list[dict], k: int,
                          verbose: bool = True) -> list[dict]:
     """
@@ -368,6 +438,55 @@ def sim_greedy_portfolio(pool: list[dict], k: int,
     return selected
 
 
+def contest_sim_portfolio(pool: list[dict],
+                          field_thresholds: np.ndarray,
+                          k: int,
+                          verbose: bool = True) -> list[dict]:
+    """
+    Greedy Max-E[max(user_score - field_threshold)] portfolio selection.
+
+    Identical structure to sim_greedy_portfolio but operates on relative
+    scores (user[i][s] - field_p99[s]) instead of absolute scores.
+
+    current_max starts at 0 — "portfolio currently at field threshold."
+    Only positive relative scores (beating the field) count as improvements.
+
+    Haugh & Singal (2021): shifting by a fixed per-scenario constant
+    preserves monotone submodularity → greedy approximation ≥1-1/e holds.
+    """
+    n_sims = field_thresholds.shape[0]
+
+    sim_matrix      = np.stack([lu['_sim_scores'] for lu in pool])   # (n_pool, n_sims)
+    relative_matrix = sim_matrix - field_thresholds[np.newaxis, :]   # broadcast (n_pool, n_sims)
+
+    remaining_idx = list(range(len(pool)))
+    current_max   = np.zeros(n_sims)
+    selected      = []
+
+    if verbose:
+        print(f"  Running contest-sim portfolio (K={k}, n_sims={n_sims:,}, "
+              f"{len(pool):,} candidates)...")
+
+    while len(selected) < k and remaining_idx:
+        rem_relative = relative_matrix[remaining_idx]                    # (n_rem, n_sims)
+        improvements = np.maximum(0.0, rem_relative - current_max)       # marginal gain
+        exp_imp      = improvements.mean(axis=1)                         # (n_rem,)
+
+        best_local  = int(exp_imp.argmax())
+        best_global = remaining_idx[best_local]
+
+        chosen = pool[best_global]
+        chosen['_rank'] = len(selected) + 1
+        current_max = np.maximum(current_max, relative_matrix[best_global])
+        remaining_idx.pop(best_local)
+        selected.append(chosen)
+
+        if verbose and len(selected) % 10 == 0:
+            print(f"    Selected {len(selected)}/{k}...")
+
+    return selected
+
+
 def diversity_stats(selected: list[dict], player_quality: dict) -> dict:
     """Compute avg and max pairwise quality-weighted player overlap for selected portfolio."""
     n = len(selected)
@@ -393,10 +512,12 @@ def main():
                         choices=list(EXP_RANGES.keys()) + ['large', 'mid', 'small', 'single'],
                         help='Contest type: gpp_large/gpp_mid/gpp_small/se_large/se_mid/se_small')
     parser.add_argument('--mode', default='leverage',
-                        choices=['leverage', 'coverage', 'sim'],
-                        help='Selection mode: leverage (default, K-independent) / coverage / sim')
+                        choices=['leverage', 'coverage', 'sim', 'contest'],
+                        help='Selection mode: leverage (default) / coverage / sim / contest (field-relative)')
     parser.add_argument('--sims', type=int, default=N_SIMS,
                         help=f'Number of scenarios for sim mode (default: {N_SIMS})')
+    parser.add_argument('--field-percentile', type=float, default=None,
+                        help='Field percentile threshold for contest mode (default: auto from --contest)')
     args = parser.parse_args()
 
     # Map legacy contest names and derive coverage alpha
@@ -429,12 +550,44 @@ def main():
         player_quality = leverage
 
     elif args.mode == 'sim':
+        for lu in pool:
+            lu['_pids'] = set(lu['player_ids'])
         print(f"  Loading player sim data for {len(all_pids):,} players...")
         player_sim_data = load_player_sim_data(args.date, all_pids)
         print(f"  Simulating {args.sims:,} game scenarios...")
         scenario_scores = simulate_scenarios(player_sim_data, n_sims=args.sims)
         score_lineups_scenarios(pool, scenario_scores, n_sims=args.sims)
         selected = sim_greedy_portfolio(pool, args.k)
+        player_quality = {pid: d['ceil'] * d['ctx']
+                          for pid, d in player_sim_data.items()}
+
+    elif args.mode == 'contest':
+        for lu in pool:
+            lu['_pids'] = set(lu['player_ids'])
+        field_pct = args.field_percentile or CONTEST_PERCENTILE.get(contest, 99.0)
+        print(f"  Loading contest (field) pool...")
+        contest_pool = load_contest_pool(args.date, args.slate)
+        if not contest_pool:
+            print("  WARNING: No contest pool found — falling back to sim mode")
+            player_sim_data = load_player_sim_data(args.date, all_pids)
+            scenario_scores = simulate_scenarios(player_sim_data, n_sims=args.sims)
+            score_lineups_scenarios(pool, scenario_scores, n_sims=args.sims)
+            selected = sim_greedy_portfolio(pool, args.k)
+        else:
+            print(f"  Loaded {len(contest_pool):,} field lineups")
+            field_pids = list({p for lu in contest_pool for p in (lu['player_ids'] or [])})
+            all_pids_combined = list(set(all_pids) | set(field_pids))
+            print(f"  Loading player sim data for {len(all_pids_combined):,} players "
+                  f"(user + field)...")
+            player_sim_data = load_player_sim_data(args.date, all_pids_combined)
+            print(f"  Simulating {args.sims:,} game scenarios...")
+            scenario_scores = simulate_scenarios(player_sim_data, n_sims=args.sims)
+            score_lineups_scenarios(pool, scenario_scores, n_sims=args.sims)
+            field_thresholds = compute_field_thresholds(
+                contest_pool, scenario_scores,
+                n_sims=args.sims, percentile=field_pct
+            )
+            selected = contest_sim_portfolio(pool, field_thresholds, args.k)
         player_quality = {pid: d['ceil'] * d['ctx']
                           for pid, d in player_sim_data.items()}
 
