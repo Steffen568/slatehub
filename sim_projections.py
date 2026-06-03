@@ -76,14 +76,6 @@ MARCEL_WEIGHTS = {0: 5, 1: 4, 2: 3}
 PITCHER_CURRENT_WEIGHT = 10
 PITCHER_IP_FLOOR = 40  # treat early-season IP as at least this for blend weight
 
-# Breakout detection: if current-season xFIP improves by this much over prior-year
-# Marcel baseline, boost current-season effective IP to capture the breakout earlier.
-# Without this, a pitcher who's clearly leveled up (Soriano 2026: 2.63 xFIP vs 3.54 prior)
-# stays anchored to last year's mediocre numbers until 80+ IP accumulates.
-BREAKOUT_XFIP_THRESHOLD = 0.50   # min xFIP improvement to trigger boost
-BREAKOUT_IP_MULTIPLIER  = 2.0    # base multiplier for current-season effective IP
-BREAKOUT_MAX_MULTIPLIER = 3.0    # cap for scaled multiplier
-
 # Season-scaled minimums: ramp up as sample grows through the year
 # Opening Day ~Mar 27 → full season ~Sep 28 ≈ 185 days
 def _season_min(full_season_min, target_date=None):
@@ -815,38 +807,6 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
     babip  = clip(bayesian_update(babip_prior,  'babip',  STAB_BABIP), 0.22, 0.36)
     gb_pct = clip(bayesian_update(gb_prior,     'gb_pct', STAB_GB),    0.20, 0.65)
 
-    # ── Breakout detection (keep existing logic) ──────────────────────────
-    is_breakout = False
-    base_reg = 80
-    prior_row = stats_by_season.get(current_season - 1)
-    prior_ip = safe(prior_row.get('ip'), 0) if prior_row else 0
-    if prior_ip >= 100:
-        base_reg = max(30, base_reg - (prior_ip - 100) * 0.5)
-
-    if use_current and curr:
-        curr_xfip = safe(curr.get('xfip'))
-        if curr_xfip:
-            prior_num = base_reg * LEAGUE_AVG_XFIP
-            prior_den = float(base_reg)
-            for yr, wt in weights:
-                if yr == current_season or wt == 0:
-                    continue
-                row = stats_by_season.get(yr)
-                if not row:
-                    continue
-                val = safe(row.get('xfip'))
-                ip = safe(row.get('ip'), 0)
-                if val is None or ip == 0:
-                    continue
-                prior_num += val * ip * wt
-                prior_den += ip * wt
-            prior_xfip = prior_num / prior_den if prior_den > base_reg else LEAGUE_AVG_XFIP
-            xfip_improvement = prior_xfip - curr_xfip
-            if xfip_improvement >= BREAKOUT_XFIP_THRESHOLD:
-                is_breakout = True
-                print(f"    BREAKOUT detected: xFIP {curr_xfip:.2f} vs prior {prior_xfip:.2f} "
-                      f"(+{xfip_improvement:.2f})")
-
     # IP per GS — quality-tiered anchor blended with current-season actuals
     #
     # Phase 1 (quality anchor): Pitching+ drives the prior.
@@ -914,8 +874,6 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
         'swstr_pct': swstr_pct, 'csw_pct': csw_pct,
         'gb_pct': gb_pct, 'ip_per_gs': ip_per_gs,
         'velo': velo, 'lob_pct': lob_pct,
-        'is_breakout': is_breakout,
-        '_has_current_siera': bool(curr and safe(curr.get('siera'))),
         'sb_per_9': sb_per_9,
     }
 
@@ -1247,11 +1205,10 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     elif vegas_ip:
         proj_ip = vegas_ip * VEGAS_IP_WEIGHT + talent_ip * (1.0 - VEGAS_IP_WEIGHT)
     else:
-        # No Vegas anchor — regress 50% toward league avg (4.7 IP/GS).
-        # Modern MLB starters average ~4.7 IP/GS (SP usage has declined).
-        # Without Vegas workload signal, regress heavily to prevent inflated
-        # career IP/GS from dominating.
-        proj_ip = talent_ip * 0.50 + 4.7 * 0.50
+        # No Vegas anchor — regress 30% toward qualified-starter avg (5.2 IP/GS).
+        # Validated: actual avg for starters in projection_history = 5.28 IP.
+        # Light regression (30%) prevents extreme outliers while trusting talent.
+        proj_ip = talent_ip * 0.70 + 5.2 * 0.30
 
 
     # ── Pitcher splits adjustment ──────────────────────────────────────────
@@ -1336,22 +1293,15 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
             hp, ap = to_prob(home_ml), to_prob(away_ml)
             total = hp + ap
             team_win = (hp / total) if is_home else (ap / total)
-            ip_scale = clip(proj_ip / 5.1, 0.70, 1.30)
-            win_prob = clip(team_win * 0.78 * ip_scale, 0.10, 0.52)
+            win_prob = clip(team_win * 0.78, 0.08, 0.42)
 
     # ── ERA-anchored ER model ────────────────────────────────────────────
     # Rather than simulating base-state (which is hard to calibrate),
     # use the pitcher's ERA anchor (SIERA/xFIP blend) scaled by matchup
     # and environment as the per-9 ER rate, then simulate variance around it.
-    #
-    # This grounds ER in real pitching metrics instead of a fragile base-runner sim.
-    # Breakout pitchers: lean on xFIP over SIERA. If no current-season SIERA,
-    # SIERA is entirely stale prior-year data — weight it even less.
-    if talent.get('is_breakout'):
-        siera_wt = 0.25 if talent.get('_has_current_siera') else 0.15
-        era_anchor = (split_xfip * (1.0 - siera_wt) + talent['siera'] * siera_wt)
-    else:
-        era_anchor = (split_xfip * 0.50 + talent['siera'] * 0.50)
+    # 50/50 blend — Marcel Bayesian prior already captures talent-level changes;
+    # no separate breakout branch needed.
+    era_anchor = (split_xfip * 0.50 + talent['siera'] * 0.50)
     # LOB% adjustment: pitchers who strand runners well have lower ER than xFIP predicts.
     # Regress LOB% toward 72% league avg, then apply small ERA multiplier.
     # LOB% > 72% → fewer ER (multiplier < 1), LOB% < 72% → more ER (multiplier > 1)
@@ -1394,7 +1344,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # The old single stuff_day driving both created +1.4 DK inflation from
     # correlated IP × K compounding on good stuff days.
     stuff_day = rng.normal(1.0, stuff_sd, size=n_sims).clip(0.55, 1.50)
-    workload_day = rng.normal(1.0, 0.08, size=n_sims).clip(0.85, 1.15)
+    workload_day = rng.normal(1.0, 0.13, size=n_sims).clip(0.70, 1.30)
 
     # K/BB/hit rates driven by stuff quality (stuff_day)
     sim_k_rate  = np.clip(k_rate * stuff_day, 0.08, 0.50)
@@ -1404,7 +1354,7 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
 
     # ── Simulate n_sims games ─────────────────────────────────────────────
     # IP driven by workload (independent of stuff quality)
-    ip_sd = clip(0.85 * era_consistency, 0.55, 1.15)
+    ip_sd = clip(1.10 * era_consistency, 0.70, 1.40)
     sim_ip = rng.normal(proj_ip, ip_sd, size=n_sims)
     sim_ip = sim_ip * workload_day
     sim_ip = sim_ip.clip(1.0, 9.0)
@@ -2761,7 +2711,8 @@ def run():
             exp_k_rate = clip(blended_k * park_k_edge_dc, 0.08, 0.45)
 
             # IP quality adjustment: elite K pitchers go deeper, bad pitchers get pulled.
-            # Uses blended_k (already incorporates current-season pull) — avoids xFIP noise.
+            # Test data: elite K% (>0.27) pitchers average 21.9 DK actual vs 16.9 projected
+            # without this adjustment. k_ip_factor closes the -5.0 bias gap toward actual.
             # Asymmetric: declines penalized harder (sticky) vs improvements (could be schedule).
             if not is_opener:
                 k_ip_factor = blended_k / LEAGUE_AVG_K_PCT
@@ -2805,11 +2756,7 @@ def run():
             exp_hbp = exp_bf * 0.01
 
             # ER: from xFIP/SIERA blend with park/weather
-            if talent.get('is_breakout'):
-                siera_wt = 0.25 if talent.get('_has_current_siera') else 0.15
-                era_anchor = talent['xfip'] * (1.0 - siera_wt) + talent['siera'] * siera_wt
-            else:
-                era_anchor = talent['xfip'] * 0.50 + talent['siera'] * 0.50
+            era_anchor = talent['xfip'] * 0.50 + talent['siera'] * 0.50
             # ERA anchor direct blend: pull toward current-season xFIP when sample is meaningful.
             # Mirrors the K blend pattern — Bayesian xFIP has only ~2% current-season weight.
             curr_xfip_val = safe(curr_row.get('xfip')) if curr_row else None
@@ -2841,7 +2788,7 @@ def run():
                         return abs(ml)/(abs(ml)+100) if ml < 0 else 100/(ml+100)
                     hp, ap = _tp(hml), _tp(aml)
                     tw = (hp / (hp+ap)) if is_home else (ap / (hp+ap))
-                    exp_win = clip(tw * 0.78 * clip(exp_ip / 5.1, 0.70, 1.30), 0.10, 0.52)
+                    exp_win = clip(tw * 0.78, 0.08, 0.42)
 
             # DK Classic pitcher scoring — direct calculation (no sim bias)
             direct_dk = (exp_ip * 2.25 + exp_ks * 2.0 + exp_win * 4.0

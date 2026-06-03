@@ -297,7 +297,7 @@ def section_b(data):
     metrics['hitter_mae'] = round(h['mae'], 2) if h else 0
     metrics['pitcher_mae'] = round(p['mae'], 2) if p else 0
     metrics['verdict_hitter_mae'] = verdict_below(h['mae'], 6.0, 8.0) if h else 'N/A'
-    metrics['verdict_pitcher_mae'] = verdict_below(p['mae'], 8.0, 11.0) if p else 'N/A'
+    metrics['verdict_pitcher_mae'] = verdict_below(p['mae'], 7.5, 9.0) if p else 'N/A'
 
     # By position
     print(f"\n    By Position:")

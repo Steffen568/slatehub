@@ -221,7 +221,7 @@ def _load_lineup_state() -> dict:
                 return state
         except Exception:
             pass
-    return {'date': today, 'confirmed_game_pks': []}
+    return {'date': today, 'confirmed_game_pks': [], 'postponed_game_pks': []}
 
 
 def _save_lineup_state(state: dict):
@@ -285,6 +285,41 @@ def _update_lineup_confirmation(state: dict) -> int:
         return 0
 
 
+def _check_new_postponements(state: dict) -> int:
+    """Query Supabase for today's postponed games. Returns count of newly detected postponements."""
+    try:
+        import os
+        from dotenv import load_dotenv
+        from supabase import create_client
+        load_dotenv()
+        sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+
+        today = state['date']
+        rows = (
+            sb.table('games')
+            .select('game_pk, home_team, away_team')
+            .eq('game_date', today)
+            .eq('status', 'Postponed')
+            .execute()
+            .data or []
+        )
+        postponed_pks = {r['game_pk'] for r in rows}
+        already_known = set(state.get('postponed_game_pks', []))
+        new_pks = postponed_pks - already_known
+
+        if new_pks:
+            for r in rows:
+                if r['game_pk'] in new_pks:
+                    print(f"  POSTPONED: {r['away_team']} @ {r['home_team']} (game_pk={r['game_pk']}) — projections will re-run")
+
+        state['postponed_game_pks'] = list(already_known | postponed_pks)
+        return len(new_pks)
+
+    except Exception as e:
+        print(f"  WARNING: Postponement check failed: {e}")
+        return 0
+
+
 def run(logger: RunLogger, mode: str, quick: bool = False) -> tuple:
     """
     Run lineup + DK pipeline.
@@ -300,9 +335,9 @@ def run(logger: RunLogger, mode: str, quick: bool = False) -> tuple:
         for script, label in QUICK_SCRIPTS:
             _run_script(script, label, logger)
         new_confirms = _update_lineup_confirmation(state)
+        new_postponements = _check_new_postponements(state)
         _save_lineup_state(state)
-        # Return new_confirms count as third element so caller can trigger projections
-        return logger, True, new_confirms
+        return logger, True, new_confirms, new_postponements
 
     # Full pipeline: schedule → dk_slates → dk_salaries → [gate] → odds → weather
     dk_salary_loaded = False

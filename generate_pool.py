@@ -56,6 +56,17 @@ def clip(val, lo, hi):
     return max(lo, min(hi, val)) if val is not None else lo
 
 
+def load_ownership_uncertainty():
+    """Load per-tier ownership RMSE from cache (written by calibrate_ownership.py).
+    Falls back to literature-based defaults (~5-8% MAE) if cache not found."""
+    cache_path = os.path.join(os.path.dirname(__file__), 'ownership_rmse_cache.json')
+    try:
+        with open(cache_path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {'low': 7.0, 'mid': 5.5, 'high': 4.5, 'chalk': 3.5}
+
+
 # ── HES / SP Grade / PMS ────────────────────────────────────────────────────
 # Ported from frontend: computeHES / computeSpGrade / computePMS (v2 — 8-component individual)
 
@@ -720,24 +731,49 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                 seen.add(item[0])
                 unique_team.append(item)
 
+        # Adjacency-aware stack selection: batters in consecutive order slots score
+        # together more often (Hunter/Vielma 2016 inning-clustering effect).
+        # On each pick, re-sort remaining candidates boosting adjacent batting orders.
+        ADJACENCY_BONUS = 1.15
+        selected_bos = []  # batting order slots already picked for this stack
         picked_main = 0
-        for idx, score, p in unique_team:
-            if picked_main >= main_size: break
-            if p['is_pitcher']: continue
-            if p['player_id'] in used_pids: continue
-            # Find which position to assign
-            assigned = False
-            for pp in p['all_positions']:
-                if pp in remaining and remaining[pp] > 0 and pp != 'SP':
-                    selected.append(p['player_id'])
-                    used_pids.add(p['player_id'])
-                    sal_left -= p['salary']
-                    remaining[pp] -= 1
-                    pid_to_pos[p['player_id']] = pp
-                    picked_main += 1
-                    assigned = True
+        remaining_team = list(unique_team)
+
+        while picked_main < main_size and remaining_team:
+            cur_bos = list(selected_bos)
+            remaining_team.sort(
+                key=lambda x: x[1] * (ADJACENCY_BONUS
+                                       if cur_bos and (x[2].get('batting_order') or 0)
+                                       and any(abs((x[2].get('batting_order') or 0) - a) <= 2
+                                               for a in cur_bos)
+                                       else 1.0),
+                reverse=True
+            )
+            placed = False
+            for item in list(remaining_team):
+                idx, score, p = item
+                if p['is_pitcher'] or p['player_id'] in used_pids:
+                    remaining_team.remove(item)
+                    continue
+                for pp in p['all_positions']:
+                    if pp in remaining and remaining[pp] > 0 and pp != 'SP':
+                        selected.append(p['player_id'])
+                        used_pids.add(p['player_id'])
+                        sal_left -= p['salary']
+                        remaining[pp] -= 1
+                        pid_to_pos[p['player_id']] = pp
+                        picked_main += 1
+                        bo = p.get('batting_order') or 0
+                        if bo:
+                            selected_bos.append(bo)
+                        remaining_team.remove(item)
+                        placed = True
+                        break
+                if placed:
                     break
-            # If no eligible slot available, skip this player (don't force into wrong position)
+
+            if not placed:
+                break
 
         if picked_main < main_size:
             return None  # couldn't fill main stack
@@ -815,9 +851,10 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
                     return None
                 pick = fallback[-1]  # cheapest
             else:
-                # Tighter selection for SP (quality matters more), wider for hitters
-                # SP: tighter on big slates for pitcher conviction, wider on small slates
-                top_k = (2 if game_count >= 10 else 3) if pos == 'SP' else 5
+                # SP: tight selection for pitcher conviction
+                # Hitters: top 3 by composite score — cuts weak fill players without
+                # over-concentrating on a single player (baseball variance is too high for top_k=1-2)
+                top_k = (2 if game_count >= 10 else 3) if pos == 'SP' else 3
                 top = candidates[:top_k]
                 weights = np.array([max(s, 0.1) for _, s, _ in top])
                 weights /= weights.sum()
@@ -916,6 +953,11 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
         BAT_ORDER_PA = {1: 1.13, 2: 1.10, 3: 1.07, 4: 1.03, 5: 1.00,
                         6: 0.97, 7: 0.97, 8: 0.95, 9: 0.93}
 
+        # Leverage gate: only apply ownership-based scoring when sim_ownership.py has run.
+        # >30% of players having non-default (5.0) ownership means it was loaded.
+        ownership_loaded = sum(1 for p in pool if abs(p.get('ownership', 5.0) - 5.0) > 0.1) > len(pool) * 0.30
+        own_uncertainty = load_ownership_uncertainty() if ownership_loaded else {}
+
         for i, p in enumerate(pool):
             # Resolve PMS: default to neutral (5) when missing or low-confidence
             pms_val = p.get('pms') or p.get('avg_pms') or 5.0
@@ -968,6 +1010,29 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
                 talent_mult = max(0.85, min(1.18, 1.0 + talent_z * 0.10))
 
             scores[i] *= talent_mult
+
+            # Leverage + chalk trap (Haugh/Singal 2021 — only when ownership is loaded)
+            if ownership_loaded:
+                own_raw = p.get('ownership', 10.0)
+                # Apply ownership uncertainty: soften leverage for hard-to-predict ownership tiers
+                tier = 'chalk' if own_raw >= 30 else 'high' if own_raw >= 20 else 'mid' if own_raw >= 10 else 'low'
+                rmse = own_uncertainty.get(tier, 6.0)
+                eff_own = max(1.0, own_raw + rng.normal(0, rmse * 0.5))
+
+                if p['is_pitcher']:
+                    lev_z = (p['ceiling'] / eff_own - 2.0) / 2.5
+                    scores[i] *= max(0.87, min(1.22, 1.0 + lev_z * 0.15))
+                    # Metric-based chalk traps: high-owned + bad stuff only (validated data)
+                    if own_raw > 25 and p.get('stuff_plus', 100) < 100:
+                        scores[i] *= 0.88
+                    elif own_raw > 25 and p.get('xfip', 4.0) > 4.0:
+                        scores[i] *= 0.90
+                else:
+                    lev_z = (p['ceiling'] / eff_own - 3.0) / 3.0
+                    scores[i] *= max(0.88, min(1.18, 1.0 + lev_z * 0.15))
+                    # Chalk trap: high-owned hitter with high K% (n=15, 60% bust rate)
+                    if own_raw > 20 and p.get('k_pct_raw', 0.22) > 0.28:
+                        scores[i] *= 0.88
 
     return scores
 
@@ -1059,9 +1124,38 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         team_stack_scores[t] = stack_score
         team_leverage[t] = {'gt': gt, 'avg_pms': avg_pms, 'stack_score': stack_score}
 
-    # Softmax over stack scores → team selection probabilities
+    # Opposing chalk SP boost: fading a chalk SP means stacking against him.
+    # Game-theory: ownership r=-0.208 vs leverage (pitchers). Teams facing 25%+ chalk SPs
+    # are differentiated from the field — boost their stack score before softmax.
+    game_pitcher_own = defaultdict(dict)  # game_pk → {team_abbr: highest SP ownership}
+    for p in pool:
+        if p['is_pitcher'] and p.get('game_pk'):
+            gpk = p['game_pk']
+            own = p.get('ownership', 5.0)
+            if own > game_pitcher_own[gpk].get(p['team'], 0.0):
+                game_pitcher_own[gpk][p['team']] = own
+    for t in viable_teams:
+        game_pk = next((p['game_pk'] for p in pool if p['team'] == t and p.get('game_pk')), None)
+        if not game_pk:
+            continue
+        opp_team = game_teams.get((game_pk, t))
+        if not opp_team:
+            continue
+        opp_sp_own = game_pitcher_own[game_pk].get(opp_team, 0.0)
+        if opp_sp_own > 25:
+            chalk_opp_mult = min(1.20, 1.0 + (opp_sp_own - 25) * 0.01)
+            team_stack_scores[t] *= chalk_opp_mult
+
+    # Softmax over stack scores → team selection probabilities.
+    # T=0.45: sharper than the old T=0.7, concentrates weight on best matchups
+    # while letting the data (game total, PMS when available) determine which teams rank.
+    TEAM_SOFTMAX_TEMP = 0.45
     scores_arr = np.array([team_stack_scores[t] for t in viable_teams])
-    scores_arr = scores_arr / scores_arr.sum() if scores_arr.sum() > 0 else np.ones(len(scores_arr)) / len(scores_arr)
+    if scores_arr.sum() > 0:
+        scores_arr = scores_arr ** (1.0 / TEAM_SOFTMAX_TEMP)
+        scores_arr = scores_arr / scores_arr.sum()
+    else:
+        scores_arr = np.ones(len(scores_arr)) / len(scores_arr)
     team_weights = scores_arr
     if mode == 'user':
         # Log top/bottom teams by weight for diagnostics
@@ -1072,7 +1166,11 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
     # Also compute for viable_5
     if viable_5:
         v5_scores = np.array([team_stack_scores[t] for t in viable_5])
-        team_5_weights = v5_scores / v5_scores.sum() if v5_scores.sum() > 0 else np.ones(len(v5_scores)) / len(v5_scores)
+        if v5_scores.sum() > 0:
+            v5_scores = v5_scores ** (1.0 / TEAM_SOFTMAX_TEMP)
+            team_5_weights = v5_scores / v5_scores.sum()
+        else:
+            team_5_weights = np.ones(len(v5_scores)) / len(v5_scores)
     else:
         team_5_weights = None
 
@@ -1093,17 +1191,16 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         t = p.get('team')
         if t and t not in team_game_totals:
             team_game_totals[t] = p.get('game_total', 8.5)
-    base_cap_pct = 0.15
+    base_cap_pct = 0.22
     team_cap_map = {}
     if mode == 'user':
         # Rank teams by environment score to identify top games
         env_ranked = sorted(viable_teams, key=lambda t: team_game_totals.get(t, 8.5), reverse=True)
-        top_env_teams = set(env_ranked[:6])  # top 3 games = 6 teams
+        top_env_teams = set(env_ranked[:4])  # top 2 games = 4 teams
         for t in viable_teams:
             gt = team_game_totals.get(t, 8.5)
             if t in top_env_teams:
-                # Top games get 20% cap (from 15%) — more conviction on best spots
-                cap_pct = 0.20
+                cap_pct = 0.30
             else:
                 cap_pct = base_cap_pct
             team_cap_map[t] = int(n_lineups * cap_pct)
@@ -1147,21 +1244,9 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         for ss in sub_sizes:
             cands = [t for t in sub_candidates if t not in used_sub and len(team_hitters.get(t, [])) >= ss]
             if cands:
-                # Weight sub-stack selection by opponent stack score (matchup quality)
+                # Weight sub-stack selection by stack score — opponent teams in high-total
+                # games already rank highly here via vegas_mult in team_stack_scores.
                 sub_wts = np.array([team_stack_scores.get(t, 1.0) for t in cands])
-                # Bring-back (game stack): only when game total >= 9.0 AND opponent
-                # quality >= slate avg — both conditions required (data-derived threshold:
-                # 9.0+ = ~4.5 runs per team projected, both offenses meaningfully involved)
-                slate_avg_score = sum(team_stack_scores.values()) / len(team_stack_scores) if team_stack_scores else 1.0
-                main_gt = team_leverage.get(main_team, {}).get('gt', 8.5) if main_team else 8.5
-                if main_team and game_teams and main_gt >= 9.0:
-                    opp = game_teams.get(main_team)
-                    if opp and opp in team_stack_scores:
-                        opp_score = team_stack_scores[opp]
-                        if opp_score >= slate_avg_score:
-                            for idx_t, t in enumerate(cands):
-                                if t == opp:
-                                    sub_wts[idx_t] *= (opp_score / slate_avg_score)
                 sub_wts = sub_wts / sub_wts.sum()
                 st = rng.choice(cands, p=sub_wts)
                 sub_teams.append(st)
@@ -1241,17 +1326,16 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         # Booms: top-1% averages 3.7 hitters with 15+ pts (ceiling >= 18)
         booms = sum(1 for p in lu_players if not p['is_pitcher'] and p['ceiling'] >= 18)
         gpp_boom = min(booms / 4.0, 1.0)
-        # Busts: top-1% averages 0.8 busts (<3 pts from floor)
-        busts = sum(1 for p in lu_players if p['floor'] < 2)
-        gpp_bust = max(0, 1.0 - busts / 3.0)
-        # Game environment: implied runs of stacked team's game (Vegas-derived, no ownership)
-        stack_implied = _get_stack_implied(lu_players, stack_team)
-        gpp_env = min(max((stack_implied - 3.5) / 2.0, 0.0), 1.0)
+        # Projected score quality: normalized lineup projection (strongest real differentiator).
+        # floor=0.0 in DB for most players makes gpp_bust nearly always 0 — replaced with proj.
+        # proj range: ~85-115 DK pts for a 10-player lineup; normalize to [0, 1].
+        proj_score = min(max((proj - 85.0) / 30.0, 0.0), 1.0)
         # Matchup quality: PMS (physics-based) + HES (park/weather/Vegas) — already computed above
+        # HES already incorporates Vegas implied runs, so no separate gpp_env needed.
         gpp_matchup = min(max(avg_pms / 10.0 * 0.6 + avg_hes / 10.0 * 0.4, 0.0), 1.0)
 
-        gpp_score = round(gpp_pitcher * 0.25 + gpp_boom * 0.20 + gpp_bust * 0.15
-                          + gpp_env * 0.15 + gpp_matchup * 0.25, 3)
+        gpp_score = round(gpp_pitcher * 0.25 + gpp_boom * 0.20 + proj_score * 0.30
+                          + gpp_matchup * 0.25, 3)
 
         lineups.append({
             'player_ids': list(lu),
@@ -1281,7 +1365,12 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         for lu in lineups:
             teams_count[lu['stack_team']] += 1
 
+        # Only top-up teams with above-median stack scores — below-median teams
+        # were correctly deprioritized by the leverage weights; forcing them in adds weak lineups.
+        median_stack = float(np.median([team_stack_scores.get(t, 0) for t in viable_teams]))
         for t in viable_teams:
+            if team_stack_scores.get(t, 0) < median_stack:
+                continue
             deficit = floor_count - teams_count.get(t, 0)
             if deficit <= 0:
                 continue

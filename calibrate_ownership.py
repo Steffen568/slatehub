@@ -247,4 +247,37 @@ with open(findings_path, 'a', encoding='utf-8') as f:
         f.write(f"- {m['name']}: proj={m['proj_own']:.1f}% actual={m['actual_own']:.1f}%\n")
 
 print(f"\n  Results appended to tasks/research_findings.md")
+
+# ── Step 8: Compute per-tier RMSE and write cache ───────────────────────────
+# Tier by projected ownership (what we know at generation time)
+import json as _json
+tier_sq_errs = {'low': [], 'mid': [], 'high': [], 'chalk': []}
+for m in matched:
+    proj = m['proj_own']
+    actual = m['actual_own']
+    sq_err = (proj - actual) ** 2
+    if proj >= 30:
+        tier_sq_errs['chalk'].append(sq_err)
+    elif proj >= 20:
+        tier_sq_errs['high'].append(sq_err)
+    elif proj >= 10:
+        tier_sq_errs['mid'].append(sq_err)
+    else:
+        tier_sq_errs['low'].append(sq_err)
+
+default_rmse = {'low': 7.0, 'mid': 5.5, 'high': 4.5, 'chalk': 3.5}
+rmse_cache = {}
+for tier, sq_errs in tier_sq_errs.items():
+    rmse_cache[tier] = round(math.sqrt(sum(sq_errs) / len(sq_errs)), 2) if sq_errs else default_rmse[tier]
+
+cache_path = os.path.join(os.path.dirname(__file__), 'ownership_rmse_cache.json')
+with open(cache_path, 'w') as f:
+    _json.dump(rmse_cache, f, indent=2)
+
+print(f"\n  Ownership RMSE by projected tier (used for leverage uncertainty in pool gen):")
+for tier, rmse_val in rmse_cache.items():
+    n = len(tier_sq_errs[tier])
+    print(f"    {tier:<8}: RMSE={rmse_val:.2f}%  (n={n})")
+print(f"  Saved to ownership_rmse_cache.json")
+
 print(f"\n  Done.")

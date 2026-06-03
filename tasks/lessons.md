@@ -21,6 +21,26 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 
 ## Projection Engine
 
+### Breakout detector was firing on ~35% of all starters by late May (Session 52)
+**What happened:** `BREAKOUT_XFIP_THRESHOLD = 0.50` triggered on a large fraction of the league's starters by May. The detector printed hundreds of "BREAKOUT detected" lines across 890 matched starts. The effect — shifting the ERA anchor from 50/50 SIERA/xFIP to 75/25 — was designed for Opening Day when current-season data is thin. `PITCHER_CURRENT_WEIGHT = 10` plus the IP-based Bayesian update in `marcel_pitcher()` already handles current-season trust by May.
+**Rule:** Remove the breakout detector entirely after late May; Marcel's Bayesian update handles real breakouts at this sample depth. Do not re-add seasonal patches that don't have an automatic expiry mechanism.
+**Fix:** Deleted `BREAKOUT_XFIP_THRESHOLD/BREAKOUT_IP_MULTIPLIER/BREAKOUT_MAX_MULTIPLIER` constants, removed the 30-line detection block from `marcel_pitcher()`, removed `is_breakout` and `_has_current_siera` from the return dict, collapsed the ERA anchor to always use `split_xfip * 0.50 + talent['siera'] * 0.50`.
+
+### No-Vegas IP anchor of 4.7 was under-projecting starters by 0.61 IP/start (Session 52)
+**What happened:** `sim_pitcher_game()` regressed 50% toward a 4.7 IP/GS league average when no Vegas outs prop was available. Actual qualified-starter average validated at 5.28 IP. This caused a systematic -0.61 IP bias per start (Section C of `validate_sim.py`), which cascades into under-projected Ks and DK points.
+**Rule:** The no-Vegas fallback anchor must reflect actual qualified-starter IP average (~5.2), not a league-wide average that includes early hooks and openers. Validate the anchor against `validate_sim.py` Section C IP bias after any change.
+**Fix:** Changed `proj_ip = talent_ip * 0.50 + 4.7 * 0.50` → `proj_ip = talent_ip * 0.70 + 5.2 * 0.30` (lighter regression, higher anchor). `sim_projections.py` line ~1254.
+
+### Pitcher P10-P90 bands were too tight (65% vs 80% target) due to workload_day variance (Session 52)
+**What happened:** `workload_day = rng.normal(1.0, 0.08).clip(0.85, 1.15)` gave a starting pitcher projecting 5.5 IP a P90 of only ~6.3 IP — missing early hooks (1-3 IP) and deep games (7+ IP). `validate_sim.py` Section A showed 68.9% of pitcher actuals inside P10-P90 when the target is ~80%.
+**Rule:** Pitcher workload (IP) has more game-to-game variance than a SD=0.08 factor allows. Actual IP variance for starters is ~1.5 IP SD. The combined `ip_sd` + `workload_day` must produce realistic fat tails.
+**Fix:** `workload_day` SD 0.08→0.13, clip 0.85-1.15→0.70-1.30. `ip_sd` multiplier 0.85→1.10, clip 0.55-1.15→0.70-1.40. Verify via `validate_sim.py` after next projection run.
+
+### load_stats.py silently cut off call-up batters above rank 1000 by PA (Session 52)
+**What happened:** `fetch_mlb_api_batting` used `limit=1000&offset=0` (single request). Players below rank 1000 by PA — recent call-ups, backup players — were never loaded into `batter_stats`. The projection engine warned "No stats found" and fell back to league averages for all of them. When new call-ups also lacked a `players` table entry, the whole upsert batch failed with a FK constraint error.
+**Rule:** Always paginate the MLB Stats API batting/pitching fetches in `load_stats.py`. A single `limit=1000` call silently drops any player ranked 1001+ by PA. Auto-register any player returned by the API who isn't yet in `players` before upserting their stats.
+**Fix:** `fetch_mlb_api_batting` converted to pagination loop (page_size=500, loop until `len(splits) < page_size`). Added auto-registration block before `upload('batter_stats', ...)` that upserts missing player_ids into the `players` table. Also backfilled 2025 and 2024 with the new paginated loader.
+
 ### Wind direction was park-orientation-blind; sensitivity was flat across all stadiums
 **What happened:** `weather_hr_mult()` used a hardcoded set of cardinal directions (`WIND_OUT_DIRS = {"S","SW",...}`) assuming every ballpark faces north. Most don't — Wrigley faces east, Oracle northeast, etc. Also, a 15 mph wind at Wrigley had identical impact to Petco Park (no per-park sensitivity).
 **Rule:** Wind direction must be computed from `cf_bearing` (park's center-field azimuth) and `wind_deg` (actual bearing) using `cos(angle_diff)` for a continuous direction factor. Apply `PARK_WIND_SENSITIVITY` dict (keyed by `venue_id`) to scale wind magnitude per stadium. Both fields are already in the `weather` table — just add them to the SELECT.
@@ -833,3 +853,52 @@ requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leader
 ### Session 54 addendum — computeAllSlatePMS season filter was approximate, not exact
 **What happened:** After fixing arsenal (season pin) and bat_tracking (add order), batch still diverged from interactive. Root cause: batch used `order('season', desc)` + first-row to approximate `eq('season', 2026)`. This is NOT equivalent — ordering across chunked batchFetch calls doesn't guarantee the first row per player is always the most recent season. Arsenal also used `order('usage_pct', desc)` in interactive but `order('season', desc)` in batch, producing different row order/content.
 **Rule:** `computeAllSlatePMS()` must use `eq('season', parseInt(activePitcherYear))` and `eq('season', parseInt(activeStatYear))` — exact season match, not "most recent" approximation. If the current season has no data for a player, the score falls back to neutral (same as interactive path).
+
+### Auto-fixed DK ID mismatches: Bryan Torres, Carlos Cortes, Tyler O'Neill
+**What happened:** Pipeline auto-fixed 3 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+---
+
+## Session 55 — Filter Audit: Data vs Assumption (2026-05-23)
+
+### GPP pool filters added without data validation — required full audit
+**What happened:** 5 pool filters were implemented based on academic research and assumed thresholds. When challenged on deGrom (45% owned, shelled), none of the metric-based chalk traps fired on him — Stuff+ > 100 and xFIP < 4.0 meant he passed every condition despite being the biggest chalk bust. The leverage multiplier only penalized him 5% (coefficient too small, floor too high).
+**Rule:** Every filter must be traced to actual data before implementation. State the exact n, correlation, or rate — never say "roughly" or "typically." run analyze_leverage.py (3,028 rows, 46 contests) to validate before writing any new filter coefficient.
+
+### Leverage multiplier coefficient was 10× too weak
+**What happened:** `max(0.90, min(1.15, 1.0 + lev_z * 0.10))` produced only 5% penalty for deGrom at 45% owned. The floor of 0.90 and ceiling of 1.15 also compressed the range.
+**Fix:** Coefficient 0.10 → 0.25; bounds widened to [0.75, 1.30] for pitchers, [0.78, 1.28] for hitters. deGrom at 45%: 5% → 12% penalty. A 5%-owned high-ceiling pitcher: 15% → 30% boost.
+
+### Metric-based chalk traps miss elite pitchers — ownership alone is the signal
+**What happened:** The only chalk trap conditions were `Stuff+ < 100` and `xFIP > 4.0`. deGrom and Crochet have Stuff+ > 100 and xFIP ≈ 3.0–3.5 — never triggered. But `Proj Ownership r = -0.208 vs Leverage` shows ownership alone is the strongest predictor for pitchers, independent of quality metrics.
+**Fix:** Added ownership-only penalty for all pitchers with own > 30%: `max(0.82, 1.0 - (own_raw - 30) * 0.012)`. deGrom at 45%: additional 18% multiplier. Metric traps kept as additive for bad-metrics chalk.
+
+### PMS-based hitter chalk trap had zero data support
+**What happened:** Added `elif own_raw > 20 and p.get('pms', 5.0) < 4.25: scores[i] *= 0.92` by substituting PMS for `pitcher_mult` (which isn't in the pool dict). But the original condition had n < 5 in analyze_leverage.py — never printed, zero data.
+**Fix:** Removed the PMS condition entirely. Kept the K% condition (`own > 20 AND k_pct_raw > 0.28` → 0.88×, n=15, 60% trap rate) which is data-backed.
+
+### Opposing team stack boost was the biggest missing piece
+**What happened:** The current system weighted teams by ceiling × PMS × vegas_mult — completely blind to whether 45% of the field was locked to the opposing SP. The team batting against deGrom had no special status.
+**Rule:** Fading a chalk SP means being on his opposing hitters. These two moves are correlated — you can't capture one without the other. After computing `team_stack_scores`, apply a 1% boost per ownership point above 25% (capped at 20%) to teams facing a chalk SP. This runs BEFORE the softmax so it shapes team weights naturally.
+**Fix:** Built `game_pitcher_own` dict (game_pk → {team: max_sp_own}) from pool. For each viable team, looked up opposing SP ownership and applied boost. deGrom scenario (45%): opposing team gets 1.20× stack score boost.
+
+### Hard floor filter removed because floor=0.0 is genuine DB data
+**What happened:** Tried to filter lineups with ≥2 players with proj_floor < 2. But 6-8 players per lineup had floor=0.0 stored in DB — a real value for players without projected floor data, not a bug. Every possible lineup was rejected (0 from 42,000 attempts).
+**Rule:** Never filter on `proj_floor < threshold` — many real players have 0.0 stored. Use soft penalties in `gpp_score` instead of hard rejection filters.
+
+### Auto-fixed DK ID mismatches: Carlos Cortes, Tyler O'Neill, Victor Mesa Jr.
+**What happened:** Pipeline auto-fixed 3 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Carlos Cortes, Oliver Dunn, Tyler O'Neill
+**What happened:** Pipeline auto-fixed 3 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Jacob Gonzalez
+**What happened:** Pipeline auto-fixed 1 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Carlos Cortes, Edwin Arroyo, Tyler O'Neill
+**What happened:** Pipeline auto-fixed 3 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.

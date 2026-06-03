@@ -32,9 +32,10 @@ from supabase import create_client
 
 # Reuse portfolio core functions
 from optimize_portfolio import (
-    lineup_corr, greedy_portfolio, diversity_stats, COVERAGE_ALPHA,
+    lineup_corr, greedy_portfolio, diversity_stats, COVERAGE_ALPHA, EXP_RANGES,
     load_player_sim_data, simulate_scenarios, score_lineups_scenarios,
     sim_greedy_portfolio, N_SIMS,
+    leverage_portfolio, load_player_leverage,
 )
 
 load_dotenv()
@@ -142,7 +143,7 @@ def random_k(pool: list[dict], k: int, seed: int = 42) -> list[dict]:
 # ── Per-date backtest ─────────────────────────────────────────────────────────
 
 def backtest_date(game_date: str, slate: str, k: int, alpha: float,
-                  n_sims: int = N_SIMS) -> dict | None:
+                  contest: str = 'gpp_mid', n_sims: int = N_SIMS) -> dict | None:
     pool = load_pool_for_date(game_date, slate)
     if not pool:
         return None
@@ -174,22 +175,27 @@ def backtest_date(game_date: str, slate: str, k: int, alpha: float,
     score_lineups_scenarios(pool, scenario_scores, n_sims=n_sims)
     sim_picks = sim_greedy_portfolio(pool, k, verbose=False)
 
+    # Leverage-proportional portfolio (new K-independent approach)
+    leverage  = load_player_leverage(game_date, all_pids)
+    lev_picks = leverage_portfolio(pool, leverage, k, contest)
+
     # Baseline strategies
     gpp_picks  = top_k_by(pool, 'gpp_score', k)
     proj_picks = top_k_by(pool, 'proj', k)
     rand_picks = random_k(pool, k)
 
     results = {
-        'date':       game_date,
-        'slate':      slate,
-        'pool_size':  len(pool),
-        'pool_best':  round(pool_best, 1),
-        'pool_avg':   round(pool_avg, 1),
-        'portfolio':  score_strategy(port_picks, actual_by_pid, player_quality, pool),
-        'sim_port':   score_strategy(sim_picks,  actual_by_pid, player_quality, pool),
-        'gpp_score':  score_strategy(gpp_picks,  actual_by_pid, player_quality, pool),
-        'projection': score_strategy(proj_picks, actual_by_pid, player_quality, pool),
-        'random':     score_strategy(rand_picks, actual_by_pid, player_quality, pool),
+        'date':          game_date,
+        'slate':         slate,
+        'pool_size':     len(pool),
+        'pool_best':     round(pool_best, 1),
+        'pool_avg':      round(pool_avg, 1),
+        'leverage_port': score_strategy(lev_picks,  actual_by_pid, player_quality, pool),
+        'portfolio':     score_strategy(port_picks, actual_by_pid, player_quality, pool),
+        'sim_port':      score_strategy(sim_picks,  actual_by_pid, player_quality, pool),
+        'gpp_score':     score_strategy(gpp_picks,  actual_by_pid, player_quality, pool),
+        'projection':    score_strategy(proj_picks, actual_by_pid, player_quality, pool),
+        'random':        score_strategy(rand_picks, actual_by_pid, player_quality, pool),
     }
     return results
 
@@ -197,8 +203,8 @@ def backtest_date(game_date: str, slate: str, k: int, alpha: float,
 # ── Reporting ─────────────────────────────────────────────────────────────────
 
 def print_summary(all_results: list[dict], k: int) -> None:
-    strategies = ['portfolio', 'sim_port', 'gpp_score', 'projection', 'random']
-    labels     = ['Portfolio ', 'SimPort   ', 'GPP Score ', 'Projection', 'Random    ']
+    strategies = ['leverage_port', 'portfolio', 'sim_port', 'gpp_score', 'projection', 'random']
+    labels     = ['LevPort   ', 'Portfolio ', 'SimPort   ', 'GPP Score ', 'Projection', 'Random    ']
 
     print(f"\n{'='*80}")
     print(f"  Portfolio Backtest — {len(all_results)} slate-days, K={k}")
@@ -226,21 +232,23 @@ def print_summary(all_results: list[dict], k: int) -> None:
 
     # Per-date breakdown
     print(f"\n  Per-date breakdown (max_actual per strategy):")
-    print(f"  {'Date':<12} {'Slate':<8} {'Port':>6} {'Sim':>6} {'GPP':>6} {'Proj':>6} "
+    print(f"  {'Date':<12} {'Slate':<8} {'Lev':>6} {'Port':>6} {'Sim':>6} {'GPP':>6} {'Proj':>6} "
           f"{'Rand':>6} {'Oracle':>8} {'PoolSz':>7}")
-    print(f"  {'-'*72}")
+    print(f"  {'-'*78}")
     for r in sorted(all_results, key=lambda x: x['date']):
+        lev  = r['leverage_port'].get('max_actual', 0) if r.get('leverage_port') else 0
         port = r['portfolio'].get('max_actual', 0) if r.get('portfolio') else 0
         sim  = r['sim_port'].get('max_actual', 0) if r.get('sim_port') else 0
         gpp  = r['gpp_score'].get('max_actual', 0) if r.get('gpp_score') else 0
         proj = r['projection'].get('max_actual', 0) if r.get('projection') else 0
         rand = r['random'].get('max_actual', 0) if r.get('random') else 0
-        best_s = max(port, sim, gpp, proj)
+        best_s = max(lev, port, sim, gpp, proj)
+        lf  = f'*{lev:.0f}'  if lev  == best_s else f' {lev:.0f}'
         pf  = f'*{port:.0f}' if port == best_s else f' {port:.0f}'
         sf  = f'*{sim:.0f}'  if sim  == best_s else f' {sim:.0f}'
         gf  = f'*{gpp:.0f}'  if gpp  == best_s else f' {gpp:.0f}'
         prf = f'*{proj:.0f}' if proj == best_s else f' {proj:.0f}'
-        print(f"  {r['date']:<12} {r['slate']:<8} {pf:>6} {sf:>6} {gf:>6} {prf:>6} "
+        print(f"  {r['date']:<12} {r['slate']:<8} {lf:>6} {pf:>6} {sf:>6} {gf:>6} {prf:>6} "
               f"{rand:>6.0f} {r['pool_best']:>8.0f} {r['pool_size']:>7,}")
 
     # Win counts (excluding random)
@@ -267,15 +275,19 @@ def main():
                         help='End date YYYY-MM-DD (default: yesterday)')
     parser.add_argument('--slate',   default='main', help='Slate to test (main/early/turbo/all)')
     parser.add_argument('--k',       type=int, default=20, help='Portfolio size K')
-    parser.add_argument('--contest', default='large',
-                        choices=['large', 'mid', 'small', 'single'],
-                        help='Contest type for coverage reward strength')
+    parser.add_argument('--contest', default='gpp_mid',
+                        choices=list(EXP_RANGES.keys()) + ['large', 'mid', 'small', 'single'],
+                        help='Contest type: gpp_large/gpp_mid/gpp_small/se_large/se_mid/se_small')
     args = parser.parse_args()
 
-    alpha = COVERAGE_ALPHA[args.contest]
+    _contest_map = {'large': 'gpp_large', 'mid': 'gpp_mid', 'small': 'gpp_small', 'single': 'se_small'}
+    contest = _contest_map.get(args.contest, args.contest)
+    _alpha_map = {'gpp_large': 0.10, 'gpp_mid': 0.07, 'gpp_small': 0.04,
+                  'se_large': 0.02, 'se_mid': 0.01, 'se_small': 0.00}
+    alpha = _alpha_map.get(contest, COVERAGE_ALPHA.get(args.contest, 0.07))
     print(f"\nPortfolio Backtest")
     print(f"  Range: {args.start} to {args.end}  |  Slate: {args.slate}  |  "
-          f"K={args.k}  |  contest={args.contest} (alpha={alpha:.2f})")
+          f"K={args.k}  |  contest={contest} (alpha={alpha:.2f})")
     print(f"  GPP line: {GPP_LINE}  |  Cash line: {CASH_LINE}")
 
     # Build list of dates
@@ -292,7 +304,7 @@ def main():
         slates = ['main', 'early', 'turbo', 'night'] if args.slate == 'all' else [args.slate]
         for slate in slates:
             print(f"  {game_date} / {slate} ...", end=' ', flush=True)
-            result = backtest_date(game_date, slate, args.k, alpha)
+            result = backtest_date(game_date, slate, args.k, alpha, contest=contest)
             if result is None:
                 print("no data")
                 continue

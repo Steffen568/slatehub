@@ -288,6 +288,11 @@ PLAYER_ID_REMAP = {
     1389620 : 683679,   # Jesus Rodriguez (auto-fixed)
     1133362 : 683079,   # Omar Martinez (auto-fixed)
     1454912 : 805999,   # A.J. Ewing (auto-fixed)
+    885119  : 663494,   # Bryan Torres (auto-fixed)
+    1142996 : 683748,   # Victor Mesa Jr. (auto-fixed)
+    1159920 : 686554,   # Oliver Dunn (auto-fixed)
+    1452088 : 694378,   # Jacob Gonzalez (auto-fixed)
+    1316949 : 695490,   # Edwin Arroyo (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids

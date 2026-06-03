@@ -4347,6 +4347,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-ui);font-feat
       </select>
       <input type="number" id="sim-count" value="5000" min="100" max="50000" step="500" style="width:54px;font-size:10px;" class="opto-input" title="Number of Monte Carlo sims">
       <button class="bld-btn" style="background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.35);color:#a78bfa;" onclick="simulateContest()">Sim Contest</button>
+      <span id="pool-sel-count" style="font-size:10px;color:#fbbf24;"></span>
+      <button id="pool-sel-clear" onclick="clearPoolSelection()" style="display:none;font-size:10px;padding:2px 6px;background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.35);color:#fbbf24;border-radius:3px;cursor:pointer;" title="Clear lineup selection">Clear</button>
       <button class="bld-btn" style="background:rgba(56,189,248,.1);border-color:rgba(56,189,248,.35);color:#38bdf8;" onclick="exportPoolRaw()" title="Download filtered lineups as CSV (no DK entry file needed)">Export CSV</button>
       <button class="bld-btn" style="background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.35);color:#4ade80;" onclick="exportPoolDK()">Export DK</button>
     </div>
@@ -8588,6 +8590,7 @@ function selectDiverseFromPool(candidates, n) {
 
 // Pool state
 let _poolCandidates = [];  // [{lineup, metrics, dedupKey}]
+let _selectedPoolIdxs = new Set();
 let _poolFilter = {};
 let _contestPool = [];     // contest pool player_id arrays for sim
 let _contestPoolFieldMult = 1;
@@ -9462,7 +9465,10 @@ function renderPoolCards() {
       ? (portRank <= 3 ? '#a78bfa' : portRank <= 10 ? 'rgba(167,139,250,.4)' : borderClr)
       : borderClr;
 
-    return `<div class="lc-chip" style="border-color:${cardBorder};" onclick="loadPoolLineup(${idx})">
+    const isSelected = _selectedPoolIdxs.has(idx);
+    const effectiveBorder = isSelected ? '#fbbf24' : cardBorder;
+
+    return `<div class="lc-chip" style="border-color:${effectiveBorder};" onclick="loadPoolLineup(${idx})">
       <div class="lc-chip-hd">
         <span class="lc-chip-name">#${i+1}</span>
         <span class="lc-chip-pts">${m.proj} pts</span>
@@ -9471,7 +9477,10 @@ function renderPoolCards() {
         ${m.sub !== '—' ? `<span class="stack-size-badge">${m.sub}</span>` : ''}
         ${portfolioBadges} ${staticBadges} ${simBadges}
         ${contestBadge}
-        <button onclick="event.stopPropagation();savePoolLineupToBuild(${idx});" style="margin-left:auto;font-size:8px;padding:1px 6px;background:rgba(74,222,128,.15);color:#4ade80;border:1px solid rgba(74,222,128,.3);border-radius:3px;cursor:pointer;" title="Save to active build">Save</button>
+        <div style="margin-left:auto;display:flex;gap:3px;align-items:center;">
+          <button onclick="event.stopPropagation();togglePoolSelect(${idx});" style="font-size:8px;padding:1px 5px;background:${isSelected?'rgba(251,191,36,.2)':'transparent'};color:${isSelected?'#fbbf24':'var(--muted)'};border:1px solid ${isSelected?'rgba(251,191,36,.5)':'var(--border)'};border-radius:3px;cursor:pointer;font-weight:${isSelected?'700':'400'};" title="${isSelected?'Deselect from export':'Select for export'}">${isSelected?'✓':'○'}</button>
+          <button onclick="event.stopPropagation();savePoolLineupToBuild(${idx});" style="font-size:8px;padding:1px 6px;background:rgba(74,222,128,.15);color:#4ade80;border:1px solid rgba(74,222,128,.3);border-radius:3px;cursor:pointer;" title="Save to active build">Save</button>
+        </div>
       </div>
       <div class="lc-chip-slots">${pitRows}${hitRows}</div>
     </div>`;
@@ -9490,6 +9499,26 @@ function loadPoolLineup(idx) {
   LINEUP_SLOTS.forEach(s => renderSlot(s.key));
   updateTotals();
   renderPool();
+}
+
+function togglePoolSelect(idx) {
+  if (_selectedPoolIdxs.has(idx)) _selectedPoolIdxs.delete(idx);
+  else _selectedPoolIdxs.add(idx);
+  renderPoolCards();
+  const n = _selectedPoolIdxs.size;
+  const el = document.getElementById('pool-sel-count');
+  if (el) el.textContent = n > 0 ? `${n} selected` : '';
+  const btn = document.getElementById('pool-sel-clear');
+  if (btn) btn.style.display = n > 0 ? '' : 'none';
+}
+
+function clearPoolSelection() {
+  _selectedPoolIdxs.clear();
+  renderPoolCards();
+  const el = document.getElementById('pool-sel-count');
+  if (el) el.textContent = '';
+  const btn = document.getElementById('pool-sel-clear');
+  if (btn) btn.style.display = 'none';
 }
 
 function addPoolToBuilds() {
@@ -10574,7 +10603,11 @@ function exportPoolRaw() {
   else               pool.sort((a,b) => (getVal(b) - getVal(a)) * dir || b.metrics.proj - a.metrics.proj);
   pool = filterByExposure(pool);
 
-  pool = pool.slice(0, _poolCardsShown);
+  if (_selectedPoolIdxs.size > 0) {
+    pool = pool.filter(c => _selectedPoolIdxs.has(_poolCandidates.indexOf(c)));
+  } else {
+    pool = pool.slice(0, _poolCardsShown);
+  }
 
   if (!pool.length) { showToast('No lineups to export — adjust filters first'); return; }
 
@@ -10639,6 +10672,10 @@ function exportPoolDK() {
     pool.sort((a,b) => (getVal(b) - getVal(a)) * dir || b.metrics.proj - a.metrics.proj);
   }
   pool = filterByExposure(pool);
+
+  if (_selectedPoolIdxs.size > 0) {
+    pool = pool.filter(c => _selectedPoolIdxs.has(_poolCandidates.indexOf(c)));
+  }
 
   // Block export if exposure filtering left fewer unique lineups than needed entries.
   // Silent modulo cycling (pool[i % pool.length]) produces duplicate entries which

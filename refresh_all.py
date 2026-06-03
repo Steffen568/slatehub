@@ -85,17 +85,19 @@ def run_excel_enrichment(logger: RunLogger):
 # ── QUICK — every 15 minutes all day ─────────────────────────────────────────
 if QUICK:
     try:
-        _, _, new_confirms = run_lineups_dk(logger, mode='quick', quick=True)
-        # Re-run projections + ownership when new lineups are confirmed
-        if new_confirms > 0:
-            print(f"\n  {new_confirms} new lineup confirmation(s) — re-running projections & ownership")
+        _, _, new_confirms, new_postponements = run_lineups_dk(logger, mode='quick', quick=True)
+        if new_confirms > 0 or new_postponements > 0:
+            if new_postponements > 0:
+                print(f"\n  {new_postponements} game(s) newly postponed — re-running projections & ownership")
+            if new_confirms > 0:
+                print(f"\n  {new_confirms} new lineup confirmation(s) — re-running projections & ownership")
             try:
                 run_projections(logger)  # includes sim_projections + sim_ownership
             except Exception as e:
                 print(f"\n  ERROR in Agent 3 (quick projections): {e}")
                 logger.record('Agent 3 — Quick Projections', False, 0.0, str(e))
         else:
-            print(f"\n  No new confirmations — projections unchanged")
+            print(f"\n  No new confirmations or postponements — projections unchanged")
     except Exception as e:
         print(f"\n  ERROR in Agent 2 (quick): {e}")
         logger.record('Agent 2 — Quick', False, 0.0, str(e))

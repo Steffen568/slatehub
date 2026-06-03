@@ -233,16 +233,24 @@ def fetch_mlb_api_pitching(season):
     return splits
 
 def fetch_mlb_api_batting(season):
-    """Fetch season batting stats from the official MLB Stats API."""
+    """Fetch season batting stats from the official MLB Stats API (paginated)."""
     print("\nFetching batting stats from MLB Stats API...")
-    url = (f'https://statsapi.mlb.com/api/v1/stats?stats=season&group=hitting'
-           f'&season={season}&gameType=R&limit=1000&offset=0'
-           f'&sortStat=plateAppearances&order=desc')
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
-    splits = r.json().get('stats', [{}])[0].get('splits', [])
-    print(f"  Got {len(splits)} batters from MLB API")
-    return splits
+    all_splits = []
+    offset = 0
+    page_size = 500
+    while True:
+        url = (f'https://statsapi.mlb.com/api/v1/stats?stats=season&group=hitting'
+               f'&season={season}&gameType=R&limit={page_size}&offset={offset}'
+               f'&sortStat=plateAppearances&order=desc')
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+        splits = r.json().get('stats', [{}])[0].get('splits', [])
+        all_splits.extend(splits)
+        if len(splits) < page_size:
+            break
+        offset += page_size
+    print(f"  Got {len(all_splits)} batters from MLB API")
+    return all_splits
 
 
 # ══════════════════════════════════════════════
@@ -574,7 +582,31 @@ if fg_batting:
 else:
     print(f"  FanGraphs unavailable — using Savant xwOBA + calculated rates")
 
+# Auto-register any batters from the MLB API who aren't yet in the players table.
+# New call-ups often precede Chadwick register updates, so the FK on batter_stats
+# would reject the entire upload batch. Register them first, then upload.
 if batter_rows:
+    known_ids = {p['mlbam_id'] for p in all_players}
+    unregistered = [r for r in batter_rows if r['player_id'] not in known_ids]
+    if unregistered:
+        print(f"\n  Auto-registering {len(unregistered)} new call-up(s) in players table...")
+        for r in unregistered:
+            pid  = r['player_id']
+            name = r.get('full_name') or ''
+            norm = normalize(name)
+            parts = name.strip().split(' ', 1) if name else ['', '']
+            try:
+                supabase.table('players').upsert({
+                    'mlbam_id':        pid,
+                    'name_normalized': norm,
+                    'full_name':       name.strip(),
+                    'first_name':      parts[0] if parts else '',
+                    'last_name':       parts[1] if len(parts) > 1 else '',
+                }, on_conflict='mlbam_id').execute()
+                known_ids.add(pid)
+                print(f"    + Registered '{name}' (MLBAM {pid})")
+            except Exception as e:
+                print(f"    WARNING: Could not register '{name}' (MLBAM {pid}): {e}")
     upload('batter_stats', batter_rows)
 
 

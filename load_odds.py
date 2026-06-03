@@ -67,9 +67,9 @@ def run():
     tomorrow = str(date.today() + timedelta(days=1))
     print(f"  Date: {today}")
 
-    # Fetch games from our DB
+    # Fetch games from our DB — include game_time_utc for doubleheader disambiguation
     db_games = (sb.table("games")
-                  .select("game_pk, home_team, away_team, game_date")
+                  .select("game_pk, home_team, away_team, game_date, game_time_utc")
                   .in_("game_date", [today, tomorrow])
                   .execute().data)
 
@@ -79,19 +79,29 @@ def run():
 
     print(f"  Games in DB: {len(db_games)}")
 
-    # Build lookup by (away, home, game_date) to avoid collisions when the
-    # same teams play on consecutive days (e.g. series games).
-    db_lookup = {}
+    # Primary lookup: (away, home, date, utc_hour) — handles doubleheaders
+    # Fallback lookup: (away, home, date) — last game wins (non-DH case)
+    db_lookup_time = {}   # (away, home, date, utc_hour) → game
+    db_lookup = {}        # (away, home, date) → game  (fallback)
     for g in db_games:
         home = g["home_team"]
         away = g["away_team"]
         gd   = g["game_date"]
         db_lookup[(away, home, gd)] = g
+        # Time-based key: extract UTC hour from ISO timestamp
+        gt = g.get("game_time_utc") or ""
+        if len(gt) >= 13:
+            utc_hour = gt[11:13]
+            db_lookup_time[(away, home, gd, utc_hour)] = g
         for k, v in TEAM_NAME_MAP.items():
             if home == v:
                 db_lookup[(away, k, gd)] = g
+                if len(gt) >= 13:
+                    db_lookup_time[(away, k, gd, utc_hour)] = g
             if away == v:
                 db_lookup[(k, home, gd)] = g
+                if len(gt) >= 13:
+                    db_lookup_time[(k, home, gd, utc_hour)] = g
 
     # Fetch ESPN scoreboard for today (and tomorrow for late UTC games)
     # Tag each event with the request date so we can match to the right DB game
@@ -123,8 +133,22 @@ def run():
         away_name = away.get("team", {}).get("displayName", "")
         req_date = ev.get("_request_date", today)
 
-        # Match to our DB game using team names + date
-        db_game = db_lookup.get((away_name, home_name, req_date))
+        # Extract ESPN event time for doubleheader disambiguation
+        comp_date_str = comp.get("date", "")  # e.g. "2026-05-23T17:10Z"
+        espn_date = comp_date_str[:10] if len(comp_date_str) >= 10 else req_date
+        espn_hour = comp_date_str[11:13] if len(comp_date_str) >= 13 else ""
+
+        # Try time-exact match first (handles doubleheaders correctly)
+        db_game = None
+        if espn_hour:
+            db_game = db_lookup_time.get((away_name, home_name, espn_date, espn_hour))
+            if not db_game:
+                ma = TEAM_NAME_MAP.get(away_name, away_name)
+                mh = TEAM_NAME_MAP.get(home_name, home_name)
+                db_game = db_lookup_time.get((ma, mh, espn_date, espn_hour))
+        # Fallback: match by team + date only (non-DH case)
+        if not db_game:
+            db_game = db_lookup.get((away_name, home_name, req_date))
         if not db_game:
             mapped_home = TEAM_NAME_MAP.get(home_name, home_name)
             mapped_away = TEAM_NAME_MAP.get(away_name, away_name)
@@ -182,6 +206,25 @@ def run():
 
     if unmatched:
         print(f"\n  Unmatched: {', '.join(set(unmatched))}")
+
+    # Doubleheader fix: copy odds to sibling games sharing same teams+date but unmatched.
+    # ESPN typically returns one entry per matchup; the second DH game has no separate event.
+    if records:
+        matched_pks = {r['game_pk'] for r in records}
+        team_odds_map = {}
+        for r in records:
+            key = (r['away_team'], r['home_team'], r['game_date'])
+            team_odds_map[key] = r
+        for g in db_games:
+            key = (g['away_team'], g['home_team'], g['game_date'])
+            if g['game_pk'] not in matched_pks and key in team_odds_map:
+                src = team_odds_map[key]
+                dupe = dict(src)
+                dupe['game_pk'] = g['game_pk']
+                dupe['fetched_at'] = datetime.now(timezone.utc).isoformat()
+                records.append(dupe)
+                print(f"  DH copy: {g['away_team']} @ {g['home_team']} "
+                      f"pk={g['game_pk']} ← copied from pk={src['game_pk']}")
 
     if not records:
         print("  No records to upsert.")
