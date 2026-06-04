@@ -11,7 +11,7 @@ recommendations for tuning sim_ownership.py weights.
 import sys
 sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
 
-import csv, glob, os, math
+import os, math
 from collections import defaultdict
 from dotenv import load_dotenv
 load_dotenv()
@@ -20,120 +20,84 @@ from supabase import create_client
 
 sb = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'])
 
-CONTEST_DIR = os.path.dirname(os.path.abspath(__file__))  # CSVs live in repo root
-
-MIN_ENTRIES = 1000  # only large-field GPPs (avoids small-field skew)
-
 print("=" * 60)
 print("  Ownership Calibration")
 print("=" * 60)
 
-# ── Step 1: Parse all contest CSVs for actual ownership ─────────────────
-files = glob.glob(os.path.join(CONTEST_DIR, 'contest-standings-*.csv'))
-print(f"\n  Found {len(files)} contest CSV files")
+# ── Step 1: Load actual ownership from Supabase ──────────────────────────
+print("\n  Loading actual ownership from actual_ownership table...")
+actual_rows = []
+offset = 0
+while True:
+    rows = sb.table('actual_ownership').select(
+        'player_id,ownership_pct,game_date'
+    ).range(offset, offset + 999).execute().data or []
+    actual_rows.extend(rows)
+    if len(rows) < 1000:
+        break
+    offset += 1000
 
-# Aggregate actual ownership by player name across large-field contests
-actual_own = defaultdict(list)  # player_name → [own%, own%, ...]
-contest_count = 0
-skipped_small = 0
+# Group by (player_id, game_date) — average if player appears in multiple DGs same day
+actual_by_key = defaultdict(list)
+for r in actual_rows:
+    pid = r.get('player_id')
+    gd  = r.get('game_date')
+    pct = r.get('ownership_pct')
+    if pid and gd and pct is not None:
+        actual_by_key[(pid, gd)].append(pct)
 
-for fpath in files:
-    try:
-        with open(fpath, encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            players = {}
-            entries = set()
-            for row in reader:
-                entries.add(row.get('EntryId'))
-                name = (row.get('Player') or '').strip()
-                pct_raw = (row.get('%Drafted') or '').replace('%', '').strip()
-                if name and pct_raw:
-                    try:
-                        players[name] = float(pct_raw)
-                    except ValueError:
-                        pass
+avg_actual_key = {k: sum(v) / len(v) for k, v in actual_by_key.items()}
+game_dates = {gd for (_, gd) in avg_actual_key}
+contest_count = len(game_dates)
+print(f"  Actual ownership records: {len(avg_actual_key)} player-dates across {contest_count} game dates")
 
-            if len(entries) < MIN_ENTRIES:
-                skipped_small += 1
-                continue
-
-            contest_count += 1
-            for name, pct in players.items():
-                actual_own[name].append(pct)
-    except Exception as e:
-        print(f"  Error reading {os.path.basename(fpath)}: {e}")
-
-print(f"  Large-field contests (≥{MIN_ENTRIES} entries): {contest_count}")
-print(f"  Skipped small-field: {skipped_small}")
-print(f"  Unique players with actual ownership: {len(actual_own)}")
-
-# Average actual ownership per player
-avg_actual = {name: sum(vals) / len(vals) for name, vals in actual_own.items()}
-
-# ── Step 2: Load our projected ownership from slate_ownership ───────────
-print("\n  Loading projected ownership from slate_ownership...")
+# ── Step 2: Load projected ownership from slate_ownership ────────────────
+print("  Loading projected ownership from slate_ownership...")
 proj_rows = []
 offset = 0
 while True:
     rows = sb.table('slate_ownership').select(
-        'player_id,proj_ownership,dk_slate,game_date'
+        'player_id,proj_ownership,game_date'
     ).range(offset, offset + 999).execute().data or []
     proj_rows.extend(rows)
     if len(rows) < 1000:
         break
     offset += 1000
 
-# Load dk_salaries to map player_id → name
-sal_rows = []
+proj_by_key = defaultdict(list)
+for r in proj_rows:
+    pid = r.get('player_id')
+    gd  = r.get('game_date')
+    pct = r.get('proj_ownership')
+    if pid and gd and pct is not None:
+        proj_by_key[(pid, gd)].append(pct)
+
+avg_proj_key = {k: sum(v) / len(v) for k, v in proj_by_key.items()}
+print(f"  Projected ownership records: {len(avg_proj_key)} player-dates")
+
+# Load dk_salaries to map player_id → name (for reporting)
+pid_to_name = {}
 offset = 0
 while True:
-    rows = sb.table('dk_salaries').select(
-        'player_id,name'
-    ).range(offset, offset + 999).execute().data or []
-    sal_rows.extend(rows)
+    rows = sb.table('dk_salaries').select('player_id,name').range(offset, offset + 999).execute().data or []
+    for r in rows:
+        if r.get('player_id') and r.get('name'):
+            pid_to_name[r['player_id']] = r['name']
     if len(rows) < 1000:
         break
     offset += 1000
-pid_to_name = {}
-for r in sal_rows:
-    if r.get('player_id') and r.get('name'):
-        pid_to_name[r['player_id']] = r['name']
 
-# Average projected ownership per player name
-proj_own = defaultdict(list)
-for r in proj_rows:
-    pid = r.get('player_id')
-    name = pid_to_name.get(pid, '')
-    pct = r.get('proj_ownership')
-    if name and pct is not None:
-        proj_own[name].append(pct)
-
-avg_proj = {name: sum(vals) / len(vals) for name, vals in proj_own.items()}
-print(f"  Players with projected ownership: {len(avg_proj)}")
-
-# ── Step 3: Match and compare ───────────────────────────────────────────
-# Normalize names for matching
-def norm(n):
-    return n.lower().replace('.', '').replace("'", '').replace('-', ' ').strip()
-
-actual_norm = {norm(k): (k, v) for k, v in avg_actual.items()}
-proj_norm = {norm(k): (k, v) for k, v in avg_proj.items()}
-
+# ── Step 3: Match on (player_id, game_date) ──────────────────────────────
 matched = []
-for nk, (pname, pval) in proj_norm.items():
-    if nk in actual_norm:
-        aname, aval = actual_norm[nk]
+for (pid, gd), proj_val in avg_proj_key.items():
+    if (pid, gd) in avg_actual_key:
         matched.append({
-            'name': pname,
-            'proj_own': pval,
-            'actual_own': aval,
-            'delta': pval - aval,
-            'n_contests': len(actual_own.get(aname, [])),
+            'name':       pid_to_name.get(pid, f'pid:{pid}'),
+            'proj_own':   proj_val,
+            'actual_own': avg_actual_key[(pid, gd)],
+            'delta':      proj_val - avg_actual_key[(pid, gd)],
         })
 
-# Filter out ghost matches: players projected on dates not in our contest CSVs
-# appear as "actual=0%" even though they weren't in those contests.
-# These inflate apparent bias and corrupt tier analysis.
 matched_all = matched
 matched = [m for m in matched if m['actual_own'] > 0]
 ghost_count = len(matched_all) - len(matched)
@@ -141,8 +105,12 @@ ghost_count = len(matched_all) - len(matched)
 print(f"  Matched players: {len(matched_all)} ({ghost_count} filtered as 0%-actual ghosts → {len(matched)} usable)")
 
 if not matched:
-    print("  No matches found — check name normalization or CSV coverage")
+    print("  No matches found — actual_ownership or slate_ownership table may be empty")
     sys.exit(1)
+
+
+def norm(n):
+    return n.lower().replace('.', '').replace("'", '').replace('-', ' ').strip()
 
 
 def pearson_r(xs, ys):
@@ -229,7 +197,7 @@ for m in under:
 # ── Step 7: Write to research_findings ──────────────────────────────────
 findings_path = os.path.join(os.path.dirname(__file__), 'tasks', 'research_findings.md')
 with open(findings_path, 'a', encoding='utf-8') as f:
-    f.write(f"\n\n## Ownership Calibration — {contest_count} large-field contests (≥{MIN_ENTRIES} entries)\n\n")
+    f.write(f"\n\n## Ownership Calibration — {contest_count} game dates\n\n")
     f.write(f"- **Matched players**: {len(matched)} ({ghost_count} 0%-actual ghosts excluded)\n")
     f.write(f"- **Bias**: {mean_bias:+.2f}% (positive = over-project ownership)\n")
     f.write(f"- **MAE**: {mae:.2f}%\n")
