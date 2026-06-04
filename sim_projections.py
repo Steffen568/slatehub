@@ -963,7 +963,7 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     # K rate: batter talent × pitcher skill ratio × pitcher quality × park K factor
     pitcher_k_ratio = (pitcher['k_pct'] / LEAGUE_AVG_K_PCT) if pitcher else 1.0
     # Pitching+/Stuff+ K adjustment: each point above 100 = ~0.20% more Ks (exponent 0.20)
-    pitcher_k_ratio *= (pitcher_quality / 100.0) ** 0.20
+    pitcher_k_ratio *= (pitcher_quality / 100.0) ** 0.35
     park_k = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
     # Swing length: longer swings = more whiff-prone (league avg ~7.2 ft)
     swing_k_adj = clip(1.0 + (talent.get('swing_length', 7.2) - 7.2) * 0.06, 0.94, 1.08)
@@ -985,7 +985,7 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     qoc_mult = clip(qoc_mult, 0.85, 1.25)
     # Pitcher quality suppresses hit probability: elite pitchers limit BABIP
     # Pitching+ 120 → 0.97 (3% hit suppression), Pitching+ 80 → 1.03 (3% boost)
-    pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.0015, 0.94, 1.06)
+    pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.0025, 0.90, 1.10)
     # Location+ further suppresses: good command = fewer hittable pitches
     loc_hit_suppression = clip(1.0 - (location_quality - 100) * 0.001, 0.96, 1.04)
 
@@ -1458,7 +1458,7 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     location_quality = pitcher.get('location_plus', 100.0) if pitcher else 100.0
 
     pitcher_k_ratio = (pitcher['k_pct'] / LEAGUE_AVG_K_PCT) if pitcher else 1.0
-    pitcher_k_ratio *= (pitcher_quality / 100.0) ** 0.20
+    pitcher_k_ratio *= (pitcher_quality / 100.0) ** 0.35
     park_k = safe(park.get('k_factor'), 100) / 100.0 if park else 1.0
     swing_k_adj = clip(1.0 + (talent.get('swing_length', 7.2) - 7.2) * 0.06, 0.94, 1.08)
     # Dampen park_k: Bayesian K% already includes ~50% home park via career data
@@ -1483,7 +1483,7 @@ def _compute_pa_rates(talent, pitcher, park, weather):
 
     ev_adj = clip(1.0 + (talent.get('avg_ev', 88.0) - 88.0) * 0.008, 0.92, 1.10)
     qoc_mult = clip(1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3, 0.85, 1.25)
-    pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.0015, 0.94, 1.06)
+    pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.0025, 0.90, 1.10)
     loc_hit_suppression = clip(1.0 - (location_quality - 100) * 0.001, 0.96, 1.04)
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather, park)
@@ -1635,12 +1635,13 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
     # SP exits after this many batters faced (varies per sim)
     sp_bf_limit = rng.normal(sp_proj_ip * PA_PER_IP, 5.0, size=n_sims).clip(8, 40).astype(int)
 
-    # Team factor REMOVED — it was redundant with pitcher quality (already in
-    # _compute_pa_rates) and lineup quality (naturally determines baserunner traffic).
-    # Applying Vegas implied on top of those double-counted the environment and
-    # suppressed all hitters in low-implied games regardless of their talent.
-    # The sim now runs on pure talent-vs-pitcher matchup rates.
-    team_factor = np.ones(n_sims)  # neutral — no game-environment scaling
+    # Vegas implied runs → scoring-opportunity factor.
+    # Applied ONLY to base-runner scoring probabilities (R/RBI), NOT to hit rates.
+    # Hit rates are pure talent-vs-pitcher (no double-counting).
+    # Vegas captures park/home-away/bullpen quality/external info beyond the starter.
+    _implied = safe(odds.get('home_implied' if is_home else 'away_implied')) if odds else None
+    vegas_raw = (_implied / LEAGUE_AVG_IMPLIED) if _implied else 1.0
+    team_factor = rng.normal(clip(vegas_raw, 0.75, 1.35), 0.04, size=n_sims).clip(0.65, 1.50)
 
     # Pre-allocate DK points and SB counts per batter
     dk_pts = {i: np.zeros(n_sims) for i in range(9)}
@@ -1672,11 +1673,6 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 batter_vol_sd = 0.04 + (o_swing_vol - 0.30) * 0.25
                 batter_day = rng.normal(1.0, max(0.03, batter_vol_sd))
                 batter_day = clip(batter_day, 0.60, 1.40)
-                # team_factor scales hit, HR, and K: low-implied games suppress
-                # all offense AND increase Ks (tougher pitching environment).
-                # Pure talent-vs-pitcher: rates already encode matchup quality.
-                # No game-environment scaling — lineup quality naturally drives R/RBI
-                # through base runner state (weak lineup = fewer runners on base).
                 hit_p = clip(rates['hit'] * batter_day, 0.06, 0.52)
                 hr_p = clip(rates['hr'] * batter_day, 0.02, 0.30)
                 k_p = rates['k']
@@ -1779,7 +1775,7 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                                 rbi += 1
                                 score_runner(2)
                             if bases[1] != EMPTY:
-                                score_from_2b_prob = 0.60
+                                score_from_2b_prob = clip(0.60 * tf, 0.35, 0.85)
                                 if rng.random() < score_from_2b_prob:
                                     rbi += 1
                                     score_runner(1)
@@ -1803,7 +1799,7 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                     else:
                         # Out
                         # Sac fly: runner on 3B scores with < 2 outs on ~30% of fly outs
-                        if bases[2] != EMPTY and outs < 2 and rng.random() < 0.30:
+                        if bases[2] != EMPTY and outs < 2 and rng.random() < clip(0.30 * tf, 0.15, 0.45):
                             dk_pts[bi][sim] += 2  # RBI from sac fly
                             score_runner(2)
                         outs += 1
