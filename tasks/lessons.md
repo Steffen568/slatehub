@@ -21,6 +21,24 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 
 ## Projection Engine
 
+### hit_prob formula divided by contact_rate — inflating all BIP hit rates by ~12%
+**What happened:** `_compute_pa_rates` and `_bullpen_rates` computed `hr_per_bip = clip(iso/3.15, ...) / contact_rate`, then `hit_prob_base = babip + hr_per_bip`. Dividing by contact_rate (~0.68) inflated the HR/BIP term by 1.47x. The correct formula is `P(hit|BIP) = BABIP*(1 - HR/BIP) + HR/BIP`. This caused avg team runs/game to reach 6-8 vs the expected 4.5.
+**Rule:** BABIP already excludes HRs from both numerator and denominator. Adding HR/BIP back should use `babip*(1 - hr_rate) + hr_rate`, NOT `babip + hr_rate/contact_rate`.
+**Fix:** Changed to `hr_rate = clip(iso/3.15, 0.005, 0.07); hit_prob_base = babip*(1-hr_rate) + hr_rate` in both `_compute_pa_rates` and `_bullpen_rates`.
+
+### Sac fly rate of 30% was ~4x too high
+**What happened:** `clip(0.30 * tf, 0.15, 0.45)` was applied to all non-hit BIPs with runner on 3B and <2 outs. Real MLB sac fly rate is ~0.5% of PAs; the sim was triggering on 5-10x that frequency.
+**Rule:** Sac fly probability should be ~7% of non-hit BIPs when conditions are met (runner on 3B, <2 outs). Don't multiply by `tf` — that ties it to Vegas implied when it's a fixed mechanical rate.
+**Fix:** Changed to a flat `0.07` constant.
+
+### Vegas implied should be a signal, not a run-generation anchor
+**What happened:** Proposed using Vegas implied to scale hit_prob when projections ran hot. User correctly pushed back — anchoring to Vegas removes all model edge. If our data says a team should score more than Vegas implies, we want to capture that.
+**Rule:** Vegas implied is one INPUT to the model (via `sp_era_est`, `opp_implied` adjustments). Fix run inflation by fixing mechanical bugs in the sim (sac fly rate, hit_prob formula, base advancement), not by scaling outputs to match Vegas.
+
+---
+
+## Projection Engine
+
 ### Breakout detector was firing on ~35% of all starters by late May (Session 52)
 **What happened:** `BREAKOUT_XFIP_THRESHOLD = 0.50` triggered on a large fraction of the league's starters by May. The detector printed hundreds of "BREAKOUT detected" lines across 890 matched starts. The effect — shifting the ERA anchor from 50/50 SIERA/xFIP to 75/25 — was designed for Opening Day when current-season data is thin. `PITCHER_CURRENT_WEIGHT = 10` plus the IP-based Bayesian update in `marcel_pitcher()` already handles current-season trust by May.
 **Rule:** Remove the breakout detector entirely after late May; Marcel's Bayesian update handles real breakouts at this sample depth. Do not re-add seasonal patches that don't have an automatic expiry mechanism.
@@ -40,6 +58,61 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 **What happened:** `fetch_mlb_api_batting` used `limit=1000&offset=0` (single request). Players below rank 1000 by PA — recent call-ups, backup players — were never loaded into `batter_stats`. The projection engine warned "No stats found" and fell back to league averages for all of them. When new call-ups also lacked a `players` table entry, the whole upsert batch failed with a FK constraint error.
 **Rule:** Always paginate the MLB Stats API batting/pitching fetches in `load_stats.py`. A single `limit=1000` call silently drops any player ranked 1001+ by PA. Auto-register any player returned by the API who isn't yet in `players` before upserting their stats.
 **Fix:** `fetch_mlb_api_batting` converted to pagination loop (page_size=500, loop until `len(splits) < page_size`). Added auto-registration block before `upload('batter_stats', ...)` that upserts missing player_ids into the `players` table. Also backfilled 2025 and 2024 with the new paginated loader.
+
+### Pitcher props were hardcoded off — pitchers projected the same every slate (Session 53)
+**What happened:** `sim_projections.py fetch_data()` had `pitcher_props = {}` hardcoded with a comment "disabled — API limit hit, data is stale." `load_pitcher_props.py` was writing real K/IP lines from PrizePicks and The Odds API into the `pitcher_props` table daily, but the sim was never reading from it. Vegas K/IP anchors (VEGAS_K_WEIGHT=0.25, VEGAS_IP_WEIGHT=0.50) were dead code.
+**Rule:** If a data load script writes to a Supabase table, verify the projection engine actually reads from that table. A disabled fetch silently removes all daily variation from the stat it drove.
+**Fix:** Replaced the hardcoded `pitcher_props = {}` with a real paginated select from `pitcher_props` table filtered by `game_date`. Added "none in DB today — run load_pitcher_props.py" fallback warning.
+
+### Hitter projections lacked recent form signal — L7 xwOBA not wired into sim (Session 53)
+**What happened:** `sim_projections.py` fetched `batter_game_logs` nowhere in `fetch_data()`. The Bayesian talent estimate uses 3-year Marcel weights, so it barely moves week-to-week. A player on a 7-game hot/cold streak had essentially the same projection as a player with identical career stats who just broke out of a 0-for-20.
+**Rule:** `generate_pool.py` already fetches L7 xwOBA from `batter_game_logs` for PMS scoring. `sim_projections.py` must also fetch and apply it (15% weight) so the actual DK point projection reflects recent form, not just career talent.
+**Fix:** Added `batter_game_logs` fetch to `sim_projections.py fetch_data()` to build `l7_map`. Applied L7 blend after `marcel_batter()` call: 15% weight, ratio capped at ±12%, scales babip (half strength), iso/hr/R/RBI (full strength).
+
+### Bullpen panel showed rotation starters mixed with relievers; inactive players weren't filtered
+**What happened:** `rosterRelievers` in `index.html` only excluded `todayStarters` (today's scheduled SPs). Any rotation starter not pitching today passed through as a bullpen arm. Separately, `load_rosters.py` was never called in `refresh_all.py`, so `on_active_roster` in the `rosters` table was perpetually stale — the frontend's `on_active_roster: true` filter had no effect.
+**Rule:** (1) Classify pitchers as starters by avg pitch count > 65 across appearances OR `gs/g >= 0.4` from season stats — not just today's scheduled starter set. Show them in a separate "Rotation Arms" tier. (2) Any script that reads `on_active_roster` from the DB requires `load_rosters.py` to run daily; add it to `--morning` and `--full` in `refresh_all.py`.
+
+### Pinch-hit detection required play-by-play, not boxscore battingOrder
+**What happened:** Initial plan used `battingOrder % 100 > 0` from boxscore to detect when a substitute entered a lineup slot. `battingOrder` is always `null` in the MLB API boxscore player objects — the field exists but is never populated.
+**Rule:** Use play-by-play `allPlays[].playEvents[]` with `isSubstitution=true`, `eventType='offensive_substitution'`, `position.abbreviation='PH'`. Parse `ev['player']['id']` as the incoming PH. Parse `re.search(r'replaces ([^.]+)', description)` against the boxscore `name→id` map to find who was replaced.
+**Fix:** Rewrote `load_pinch_hit_rates.py` detection to use PBP events. Starters = `set(team_box['batters']) - ph_incoming_set`.
+
+### Supabase pagination PAGE=5000 broke early on first call
+**What happened:** `load_pinch_hit_rates.py` used `PAGE=5000` in its `range()` loop. Supabase caps responses at 1000 rows. First page returned exactly 1000 rows. `len(1000) < 5000 = True` so the loop exited on the first page, loading only the first 1000 rows.
+**Rule:** Always set `PAGE=1000` in Supabase pagination loops. Check termination condition: `if len(page) < PAGE: break`.
+
+### Reliever-specific splits can have bb_pct=0 from small samples → ZeroDivisionError in _bullpen_rates()
+**What happened:** Some reliever pitcher splits had `bb_pct=0.0` (zero walks in a small sample). `_bullpen_rates()` computes `LEAGUE_AVG_BB_PCT / bp_bb` — division by zero crash on first game simulated.
+**Rule:** When building `rel_bp_qual` for a specific reliever, clamp both `k_pct` and `bb_pct` to minimums: `max(0.05, ...)` and `max(0.02, ...)`. Use `or BULLPEN_K_PCT` guard to treat None and 0 identically.
+
+### Sim mean over-projects hitters; direct_dk under-weights Vegas — use direct_dk + vegas_r_scale
+**What happened:** `proj_dk_pts` was set to `np.mean(dk_dist)` (the full-game sim mean). The sim inflates R/RBI because DFS slates select above-average players (higher hit rates → more runners → more team runs than Vegas implies). The code comment at line 2816 explicitly acknowledged this but the sim mean was still stored. Separately, `direct_dk` computed R/RBI from `r_per_pa * proj_pa * k_discount` with no Vegas context — ignoring game-environment information.
+**Rule:** Use `direct_dk` as `proj_dk_pts` (not sim mean). Add Vegas scale to R/RBI: `vegas_r_scale = clip(opp_implied_val / 4.5, 0.75, 1.30)`. Keep sim distribution for `proj_floor`/`proj_ceiling`/`sim_sd` — the sim is good for variance, not the mean. Pitchers already used `direct_dk` — hitters now do too.
+**Fix:** Added `vegas_r_scale` to `exp_r` and `exp_rbi` in the direct calc. Changed `'proj_dk_pts': round2(mean)` → `'proj_dk_pts': round2(direct_dk)` at line 2896.
+
+### SB in direct_dk was inflated 3.5× by a sim-only scaling factor
+**What happened:** `_compute_pa_rates` returns `sb_rate = sb_per_pa * speed_mult * 3.5` — the 3.5× converts from per-PA to per-on-base-event rate for the sim (where SBs are checked once per on-base event). When `direct_dk` became the primary projection (`proj_dk_pts`), the direct calc used `exp_sb = proj_pa * blended['sb']`, multiplying the already-3.5×-scaled rate by ALL plate appearances, not just on-base events. For fast players (sb_per_pa ≈ 0.04), this added 2.5+ phantom DK pts.
+**Rule:** In `direct_dk`, SB must use `talent.get('sb_per_pa', 0.01) * speed_mult * proj_pa` — the raw career SB rate, NOT the sim-scaled `blended['sb']`. The 3.5× in `_compute_pa_rates` is for `sim_full_game` only.
+**Fix:** Changed `exp_sb = proj_pa * blended['sb']` to `exp_sb = proj_pa * talent.get('sb_per_pa', 0.01) * _sb_speed_mult`, computing speed_mult inline from `talent.get('sprint_speed', 4.40)`.
+
+### r_per_pa and rbi_per_pa have no quality regression — weak hitters over-project for R/RBI
+**What happened:** `_counting_rate('r', 0.11, ...)` and `_counting_rate('rbi', 0.10, ...)` do NOT do any Bayesian regression — they return a raw PA-weighted average, or fall back to the league-average DEFAULT (0.11/0.10) when there's no data. A call-up with wRC+ 43 and thin data was getting projected at league-average R/RBI rates, far exceeding what their offensive talent warrants.
+**Rule:** R/RBI in `direct_dk` must be scaled by `woba_quality = (woba / LEAGUE_AVG_WOBA)^0.80`. This suppresses weak hitters without over-punishing them (exponent 0.80 is gentler than linear), and correctly boosts elite hitters.
+**Fix:** Added `woba_quality = clip(talent.get('woba', LEAGUE_AVG_WOBA) / LEAGUE_AVG_WOBA, 0.55, 1.45) ** 0.80` and multiplied into both `exp_r` and `exp_rbi`.
+
+### Pitcher hit-suppression coefficient was too narrow (±10%) — June bias crept up as SP quality improved
+**What happened:** `pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.0025, 0.90, 1.10)` — only ±10% range. As better SPs emerged in the rotation through May/June, batter projections didn't drop proportionally. Overall bias rose from +0.6 to +2.15 in June.
+**Rule:** Pitcher quality differentiation in `_compute_pa_rates` should span ±13%: coefficient 0.0025 → 0.004, clip 0.87-1.13. Applies in both `_compute_pa_rates` (line 1484) and the standalone projection path (line 988).
+**Fix:** Updated both instances of `pitcher_hit_suppression` coefficient from 0.0025 to 0.004 and clip from [0.90,1.10] to [0.87,1.13].
+
+### compute_opp_quality() `is_home` param is pitcher-perspective, not batter-perspective
+**What happened:** When calling `compute_opp_quality()` from the batter simulation loop, the `is_home` argument must be flipped relative to the batter loop's own `is_home` variable. The function internally uses `'away_implied' if is_home else 'home_implied'` where `is_home` means "is the **pitcher's** team home?" In the batter loop, `is_home` means "is the **batter's** team home?" — the opposite.
+**Rule:** Pass `not is_home` when calling `compute_opp_quality()` from the batter simulation context. The function always needs to know whether the **pitching team** is home.
+
+### `score_runner()` must track _inning_sp_runs and _sim_total_runs using mutable list containers
+**What happened:** Python closures don't rebind simple ints assigned inside nested scopes — `_inning_sp_runs += 1` inside a closure would create a local variable, not modify the outer one. Using mutable containers (`_inning_sp_runs = [0]`) allows `score_runner()` to increment via `_inning_sp_runs[0] += 1` without the rebinding problem. This pattern is required whenever a nested function needs to mutate a counter defined in an enclosing scope.
+**Rule:** Any counter that must be incremented by a closure (`score_runner`, similar helpers) must be a `[0]` mutable list, not a bare int. The shell threshold and score-state tracking both depend on this pattern.
 
 ### Wind direction was park-orientation-blind; sensitivity was flat across all stadiums
 **What happened:** `weather_hr_mult()` used a hardcoded set of cardinal directions (`WIND_OUT_DIRS = {"S","SW",...}`) assuming every ballpark faces north. Most don't — Wrigley faces east, Oracle northeast, etc. Also, a 15 mph wind at Wrigley had identical impact to Petco Park (no per-park sensitivity).
@@ -901,4 +974,22 @@ requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leader
 
 ### Auto-fixed DK ID mismatches: Carlos Cortes, Edwin Arroyo, Tyler O'Neill
 **What happened:** Pipeline auto-fixed 3 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Jose Fermin
+**What happened:** Pipeline auto-fixed 1 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### load_stats.py failed during --stats run
+**What happened:**   File "C:\Users\Steffen's PC\AppData\Local\Programs\Python\Python312\Lib\site-packages\httpx\_transports\default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.RemoteProtocolError: Server disconnected
+**Rule:** Check that py -3.12 and all dependencies are installed. Check API availability.
+
+### Auto-fixed DK ID mismatches: Carlos Cortes, Gabriel Rincones Jr.
+**What happened:** Pipeline auto-fixed 2 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+### Auto-fixed DK ID mismatches: Carlos Cortes, Junior Perez
+**What happened:** Pipeline auto-fixed 2 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.

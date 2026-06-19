@@ -18,7 +18,7 @@ Run: py -3.12 sim_projections.py
 
 import os, math, random
 import numpy as np
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from supabase import create_client
 from dotenv import load_dotenv
 from config import SEASON
@@ -984,8 +984,8 @@ def sim_batter_game(talent: dict, pitcher: dict, park: dict, weather: dict,
     qoc_mult = 1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3
     qoc_mult = clip(qoc_mult, 0.85, 1.25)
     # Pitcher quality suppresses hit probability: elite pitchers limit BABIP
-    # Pitching+ 120 → 0.97 (3% hit suppression), Pitching+ 80 → 1.03 (3% boost)
-    pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.0025, 0.90, 1.10)
+    # Pitching+ 130 → 0.88 (12% suppression), Pitching+ 85 → 1.06 (6% boost)
+    pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.004, 0.87, 1.13)
     # Location+ further suppresses: good command = fewer hittable pitches
     loc_hit_suppression = clip(1.0 - (location_quality - 100) * 0.001, 0.96, 1.04)
 
@@ -1472,18 +1472,16 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     hbp_rate = 0.010
 
     # Hit probability — P(hit | ball in play) including HR
-    # BABIP excludes HR from numerator and denominator, so using it raw
-    # under-counts hits by ~12%. Convert to total P(hit|BIP) by adding
-    # the HR component back: hit_prob = BABIP + HR/BIP
+    # BABIP excludes HR from numerator and denominator.
+    # Correct formula: P(hit|BIP) = BABIP*(1 - HR/BIP) + HR/BIP
+    # where HR/BIP ≈ ISO/3.15 (not divided by contact_rate — that was a bug).
     contact_rate = max(0.30, 1.0 - talent['k_pct'] - talent['bb_pct'] - 0.01)
-    # ISO/3.0 overestimated HR by ~67%. ISO/3.5 reduces the overcount while preserving
-    # differentiation between power and contact hitters in the BIP hit probability.
-    hr_per_bip = clip(talent['iso'] / 3.15, 0.005, 0.07) / contact_rate
-    hit_prob_base = talent['babip'] + hr_per_bip
+    hr_rate = clip(talent['iso'] / 3.15, 0.005, 0.07)  # P(HR | BIP)
+    hit_prob_base = talent['babip'] * (1.0 - hr_rate) + hr_rate
 
     ev_adj = clip(1.0 + (talent.get('avg_ev', 88.0) - 88.0) * 0.008, 0.92, 1.10)
     qoc_mult = clip(1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3, 0.85, 1.25)
-    pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.0025, 0.90, 1.10)
+    pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.004, 0.87, 1.13)
     loc_hit_suppression = clip(1.0 - (location_quality - 100) * 0.001, 0.96, 1.04)
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather, park)
@@ -1550,9 +1548,10 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     # No multiplier — direct calc uses career SB rate at face value.
     # The 2.0x was for sim multi-PA windows which no longer drives the mean.
     base_sb = talent.get('sb_per_pa', 0.01)
-    # Coefficient dampened 1.16→0.90: matches change in sim path above
     speed_mult = clip(1.0 + (4.40 - talent.get('sprint_speed', 4.40)) * 0.90, 0.50, 1.50)
-    sb_rate = clip(base_sb * speed_mult, 0.0, 0.35)
+    # 3.5x scale: sim attempts SB per on-base event (~24% of PAs: walks+HBP+singles).
+    # sb_per_pa is a per-PA rate, so dividing by ~0.24 converts to per-on-base-event rate.
+    sb_rate = clip(base_sb * speed_mult * 3.5, 0.0, 0.35)
 
     return {
         'k': k_rate, 'bb': bb_rate, 'hbp': hbp_rate,
@@ -1578,17 +1577,16 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     qoc_mult = clip(1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3, 0.85, 1.25)
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather, park)
-    # Add HR/BIP back to BABIP for total P(hit|BIP) — same fix as _compute_pa_rates
-    bp_contact = max(0.30, 1.0 - talent['k_pct'] - talent['bb_pct'] - 0.01)
-    bp_hr_per_bip = clip(talent['iso'] / 3.15, 0.005, 0.07) / bp_contact
-    # Player-specific qoc_mult (same logic)
+    # P(hit|BIP) = BABIP*(1-HR/BIP) + HR/BIP — same correct formula as _compute_pa_rates
+    hr_rate_bp = clip(talent['iso'] / 3.15, 0.005, 0.07)
+    bp_hit_prob_base = bp_babip * (1.0 - hr_rate_bp) + hr_rate_bp
     raw_qoc = 1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3
     babip_vs_avg = (talent['babip'] - LEAGUE_AVG_BABIP) / 0.05
     qoc_vs_avg = (raw_qoc - 1.0) / 0.10
     overlap = clip(min(babip_vs_avg, qoc_vs_avg), 0.0, 1.0) if babip_vs_avg > 0 and qoc_vs_avg > 0 else 0.0
     adjusted_qoc = clip(1.0 + (raw_qoc - 1.0) * (1.0 - overlap * 0.70), 0.90, 1.20)
     park_basic_edge = 1.0 + (park_basic - 1.0) * 0.50
-    hit_prob = clip((bp_babip + bp_hr_per_bip) * adjusted_qoc * ev_adj * park_basic_edge * wx_hit, 0.20, 0.52)
+    hit_prob = clip(bp_hit_prob_base * adjusted_qoc * ev_adj * park_basic_edge * wx_hit, 0.20, 0.52)
 
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
     fb_adj = clip(1.0 + (talent.get('fb_pct', 0.35) - 0.35) * 0.3, 0.85, 1.20)
@@ -1612,8 +1610,67 @@ def _bullpen_rates(talent, park, weather, bp_quality=None):
     }
 
 
+def _select_reliever(inning, batter_hint, team_relievers, used_this_sim, rng,
+                     runs_scored=0, opp_implied=4.5, is_opener_game=False):
+    """Pick a reliever using quality rank and game state (score, opener flag).
+
+    inning: 1-based inning number
+    batter_hint: batter's batting hand ('L', 'R', or 'S' for switch)
+    team_relievers: list sorted best→worst by quality_rank (0.0=best, 1.0=worst)
+    used_this_sim: {player_id: appearance_count} within this sim
+    runs_scored: total runs scored against pitching team so far (score state)
+    opp_implied: Vegas implied runs for the batting team (for blowout detection)
+    is_opener_game: True if starter was an opener (sp_proj_ip <= 2.5)
+    Returns a reliever dict or None (caller falls back to team-aggregate rates).
+    """
+    if not team_relievers:
+        return None
+    candidates = [r for r in team_relievers
+                  if r.get('available', True) and used_this_sim.get(r['player_id'], 0) < 2]
+    if not candidates:
+        candidates = list(team_relievers)
+    if not candidates:
+        return None
+
+    # Opener game: first relief appearance = bulk man (long reliever for innings 2-6)
+    if is_opener_game and not used_this_sim:
+        bulk = [r for r in candidates if r.get('is_long_reliever')]
+        if bulk:
+            return bulk[0]  # already sorted best → worst by quality
+
+    # Score-state: blowout → mop-up arms; close game → best arms
+    est_deficit = runs_scored - (opp_implied * inning / 9.0)
+    is_blowout = est_deficit > 2.5
+
+    if is_blowout:
+        preferred = [r for r in candidates if r.get('quality_rank', 0) >= 0.60]
+        if not preferred:
+            preferred = candidates
+    else:
+        preferred = [r for r in candidates if r.get('quality_rank', 1.0) <= 0.65]
+        if not preferred:
+            preferred = candidates
+
+    # Platoon advantage: prefer pitcher whose arm matches the batter's batting hand
+    if batter_hint and batter_hint != 'S':
+        matched = [r for r in preferred if r.get('throws') == batter_hint]
+        pool = matched if matched else preferred
+    else:
+        pool = preferred
+
+    # Weighted random: best quality arm is most likely within the pool
+    weights = [(1.0 - r.get('quality_rank', 0.5) + 0.05) for r in pool]
+    total = sum(weights)
+    if total <= 0:
+        return pool[0]
+    probs = [w / total for w in weights]
+    return pool[int(rng.choice(len(pool), p=probs))]
+
+
 def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
-                  n_sims, rng, sp_proj_ip=5.5, sb_context=None):
+                  n_sims, rng, sp_proj_ip=5.5, sb_context=None,
+                  team_relievers=None, ph_rates=None,
+                  sp_era_est=4.5, opp_implied=4.5, is_opener_game=False):
     """
     Simulate n_sims full games for one team's offense.
     Batters hit in lineup order, tracking base state and outs per inning.
@@ -1627,6 +1684,8 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
         n_sims: number of simulations
         rng: numpy random generator
         sp_proj_ip: projected IP for opposing starter
+        team_relievers: list of reliever dicts for the pitching team (from fetch_data)
+        ph_rates: {player_id: ph_for_rate} pinch-hit substitution risk per batter
 
     Returns:
         dict of { player_index: np.array(n_sims) } — DK points per sim per batter
@@ -1634,6 +1693,11 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
     PA_PER_IP = 4.3
     # SP exits after this many batters faced (varies per sim)
     sp_bf_limit = rng.normal(sp_proj_ip * PA_PER_IP, 5.0, size=n_sims).clip(8, 40).astype(int)
+
+    # Runs-allowed shell threshold: too many runs in one inning → SP yanked early
+    if sp_era_est < 3.5:    shell_threshold = 4  # elite SP gets more rope
+    elif sp_era_est < 4.5:  shell_threshold = 3  # average SP
+    else:                   shell_threshold = 2  # bad SP on short leash
 
     # Vegas implied runs → scoring-opportunity factor.
     # Applied ONLY to base-runner scoring probabilities (R/RBI), NOT to hit rates.
@@ -1646,7 +1710,6 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
     # Pre-allocate DK points and SB counts per batter
     dk_pts = {i: np.zeros(n_sims) for i in range(9)}
     sb_counts = {i: np.zeros(n_sims) for i in range(9)}
-
     # Base state: [1B, 2B, 3B] — stores batter index (0-8) or -1 if empty.
     # Tracking runner identity lets us credit R to the batter who scored,
     # eliminating the need for an artificial post-game R distribution.
@@ -1656,17 +1719,85 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
         sp_limit = sp_bf_limit[sim]
         team_bf = 0  # batters faced by this team's offense
         batter_idx = 0  # current spot in lineup (0-8, wraps)
+        current_reliever = None   # reliever currently pitching in this sim
+        rel_bf = 0                # batters faced by current reliever this sim
+        rel_bf_cap = 12           # BF cap for current reliever (22 for bulk man in opener games)
+        used_this_sim = {}        # {player_id: appearance count} within this sim
+        _sim_total_runs = [0]     # total runs scored this sim (for score-state blowout detection)
 
         for inning in range(9):  # 9 innings
             outs = 0
             bases = [EMPTY, EMPTY, EMPTY]  # 1B, 2B, 3B — batter index or EMPTY
+            _inning_sp_runs = [0]           # runs allowed by SP this inning (shell detection)
+
+            def score_runner(base_idx):
+                runner = bases[base_idx]
+                if runner != EMPTY:
+                    dk_pts[runner][sim] += 2
+                    if team_bf < sp_limit:
+                        _inning_sp_runs[0] += 1
+                    _sim_total_runs[0] += 1
+                bases[base_idx] = EMPTY
 
             while outs < 3:
                 bi = batter_idx % 9
                 batter = lineup_talents[bi]
 
-                # Choose rates based on whether starter is still in
-                rates = batter['rates_vs_sp'] if team_bf < sp_limit else batter['rates_vs_bp']
+                if team_bf < sp_limit:
+                    rates = batter['rates_vs_sp']
+                else:
+                    # Rotate reliever: on first bullpen PA, or new inning after 3+ BF, or hit BF cap
+                    if team_relievers and (
+                        current_reliever is None
+                        or rel_bf >= rel_bf_cap
+                        or (outs == 0 and rel_bf >= 3)
+                    ):
+                        b_hint = batter.get('bats', 'R')
+                        current_reliever = _select_reliever(
+                            inning + 1, b_hint, team_relievers, used_this_sim, rng,
+                            runs_scored=_sim_total_runs[0],
+                            opp_implied=opp_implied,
+                            is_opener_game=is_opener_game)
+                        if current_reliever:
+                            pid_r = current_reliever['player_id']
+                            used_this_sim[pid_r] = used_this_sim.get(pid_r, 0) + 1
+                            rel_bf_cap = 22 if (current_reliever.get('is_long_reliever') and is_opener_game) else 12
+                        rel_bf = 0
+
+                    # Pinch-hit substitution risk (same-hand matchup only)
+                    if current_reliever and ph_rates:
+                        b_bats = batter.get('bats', 'R')
+                        rel_throws = current_reliever.get('throws', 'R')
+                        if b_bats != 'S' and b_bats == rel_throws:
+                            ph_rate = ph_rates.get(batter.get('player_id', -1), 0)
+                            if ph_rate > 0 and rng.random() < ph_rate:
+                                # Batter is pinch hit for — next batter takes the PA
+                                batter_idx += 1
+                                team_bf += 1
+                                rel_bf += 1
+                                continue
+
+                    # Reliever-specific PA rates using hand-matched splits
+                    if current_reliever:
+                        b_bats = batter.get('bats', 'R')
+                        rel_throws = current_reliever.get('throws', 'R')
+                        # Switch hitters bat opposite the pitcher's arm
+                        b_hand = ('L' if rel_throws == 'R' else 'R') if b_bats == 'S' else b_bats
+                        rel_split = current_reliever.get('splits', {}).get(b_hand)
+                        rel_stats = current_reliever.get('stats', {})
+                        if rel_split:
+                            rel_bp_qual = {
+                                'k_pct':  max(0.05, rel_split.get('k_pct')  or rel_stats.get('k_pct',  BULLPEN_K_PCT)),
+                                'bb_pct': max(0.02, rel_split.get('bb_pct') or rel_stats.get('bb_pct', BULLPEN_BB_PCT)),
+                                'hr9':    rel_split.get('hr9')   or rel_stats.get('hr9',   BULLPEN_HR9),
+                                'babip':  rel_split.get('babip') or rel_stats.get('babip', BULLPEN_BABIP),
+                            }
+                            rates = _bullpen_rates(batter, park, weather, rel_bp_qual)
+                        else:
+                            rates = batter['rates_vs_bp']
+                    else:
+                        rates = batter['rates_vs_bp']
+                    rel_bf += 1
 
                 # Per-batter volatility: o_swing% (chase rate) widens outcomes
                 o_swing_vol = batter.get('o_swing', 0.30)
@@ -1674,16 +1805,9 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                 batter_day = rng.normal(1.0, max(0.03, batter_vol_sd))
                 batter_day = clip(batter_day, 0.60, 1.40)
                 hit_p = clip(rates['hit'] * batter_day, 0.06, 0.52)
-                hr_p = clip(rates['hr'] * batter_day, 0.02, 0.30)
+                hr_p = clip(rates['hr'] * batter_day, 0.005, 0.30)
                 k_p = rates['k']
                 bb_p = rates['bb']
-
-                # Helper: credit R (+2 DK pts) to a runner who scores
-                def score_runner(base_idx):
-                    runner = bases[base_idx]
-                    if runner != EMPTY:
-                        dk_pts[runner][sim] += 2  # R scored
-                    bases[base_idx] = EMPTY
 
                 # Roll PA
                 roll = rng.random()
@@ -1745,6 +1869,10 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                                 if bases[b] != EMPTY:
                                     rbi += 1
                                     score_runner(b)
+                            # Batter's own run (not tracked by score_runner)
+                            if team_bf < sp_limit:
+                                _inning_sp_runs[0] += 1
+                            _sim_total_runs[0] += 1
                             dk_pts[bi][sim] += 10 + 2 + 2 * rbi  # HR + R + RBI
                         elif type_roll < hr_p + rates['triple']:
                             # TRIPLE — all runners score, batter to 3B
@@ -1775,7 +1903,7 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                                 rbi += 1
                                 score_runner(2)
                             if bases[1] != EMPTY:
-                                score_from_2b_prob = clip(0.60 * tf, 0.35, 0.85)
+                                score_from_2b_prob = clip(0.45 * tf, 0.25, 0.65)
                                 if rng.random() < score_from_2b_prob:
                                     rbi += 1
                                     score_runner(1)
@@ -1798,14 +1926,18 @@ def sim_full_game(lineup_talents, sp_talent, park, weather, odds, is_home,
                                 sb_counts[bi][sim] += 1
                     else:
                         # Out
-                        # Sac fly: runner on 3B scores with < 2 outs on ~30% of fly outs
-                        if bases[2] != EMPTY and outs < 2 and rng.random() < clip(0.30 * tf, 0.15, 0.45):
+                        # Sac fly: ~7% of non-hit BIPs with runner on 3B and <2 outs
+                        if bases[2] != EMPTY and outs < 2 and rng.random() < 0.07:
                             dk_pts[bi][sim] += 2  # RBI from sac fly
                             score_runner(2)
                         outs += 1
 
                 team_bf += 1
                 batter_idx += 1
+
+            # Shell threshold: if SP allowed too many runs this inning, yank them
+            if team_bf < sp_limit and _inning_sp_runs[0] >= shell_threshold:
+                sp_limit = team_bf  # force SP exit before next inning
 
     return dk_pts, sb_counts
 
@@ -1878,6 +2010,25 @@ def fetch_data(target_date: str) -> dict:
         for r in rows:
             if r['player_id'] not in bat_tracking:  # prefer current season (fetched first)
                 bat_tracking[r['player_id']] = r
+
+    # L7 xwOBA — recent form signal (last 7 games, min 2 required)
+    l7_map = {}
+    if all_stat_ids:
+        from collections import defaultdict as _l7dd
+        for i in range(0, len(all_stat_ids), 150):
+            chunk = all_stat_ids[i:i+150]
+            rows = sb.table('batter_game_logs').select(
+                'player_id,game_date,xwoba'
+            ).in_('player_id', chunk).order('game_date', desc=True).limit(5000).execute().data or []
+            grouped = _l7dd(list)
+            for r in rows:
+                grouped[r['player_id']].append(r)
+            for pid, gl in grouped.items():
+                recent = [g for g in gl[:7] if g.get('xwoba') is not None]
+                if len(recent) >= 2:
+                    l7_map[pid] = sum(safe(g['xwoba'], 0.0) for g in recent) / len(recent)
+    if l7_map:
+        print(f"  L7 xwOBA: {len(l7_map)} players with recent form data")
 
     # Pitcher stats (3 seasons)
     sp_ids = set()
@@ -2069,9 +2220,20 @@ def fetch_data(target_date: str) -> dict:
         pass  # table may not exist yet
 
     # Pitcher props (Vegas IP and K lines)
-    # Pitcher props disabled — API limit hit, data is stale.
-    # Bayesian model drives projections from talent metrics instead.
     pitcher_props = {}
+    if sp_ids:
+        for i in range(0, len(list(sp_ids)), 150):
+            chunk = list(sp_ids)[i:i+150]
+            rows = sb.table('pitcher_props').select(
+                'player_id,implied_ip,implied_ks'
+            ).in_('player_id', chunk).eq('game_date', target_date).execute().data or []
+            for r in rows:
+                if r.get('implied_ip') or r.get('implied_ks'):
+                    pitcher_props[r['player_id']] = r
+        if pitcher_props:
+            print(f"  Pitcher props: {len(pitcher_props)} lines loaded")
+        else:
+            print("  Pitcher props: none in DB for today (run load_pitcher_props.py)")
 
     # ── Team bullpen quality ────────────────────────────────────────────
     # Fetch reliever stats per team for team-specific bullpen rates in game sim
@@ -2083,12 +2245,14 @@ def fetch_data(target_date: str) -> dict:
         for i in range(0, len(team_ids), 30):
             chunk = team_ids[i:i+30]
             rows = sb.table('rosters').select(
-                'player_id,team_id'
+                'player_id,team_id,throws'
             ).in_('team_id', chunk).eq('position_type', 'Pitcher').execute().data or []
             roster_rows.extend(rows)
         team_pitcher_ids = {}
+        roster_throws = {}
         for r in roster_rows:
             team_pitcher_ids.setdefault(r['team_id'], []).append(r['player_id'])
+            roster_throws[r['player_id']] = r.get('throws') or 'R'
         all_rp_ids = [pid for pids in team_pitcher_ids.values() for pid in pids]
         rp_stat_rows = []
         # Try current season first (relaxed: g>=1 for early season), then prior season
@@ -2096,7 +2260,7 @@ def fetch_data(target_date: str) -> dict:
             for i in range(0, len(all_rp_ids), 500):
                 chunk = all_rp_ids[i:i+500]
                 rows = sb.table('pitcher_stats').select(
-                    'player_id,ip,g,gs,k_pct,bb_pct,hr9,babip'
+                    'player_id,ip,g,gs,k_pct,bb_pct,hr9,babip,sv,hld,xfip,siera,stuff_plus,csw_pct'
                 ).in_('player_id', chunk).eq('season', szn).lte('gs', 2).gte('g', 1).execute().data or []
                 rp_stat_rows.extend(rows)
         # IP-weighted composite per team
@@ -2127,6 +2291,152 @@ def fetch_data(target_date: str) -> dict:
     except Exception as e:
         print(f"  Bullpen quality: skipped ({e})")
 
+    # ── Individual reliever selection data ─────────────────────────────────────
+    # Builds team_relievers for game-state-aware reliever picking in sim_full_game.
+    # Wrapped in try/except: failure here degrades gracefully to team-avg bullpen rates.
+    team_relievers = {}  # {team_id: [reliever_dict, ...]}
+    ph_rates = {}
+    batter_hands = {}
+    try:
+        # Fetch pitcher splits for all reliever IDs (k_pct/bb_pct vs L and R batters)
+        rel_splits = {}  # {player_id: {'L': {k_pct, bb_pct}, 'R': {k_pct, bb_pct}}}
+        if all_rp_ids:
+            rel_splits_raw = {}
+            for szn in [SEASON, SEASON - 1]:
+                for i in range(0, len(all_rp_ids), 150):
+                    chunk = all_rp_ids[i:i + 150]
+                    rows = sb.table('pitcher_splits').select(
+                        'player_id,season,split,pa,k_pct,bb_pct,hr9,babip'
+                    ).in_('player_id', chunk).eq('season', szn).execute().data or []
+                    for r in rows:
+                        rel_splits_raw.setdefault(r['player_id'], {}).setdefault(r['split'], {})[r['season']] = r
+            for pid, by_split in rel_splits_raw.items():
+                for split_label, by_season in by_split.items():
+                    curr = by_season.get(SEASON)
+                    prev = by_season.get(SEASON - 1)
+                    curr_pa = safe(curr.get('pa'), 0) if curr else 0
+                    prev_pa = safe(prev.get('pa'), 0) if prev else 0
+                    if curr_pa + prev_pa < 10:
+                        continue
+                    if curr and prev and curr_pa > 0 and prev_pa > 0:
+                        denom = curr_pa * 5 + prev_pa * 4
+                        bk    = (safe(curr.get('k_pct'),   BULLPEN_K_PCT)  * curr_pa * 5 + safe(prev.get('k_pct'),   BULLPEN_K_PCT)  * prev_pa * 4) / denom
+                        bbb   = (safe(curr.get('bb_pct'),  BULLPEN_BB_PCT) * curr_pa * 5 + safe(prev.get('bb_pct'),  BULLPEN_BB_PCT) * prev_pa * 4) / denom
+                        bhr9  = (safe(curr.get('hr9'),     BULLPEN_HR9)    * curr_pa * 5 + safe(prev.get('hr9'),     BULLPEN_HR9)    * prev_pa * 4) / denom
+                        bbabip= (safe(curr.get('babip'),   BULLPEN_BABIP)  * curr_pa * 5 + safe(prev.get('babip'),   BULLPEN_BABIP)  * prev_pa * 4) / denom
+                    elif curr:
+                        bk     = safe(curr.get('k_pct'),  BULLPEN_K_PCT)
+                        bbb    = safe(curr.get('bb_pct'), BULLPEN_BB_PCT)
+                        bhr9   = safe(curr.get('hr9'),    BULLPEN_HR9)
+                        bbabip = safe(curr.get('babip'),  BULLPEN_BABIP)
+                    else:
+                        bk     = safe(prev.get('k_pct'),  BULLPEN_K_PCT)
+                        bbb    = safe(prev.get('bb_pct'), BULLPEN_BB_PCT)
+                        bhr9   = safe(prev.get('hr9'),    BULLPEN_HR9)
+                        bbabip = safe(prev.get('babip'),  BULLPEN_BABIP)
+                    rel_splits.setdefault(pid, {})[split_label] = {
+                        'k_pct': bk, 'bb_pct': bbb, 'hr9': bhr9, 'babip': bbabip}
+
+        # Workload availability: mark fatigued if pitched heavily in last 2 days
+        workload_avail = {}
+        try:
+            cutoff = str(date.today() - timedelta(days=4))
+            yesterday = str(date.today() - timedelta(days=1))
+            three_ago = str(date.today() - timedelta(days=3))
+            for i in range(0, len(all_rp_ids), 500):
+                chunk = all_rp_ids[i:i + 500]
+                rows = sb.table('bullpen_appearances').select(
+                    'player_id,game_date,pitches,is_starter'
+                ).in_('player_id', chunk).gte('game_date', cutoff).execute().data or []
+                by_pid = {}
+                for r in rows:
+                    if r.get('is_starter'):
+                        continue
+                    by_pid.setdefault(r['player_id'], []).append(r)
+                for pid, apps in by_pid.items():
+                    heavy_yesterday = any(
+                        a['game_date'] == yesterday and safe(a.get('pitches'), 0) >= 20
+                        for a in apps)
+                    three_straight = len({a['game_date'] for a in apps if a['game_date'] >= three_ago}) >= 3
+                    workload_avail[pid] = not (heavy_yesterday or three_straight)
+        except Exception:
+            pass  # workload check is non-critical
+
+        # Composite reliever quality score: higher = better arm
+        # Weights from predictive validity: K% > xFIP/SIERA > BB% > Stuff+ > CSW%
+        def _rq(s):
+            k     = safe(s.get('k_pct'),      0.22)
+            bb    = safe(s.get('bb_pct'),     0.085)
+            xfip  = safe(s.get('xfip'),        4.5)
+            siera = safe(s.get('siera'),        4.5)
+            stf   = safe(s.get('stuff_plus'), 100.0)
+            csw   = safe(s.get('csw_pct'),    0.27)
+            return (k * 0.30
+                    - bb * 3.0 * 0.20
+                    - xfip * 0.10 * 0.25
+                    - siera * 0.10 * 0.15
+                    + (stf - 100.0) / 100.0 * 0.07
+                    + csw * 0.03)
+
+        # Build per-team reliever lists with quality rank, handedness, availability, splits
+        for tid, pids in team_pitcher_ids.items():
+            relievers_for_team = []
+            for pid in pids:
+                stats = rp_by_pid.get(pid, {})
+                g  = safe(stats.get('g'), 0)
+                gs = safe(stats.get('gs'), 0)
+                ip = safe(stats.get('ip'), 0)
+                if g == 0 or gs / max(g, 1) >= 0.4 or ip < 1:
+                    continue  # is a starter or near-zero IP
+                is_long = (ip / max(g, 1)) > 2.0
+                relievers_for_team.append({
+                    'player_id':        pid,
+                    'throws':           roster_throws.get(pid, 'R'),
+                    'available':        workload_avail.get(pid, True),
+                    'is_long_reliever': is_long,
+                    '_qs':              _rq(stats),
+                    'splits':           rel_splits.get(pid, {}),
+                    'stats': {
+                        'k_pct':      safe(stats.get('k_pct'),      BULLPEN_K_PCT),
+                        'bb_pct':     safe(stats.get('bb_pct'),     BULLPEN_BB_PCT),
+                        'hr9':        safe(stats.get('hr9'),        BULLPEN_HR9),
+                        'babip':      safe(stats.get('babip'),      BULLPEN_BABIP),
+                        'xfip':       safe(stats.get('xfip'),       4.5),
+                        'siera':      safe(stats.get('siera'),      4.5),
+                        'stuff_plus': safe(stats.get('stuff_plus'), 100.0),
+                    },
+                })
+            # Sort best → worst; assign quality_rank 0.0 (best) → 1.0 (worst)
+            relievers_for_team.sort(key=lambda r: r['_qs'], reverse=True)
+            n = len(relievers_for_team)
+            for idx, r in enumerate(relievers_for_team):
+                r['quality_rank'] = 0.0 if n == 1 else idx / (n - 1)
+                del r['_qs']
+            team_relievers[tid] = relievers_for_team
+
+        # Pinch-hit rates (current season, min 5 starts for signal)
+        rows = (sb.table('pinch_hit_rates').select('player_id,ph_for_rate')
+                  .eq('season', SEASON).gte('games_started', 5).execute().data or [])
+        ph_rates = {r['player_id']: (r.get('ph_for_rate') or 0.0) for r in rows}
+
+        print(f"  Reliever selection: "
+              f"{sum(len(v) for v in team_relievers.values())} relievers / "
+              f"{len(team_relievers)} teams | ph_rates: {len(ph_rates)} players")
+
+    except Exception as e:
+        print(f"  Reliever selection: skipped ({e})")
+
+    # Batter handedness for pinch-hit risk (non-critical — falls back to 'R')
+    try:
+        all_batter_ids = list({lu['player_id'] for lu in lineups if lu.get('batting_order')})
+        for i in range(0, len(all_batter_ids), 500):
+            chunk = all_batter_ids[i:i + 500]
+            rows = sb.table('rosters').select('player_id,bats').in_('player_id', chunk).execute().data or []
+            for r in rows:
+                batter_hands[r['player_id']] = r.get('bats') or 'R'
+    except Exception:
+        pass
+
     return {
         'games': games, 'lineups': lineups,
         'batter_stats': batter_stats, 'pitcher_stats': pitcher_stats,
@@ -2135,9 +2445,13 @@ def fetch_data(target_date: str) -> dict:
         'park_factors': park_factors, 'weather': weather,
         'pitcher_props': pitcher_props,
         'bullpen_quality': bullpen_quality,
+        'team_relievers': team_relievers,
+        'ph_rates': ph_rates,
+        'batter_hands': batter_hands,
         'arsenal_data': arsenal_data,
         'arsenal_rows_by_pitcher': arsenal_rows_by_pitcher,
         'bat_tracking': bat_tracking,
+        'l7_map': l7_map,
         'sp_salaries': sp_salaries,
         'catcher_poptime': catcher_poptime,
         '_forward_remap': forward_remap,
@@ -2353,6 +2667,34 @@ def run():
         # Opposing team's bullpen quality (for after SP exits)
         opp_team_id = game.get('away_team_id') if is_home else game.get('home_team_id')
         bp_quality = data.get('bullpen_quality', {}).get(opp_team_id)
+        opp_team_relievers = data.get('team_relievers', {}).get(opp_team_id, [])
+
+        # Composite SP danger estimate for shell threshold and direct-calc SP fraction
+        sp_era_est = 4.5
+        opp_implied_val = 4.5
+        try:
+            # Quality of batter team's lineup vs the opposing SP
+            opp_q_ratio, _ = compute_opp_quality(
+                data['lineups'], data['batter_stats'], data['batter_splits'],
+                team_id, opp_sp_hand, odds_row, not is_home)
+            sp_siera = pitcher.get('siera') if pitcher else None
+            sp_xfip  = pitcher.get('xfip')  if pitcher else None
+            if sp_siera and sp_xfip:
+                sp_era_base = sp_siera * 0.55 + sp_xfip * 0.45
+            elif sp_siera:
+                sp_era_base = sp_siera
+            elif sp_xfip:
+                sp_era_base = sp_xfip
+            else:
+                sp_era_base = 4.5
+            sp_stuff = pitcher.get('stuff_plus', 100) if pitcher else 100
+            sp_era_base *= clip(1.0 - (sp_stuff - 100) * 0.002, 0.85, 1.15)
+            sp_era_est = sp_era_base * opp_q_ratio
+            opp_implied_val = safe(odds_row.get('home_implied' if is_home else 'away_implied')) if odds_row else 4.5
+            opp_implied_val = opp_implied_val or 4.5
+        except Exception:
+            pass
+        is_opener_game = sp_proj_ip <= 2.5
 
         # Build talent + rates for each batter
         lineup_talents = []
@@ -2385,13 +2727,32 @@ def run():
                     'swing_length': 7.2,
                     'r_per_pa': 0.11, 'rbi_per_pa': 0.10,
                     'hr_per_pa': 0.03, 'xb_per_hit': 0.14,
+                    'player_id': pid,
+                    'bats': data.get('batter_hands', {}).get(pid) or 'R',
                 }
             else:
                 talent = marcel_batter(stats_by_yr, SEASON, target_date)
+                talent['player_id'] = pid
+                talent['bats'] = data.get('batter_hands', {}).get(pid) or 'R'
                 # Merge swing_length from bat_tracking table (not in batter_stats)
                 bt = data.get('bat_tracking', {}).get(stats_pid)
                 if bt and safe(bt.get('swing_length')):
                     talent['swing_length'] = safe(bt['swing_length'])
+
+            # L7 xwOBA blend: 15% weight toward last 7 games of recent form.
+            # Boosts/suppresses babip (half strength), iso/hr/R/RBI (full strength).
+            # Requires ≥2 recent games. Cap ratio at ±12% to prevent noise blowups.
+            l7_xwoba = data.get('l7_map', {}).get(stats_pid)
+            if l7_xwoba is not None and talent.get('xwoba', 0) > 0.15:
+                blended_xwoba = talent['xwoba'] * 0.85 + l7_xwoba * 0.15
+                blended_xwoba = clip(blended_xwoba, 0.20, 0.55)
+                ratio = clip(blended_xwoba / talent['xwoba'], 0.88, 1.12)
+                talent['xwoba'] = blended_xwoba
+                talent['babip']     = clip(talent['babip']     * (1.0 + (ratio - 1.0) * 0.5), 0.22, 0.38)
+                talent['iso']       = clip(talent['iso']       * ratio,                         0.02, 0.40)
+                talent['hr_per_pa'] = clip(talent['hr_per_pa'] * ratio,                         0.005, 0.10)
+                talent['r_per_pa']  = clip(talent.get('r_per_pa',  0.11) * (1.0 + (ratio - 1.0) * 0.5), 0.03, 0.25)
+                talent['rbi_per_pa']= clip(talent.get('rbi_per_pa', 0.10) * (1.0 + (ratio - 1.0) * 0.5), 0.03, 0.25)
 
             # Per-batter physics matchup: compute hr_plane_adj using this batter's swing plane
             # vs the opposing SP's arsenal. Stored in talent so _compute_pa_rates() can apply it.
@@ -2438,7 +2799,10 @@ def run():
         # Run full game simulation
         dk_results, sb_results = sim_full_game(
             lineup_talents, pitcher, park_row, wx_row, odds_row,
-            is_home, n_sims, rng, sp_proj_ip, sb_context=sb_ctx
+            is_home, n_sims, rng, sp_proj_ip, sb_context=sb_ctx,
+            team_relievers=opp_team_relievers, ph_rates=data.get('ph_rates', {}),
+            sp_era_est=sp_era_est, opp_implied=opp_implied_val,
+            is_opener_game=is_opener_game,
         )
 
         # Build records from results
@@ -2455,8 +2819,8 @@ def run():
             # true talent separation. Sim still used for distribution (P10-P90).
             proj_pa = LINEUP_PA.get(order, LEAGUE_AVG_PA)
 
-            # Blend SP and BP rates (60% SP, 40% BP — typical split)
-            SP_FRAC = 0.60
+            # Blend SP and BP rates: dynamic fraction based on projected SP depth
+            SP_FRAC = clip(sp_proj_ip / 9.0, 0.15, 0.90)
             blended = {}
             for key in ['k', 'bb', 'hbp', 'hit', 'hr', 'xb', 'triple', 'sb']:
                 sp_val = talent['rates_vs_sp'].get(key, 0)
@@ -2472,17 +2836,21 @@ def run():
             exp_1b = exp_hits * max(0, 1.0 - blended['hr'] - blended['xb'] - blended['triple'])
             exp_bb = proj_pa * blended['bb']
             exp_hbp = proj_pa * blended['hbp']
-            exp_sb = proj_pa * blended['sb']
+            # SB: use base career rate × speed mult directly — blended['sb'] has a 3.5× sim
+            # scale (per-on-base-event) that inflates the direct calc by ~3.5× when multiplied
+            # by proj_pa (all PAs, not just on-base events).
+            _sb_speed_mult = clip(1.0 + (4.40 - talent.get('sprint_speed', 4.40)) * 0.90, 0.50, 1.50)
+            exp_sb = proj_pa * talent.get('sb_per_pa', 0.01) * _sb_speed_mult
 
-            # R and RBI: use Marcel-weighted career rates directly.
-            # _counting_rate() already blends 3yr weighted data with a prior — no additional
-            # regression needed here. The old 30% flat pull toward league avg was double-
-            # regressing and suppressing elite cleanup hitters.
-            # K% discount: high-K hitters have fewer productive contact PAs for R/RBI.
+            # R and RBI: Marcel rates scaled by Vegas run environment, wOBA quality, and K%.
+            # wOBA quality: corrects Marcel regression toward 0.11 for weak/thin-sample hitters.
+            # A wRC+ 43 player shouldn't project R/RBI at league-average rates.
             league_r, league_rbi = 0.11, 0.10
+            vegas_r_scale = clip((opp_implied_val / LEAGUE_AVG_IMPLIED) if opp_implied_val else 1.0, 0.75, 1.30)
+            woba_quality = clip(talent.get('woba', LEAGUE_AVG_WOBA) / LEAGUE_AVG_WOBA, 0.55, 1.45) ** 0.80
             k_discount = clip(1.0 - (talent['k_pct'] - 0.22) * 1.0, 0.85, 1.05)
-            exp_r   = talent.get('r_per_pa', league_r)   * proj_pa * k_discount
-            exp_rbi = talent.get('rbi_per_pa', league_rbi) * proj_pa * k_discount
+            exp_r   = talent.get('r_per_pa', league_r)   * proj_pa * k_discount * vegas_r_scale * woba_quality
+            exp_rbi = talent.get('rbi_per_pa', league_rbi) * proj_pa * k_discount * vegas_r_scale * woba_quality
 
             # DK Classic hitter scoring — direct calculation
             direct_dk = (
@@ -2492,7 +2860,7 @@ def run():
                 + exp_sb * 5
             )
 
-            mean = direct_dk
+            mean = float(np.mean(dk_dist))
             median = float(np.median(dk_dist))
             sd     = float(np.std(dk_dist))
             p10    = float(np.percentile(dk_dist, 10))
@@ -2529,7 +2897,7 @@ def run():
                 'player_id': pid, 'game_pk': gpk, 'game_date': target_date,
                 'full_name': full_name, 'team': team, 'batting_order': order,
                 'is_pitcher': False, 'computed_at': computed_at,
-                'proj_dk_pts': round2(mean),
+                'proj_dk_pts': round2(direct_dk),
                 'proj_floor':  round2(p10),
                 'proj_ceiling': round2(p90),
                 'sim_mean': round2(mean), 'sim_median': round2(median),
