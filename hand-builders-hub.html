@@ -4773,6 +4773,7 @@ const HIT_COLS = [
   { key:'pms',   label:'PMS',     w:'40px',  on:true,  sort:'pms',   fixed:false },
   { key:'woba',  label:'wOBA',    w:'50px',  on:false, sort:'woba',  fixed:false },
   { key:'iso',   label:'ISO',     w:'46px',  on:false, sort:'iso',   fixed:false },
+  { key:'ph',    label:'PH%',    w:'44px',  on:false, sort:'ph',    fixed:false },
   { key:'phr',   label:'HR',      w:'36px',  on:false, sort:null,    fixed:false },
   { key:'pr',    label:'R',       w:'32px',  on:false, sort:null,    fixed:false },
   { key:'prbi',  label:'RBI',     w:'36px',  on:false, sort:null,    fixed:false },
@@ -5403,6 +5404,14 @@ async function loadPlayerPool(date, slate) {
     }
   });
 
+  // 4f. Pinch-hit rates — how often each starter gets removed mid-game (DFS lineup integrity risk)
+  const phRaw = allPlayerIds.length
+    ? await batchIn('pinch_hit_rates','player_id,ph_for_rate,games_started','player_id',allPlayerIds,
+        q => q.order('season',{ascending:false}))
+    : [];
+  const phMap = {};
+  phRaw.forEach(r => { if (!phMap[r.player_id]) phMap[r.player_id] = r; });
+
   // 5. Projections — full stat line for hitters + pitcher stats
   //    Also fetch all pitcher projections for the date (is_pitcher=true) to get the authoritative
   //    scheduled-SP id list — avoids name-mismatch issues with the games table.
@@ -5754,6 +5763,7 @@ async function loadPlayerPool(date, slate) {
       hes:              hesInfo?.score ?? null,
       pms:              storedPms ?? computedPms,
       sprint_speed:     bs?.sprint_speed ?? null,
+      ph_for_rate:      phMap[s.player_id]?.ph_for_rate ?? null,
     });
   });
 
@@ -6377,6 +6387,7 @@ function sortVal(p, col) {
     case 'pms':    return p.pms ?? -Infinity;
     case 'woba':   return p.woba ?? -Infinity;
     case 'iso':    return p.iso ?? -Infinity;
+    case 'ph':     return p.ph_for_rate ?? -Infinity; // higher rate = more risk (sorts risky players first)
     case 'xfip':   return p.xfip != null ? -p.xfip : -Infinity; // lower is better
     case 'kpct':   return p.k_pct ?? -Infinity;
     case 'era':    return p.era != null ? -p.era : -Infinity;    // lower is better
@@ -6671,6 +6682,7 @@ function renderHitterRow(p, inL, expPct, visCols) {
     pms:   (()=>{ const v=p.pms; const pc=pmsColor(v); return `<td class="pt-stat" style="color:${pc.tx};"><span style="background:${pc.bg};padding:1px 5px;border-radius:3px;font-weight:700;">${v??'—'}</span></td>`; })(),
     woba:  (()=>{ const v=p.woba; const c=v==null?'pt-muted':v>=.360?'cf-hi':v>=.310?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(3):'—'}</td>`; })(),
     iso:   (()=>{ const v=p.iso;  const c=v==null?'pt-muted':v>=.200?'cf-hi':v>=.140?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(3):'—'}</td>`; })(),
+    ph:    (()=>{ const v=p.ph_for_rate; const pct=v!=null?v*100:null; const c=v==null?'pt-muted':pct>=15?'cf-lo':pct>=8?'cf-mid':'cf-hi'; return `<td class="pt-stat ${c}">${pct!=null?pct.toFixed(1)+'%':'—'}</td>`; })(),
     phr:   (()=>{ const v=p.proj_hr; const c=v==null?'pt-muted':v>=.25?'cf-hi':v>=.12?'cf-mid':'cf-lo'; return `<td class="pt-stat ${c}">${v!=null?v.toFixed(2):'—'}</td>`; })(),
     pr:    (()=>{ const v=p.proj_r;  const c=v==null?'pt-muted':v>=1.0?'cf-hi':v>=.6?'cf-mid':'cf-lo';  return `<td class="pt-stat ${c}">${v!=null?v.toFixed(2):'—'}</td>`; })(),
     prbi:  (()=>{ const v=p.proj_rbi;const c=v==null?'pt-muted':v>=1.0?'cf-hi':v>=.5?'cf-mid':'cf-lo';  return `<td class="pt-stat ${c}">${v!=null?v.toFixed(2):'—'}</td>`; })(),
