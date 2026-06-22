@@ -125,8 +125,8 @@ for i, game_info in enumerate(game_pks):
             except:
                 innings = 0.0
 
-            # First pitcher listed is the starter
-            is_starter = (j == 0)
+            # Starter = threw more than 65 pitches in this outing
+            is_starter = (pitches > 65)
 
             if pitches and pitches > 0:
                 all_appearances.append({

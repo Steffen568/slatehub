@@ -135,71 +135,6 @@ def _get_stack_implied(lu_players, stack_team):
     return gt / 2.0
 
 
-def _physics_matchup(pitcher_rows, attack_angle, swing_path_tilt, pitcher_arm_angle):
-    """
-    Physics-based pitch geometry vs batter swing plane matchup.
-    Returns (k_adj, contact_adj, hr_plane_adj) — duplicated from sim_projections.py to avoid circular import.
-    Uses stable physical measurements: IVB, HB, VAA, arm_angle vs attack_angle, swing_path_tilt.
-    IVB is incorporated into effective VAA (not a separate conflict axis).
-    """
-    LEAGUE_ATTACK = 12.0
-    LEAGUE_ARM    = 45.0
-    if not pitcher_rows:
-        return 1.0, 1.0, 1.0
-    if attack_angle is None:
-        attack_angle = LEAGUE_ATTACK
-    if swing_path_tilt is None:
-        swing_path_tilt = 0.0
-
-    total_usage = sum(safe(r.get('usage_pct'), 0) for r in pitcher_rows)
-    if total_usage <= 0:
-        return 1.0, 1.0, 1.0
-
-    IVB_BASELINE  = 8.0
-    IVB_VAA_COEFF = 0.088  # degrees flatter per inch above baseline (arctan(1/12 / 54))
-
-    weighted_difficulty = 0.0
-    weighted_vert_gap   = 0.0
-    weight_sum = 0.0
-
-    for r in pitcher_rows:
-        u = safe(r.get('usage_pct'), 0) / total_usage
-        if u <= 0:
-            continue
-        rh  = safe(r.get('release_height'), 6.0)
-        ext = safe(r.get('extension'), 6.5)
-        denom = max(60.5 - ext, 1.0)
-        vaa = -math.degrees(math.atan((rh - 2.5) / denom))
-        ivb = safe(r.get('ivb'), IVB_BASELINE)
-        hb  = safe(r.get('hb'), 0.0)
-
-        effective_vaa = vaa + (ivb - IVB_BASELINE) * IVB_VAA_COEFF
-        vert_gap      = abs(attack_angle - abs(effective_vaa))
-        vert_score    = clip(vert_gap / 15.0, 0.0, 1.0)
-        lat_mismatch  = clip((abs(hb) - abs(swing_path_tilt) * 1.5) / 18.0, 0.0, 1.0)
-
-        pitch_difficulty = (vert_score * 0.70 + lat_mismatch * 0.30)
-        weighted_difficulty += pitch_difficulty * u
-        weighted_vert_gap   += vert_gap * u
-        weight_sum += u
-
-    if weight_sum <= 0:
-        return 1.0, 1.0, 1.0
-
-    raw = weighted_difficulty / weight_sum
-    if pitcher_arm_angle is not None:
-        arm_dev      = pitcher_arm_angle - LEAGUE_ARM
-        arm_conflict = clip(-arm_dev * (attack_angle - LEAGUE_ATTACK) * 0.001, 0.0, 0.15)
-        raw = clip(raw + arm_conflict, 0.0, 1.0)
-
-    k_adj       = clip(1.0 + raw * 0.08, 0.94, 1.10)
-    contact_adj = clip(1.0 - raw * 0.05, 0.92, 1.05)
-
-    avg_vert_gap = weighted_vert_gap / weight_sum
-    hr_plane_adj = clip(1.0 - (avg_vert_gap - 5.0) * 0.015, 0.90, 1.10)
-
-    return k_adj, contact_adj, hr_plane_adj
-
 
 # ── Data Fetching ────────────────────────────────────────────────────────────
 
@@ -357,60 +292,6 @@ def fetch_data(target_date, slate_filter=None):
                         if k != 'season' and batter_stats[pid].get(k) is None and v is not None:
                             batter_stats[pid][k] = v
 
-    # Batter splits (xwOBA by pitcher hand)
-    batter_splits = {}  # pid → { 'L': row, 'R': row }
-    if all_hitter_ids:
-        for i in range(0, len(all_hitter_ids), 150):
-            batch = all_hitter_ids[i:i+150]
-            rows = sb.table('batter_splits').select(
-                'player_id,split,xwoba,woba,k_pct,bb_pct,iso,season'
-            ).in_('player_id', batch).order('season', desc=True).execute().data or []
-            for r in rows:
-                pid = r['player_id']
-                s = (r.get('split') or '').upper()
-                if s not in ('L', 'R'): continue
-                if pid not in batter_splits: batter_splits[pid] = {}
-                if s not in batter_splits[pid]: batter_splits[pid][s] = r
-
-    # Bat tracking (attack_angle, squared_up_pct, bat_speed)
-    bat_tracking = {}
-    if all_hitter_ids:
-        for i in range(0, len(all_hitter_ids), 150):
-            batch = all_hitter_ids[i:i+150]
-            rows = sb.table('bat_tracking').select(
-                'player_id,attack_angle,squared_up_pct,bat_speed,season'
-            ).in_('player_id', batch).order('season', desc=True).execute().data or []
-            for r in rows:
-                if r['player_id'] not in bat_tracking:
-                    bat_tracking[r['player_id']] = r
-
-    # Rosters — bat hand (L/R/S)
-    bats_map = {}
-    if all_hitter_ids:
-        for i in range(0, len(all_hitter_ids), 150):
-            batch = all_hitter_ids[i:i+150]
-            rows = sb.table('rosters').select(
-                'player_id,bats'
-            ).in_('player_id', batch).execute().data or []
-            for r in rows:
-                if r.get('bats'): bats_map[r['player_id']] = r['bats']
-
-    # Batter game logs (L7 xwOBA)
-    l7_map = {}
-    if all_hitter_ids:
-        for i in range(0, len(all_hitter_ids), 150):
-            batch = all_hitter_ids[i:i+150]
-            rows = sb.table('batter_game_logs').select(
-                'player_id,game_date,xwoba'
-            ).in_('player_id', batch).order('game_date', desc=True).limit(5000).execute().data or []
-            grouped = defaultdict(list)
-            for r in rows:
-                grouped[r['player_id']].append(r)
-            for pid, gl_games in grouped.items():
-                recent = [g for g in gl_games[:7] if g.get('xwoba') is not None]
-                if len(recent) >= 2:
-                    l7_map[pid] = sum(safe(g['xwoba'], 0) for g in recent) / len(recent)
-
     # Pitcher arsenal rows (pitch mix + physics: IVB, HB, release_height, extension, arm_angle)
     arsenal_rows_by_sp = {}   # {sp_id: [row, ...]}
     if sp_ids:
@@ -446,8 +327,7 @@ def fetch_data(target_date, slate_filter=None):
         'pitcher_stats': pitcher_stats, 'park_factors': park_factors,
         'weather': weather,
         'pitcher_splits': pitcher_splits, 'pitcher_vaa': pitcher_vaa,
-        'batter_stats': batter_stats, 'batter_splits': batter_splits,
-        'bat_tracking': bat_tracking, 'bats_map': bats_map, 'l7_map': l7_map,
+        'batter_stats': batter_stats,
         'arsenal_rows_by_sp': arsenal_rows_by_sp,
         'pms_from_db': pms_from_db,
     }
@@ -457,6 +337,22 @@ def fetch_data(target_date, slate_filter=None):
 
 def build_player_pool(data):
     """Build enriched player pool from projections + salaries."""
+    # Per-team implied run totals: home/away implied from game_odds, keyed by (game_pk, team_abbr)
+    game_team_implied = {}
+    for g in data['games']:
+        gpk = g.get('game_pk')
+        if not gpk:
+            continue
+        odds_row = data['odds'].get(gpk, {})
+        home_impl = safe(odds_row.get('home_implied'), None)
+        away_impl = safe(odds_row.get('away_implied'), None)
+        home_t = TEAM_ABBR_MAP.get(g.get('home_team', ''), g.get('home_team', ''))
+        away_t = TEAM_ABBR_MAP.get(g.get('away_team', ''), g.get('away_team', ''))
+        if home_t and home_impl:
+            game_team_implied[(gpk, home_t)] = home_impl
+        if away_t and away_impl:
+            game_team_implied[(gpk, away_t)] = away_impl
+
     pool = []
     for p in data['projs']:
         pid = p['player_id']
@@ -499,6 +395,7 @@ def build_player_pool(data):
 
         raw_team = sal_row.get('team', '') or p.get('team', '')
         team = TEAM_ABBR_MAP.get(raw_team, raw_team)
+        team_implied = game_team_implied.get((p.get('game_pk'), team), game_total / 2)
         own = data['ownership'].get(pid, 5.0)
 
         pool.append({
@@ -516,6 +413,7 @@ def build_player_pool(data):
             'batting_order': batting_order,
             'confirmed': confirmed,
             'game_total': game_total,
+            'team_implied': team_implied,
             'ownership': own,
         })
 
@@ -1110,7 +1008,9 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
     for t in viable_teams:
         hitters = team_hitters[t]
         gt = hitters[0].get('game_total', 8.5) if hitters else 8.5
-        vegas_mult = gt / 4.5  # 4.5 = league avg runs per team (9.0 total / 2)
+        # Use per-team implied total — correctly differentiates home/away within the same game
+        impl = hitters[0].get('team_implied', gt / 2) if hitters else gt / 2
+        vegas_mult = impl / 4.5  # 4.5 = league avg runs per team
         pms_vals = [h.get('pms', 5.0) for h in hitters if h.get('pms')]
         avg_pms = sum(pms_vals) / len(pms_vals) if pms_vals else 5.0
         # Score = sum of (ceiling × pms_norm × vegas_mult) for top 6 hitters by ceiling×pms

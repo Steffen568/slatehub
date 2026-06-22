@@ -8322,16 +8322,25 @@ function boxMullerNormal() {
 function buildSimParams(allElig) {
   const H_W_GAME = 0.150, H_W_TEAM = 0.573, H_W_INDIV = 0.806;
   const P_W_GAME = -0.30, P_W_TEAM = 0.15, P_W_INDIV = 0.94;
+  const TYPICAL_CEIL_RATIO = 2.5; // ceiling ≈ 2.5× projection for average matchup
   const params = new Map();
   for (const p of allElig) {
     const pid = p.player_id;
-    const mean = projOverrides[pid] ?? p.proj_dk_pts ?? 0;
+    const isPit = optoIsPitcher(p); // moved up — needed for SD calc
+    const rawProj = projOverrides[pid] ?? p.proj_dk_pts ?? 0;
     const floor = p.proj_floor, ceil = p.proj_ceiling;
-    let sd = (floor != null && ceil != null && ceil > floor) ? (ceil - floor) / 3.3 : Math.abs(mean) * 0.20;
+    let sd = (floor != null && ceil != null && ceil > floor) ? (ceil - floor) / 3.3 : Math.abs(rawProj) * 0.20;
     sd = Math.max(sd, 0.5);
-    const isPit = optoIsPitcher(p);
+    // Hitters only: scale SD by ceiling-to-projection ratio (matchup quality proxy).
+    // Good matchup players (ceiling >> proj) get more variance → more right-tail boom events → higher GPP ROI.
+    // sqrt() dampens extremes; clamped [0.7, 1.5] prevents outlier blowup.
+    if (!isPit && ceil != null && rawProj > 0) {
+      const ceilRatio = ceil / rawProj;
+      const sdMult = Math.sqrt(ceilRatio / TYPICAL_CEIL_RATIO);
+      sd *= Math.max(0.7, Math.min(1.5, sdMult));
+    }
     params.set(pid, {
-      mean, sd,
+      mean: rawProj, sd,
       wGame: isPit ? P_W_GAME : H_W_GAME,
       wTeam: isPit ? P_W_TEAM : H_W_TEAM,
       wIndiv: isPit ? P_W_INDIV : H_W_INDIV,
