@@ -1,5 +1,9 @@
 # Secrets
 .env
+fg_auth.json
+
+# Data files
+Pool_Lineups_*.csv
 
 # Python
 __pycache__/
