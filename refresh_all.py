@@ -16,7 +16,7 @@ Modes and when to run them:
 
   --stats      7:00 AM   Season stats refresh — now runs in parallel (~4 min).
 
-  --splits     7:30 AM   Excel Power Query refresh + FanGraphs enrichment to Supabase.
+  --splits     7:30 AM   FanGraphs CSV download (Playwright) + DB enrichment to Supabase.
 
   --full                 Runs everything. Use for initial setup only.
 
@@ -74,12 +74,12 @@ def run_script(script: str, label: str, logger: RunLogger, continue_on_fail: boo
 
 
 def run_excel_enrichment(logger: RunLogger):
-    """Refresh master Excel workbook and enrich DB with FanGraphs data."""
+    """Download FanGraphs CSVs via Playwright and enrich DB."""
     print(f"\n{'='*55}")
-    print(f"  FanGraphs — Excel Power Query + DB Enrichment")
+    print(f"  FanGraphs — CSV Download + DB Enrichment")
     print(f"{'='*55}")
-    run_script('refresh_excel.py',          'Excel Power Query Refresh',   logger)
-    run_script('load_fangraphs_excel.py',   'FanGraphs Excel Enrichment',  logger)
+    run_script('download_fangraphs.py',     'FanGraphs CSV Download',      logger)
+    run_script('load_fangraphs_excel.py',   'FanGraphs DB Enrichment',     logger)
 
 
 # ── QUICK — every 15 minutes all day ─────────────────────────────────────────
@@ -115,8 +115,10 @@ if STATS:
 # ── MORNING (9:00 AM) ─────────────────────────────────────────────────────────
 if MORNING:
     # Refresh yesterday's results before main pipeline
-    run_script('load_bullpen.py',            'Bullpen — morning refresh', logger)
-    run_script('load_game_logs.py --days 3', 'Game Logs — morning refresh', logger)
+    run_script('load_bullpen.py',                    'Bullpen — morning refresh', logger)
+    run_script('load_game_logs.py --days 3',         'Game Logs — morning refresh', logger)
+    run_script('load_pinch_hit_rates.py --days 2',   'Pinch-Hit Rates — yesterday update', logger)
+    run_script('load_rosters.py',                    'Rosters — 26-man active refresh', logger)
     try:
         # Agent 1 (stats) and Agent 2 (lineups/DK) run simultaneously
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
@@ -150,8 +152,9 @@ if MORNING:
 # ── FULL — runs everything ────────────────────────────────────────────────────
 if FULL:
     # Bullpen first — refresh reliever appearances
-    run_script('load_bullpen.py', 'Bullpen — full refresh', logger)
-    run_script('load_game_logs.py --days 14', 'Game Logs — full refresh', logger)
+    run_script('load_bullpen.py',                        'Bullpen — full refresh', logger)
+    run_script('load_game_logs.py --days 14',             'Game Logs — full refresh', logger)
+    run_script('load_rosters.py',                         'Rosters — 26-man active refresh', logger)
     try:
         # Agent 1 and Agent 2 start simultaneously
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
@@ -185,8 +188,9 @@ if POSTGAME:
     print(f"\n{'='*55}")
     print(f"  Post-Game Pipeline")
     print(f"{'='*55}")
-    run_script('load_bullpen.py',            'Bullpen — final pitch counts', logger)
-    run_script('load_game_logs.py --days 3', "Game Logs — today's results",  logger)
+    run_script('load_bullpen.py',                    'Bullpen — final pitch counts', logger)
+    run_script('load_game_logs.py --days 3',         "Game Logs — today's results",  logger)
+    run_script('load_pinch_hit_rates.py --days 3',   'Pinch-Hit Rates — nightly update', logger)
     run_script('load_contest_data.py', 'DK Contest Data — final counts', logger)
     run_script('load_actual_ownership.py',  'Actual Ownership — post-lock',  logger)
     run_script('load_actuals.py --days 3',  'Actual DK Points — boxscores',  logger)
@@ -201,6 +205,7 @@ if POSTGAME:
     run_script('validate_sim.py',  'Sim Validation — accuracy diagnostic', logger)
     run_script('review_slate.py',  'Slate Review — lineup pool diagnostic', logger)
     run_script('calibrate_ownership.py', 'Ownership Calibration — proj vs actual own%', logger)
+    run_script('season_review.py',       'Season Review — projection trend analysis',  logger)
     run_script('analyze_leverage.py',   'Leverage Analysis — predictive GPP signals', logger)
     run_script('analyze_winners.py',   'Winner Patterns — per-contest game theory', logger)
 

@@ -8322,7 +8322,7 @@ function boxMullerNormal() {
 function buildSimParams(allElig) {
   const H_W_GAME = 0.150, H_W_TEAM = 0.573, H_W_INDIV = 0.806;
   const P_W_GAME = -0.30, P_W_TEAM = 0.15, P_W_INDIV = 0.94;
-  const TYPICAL_CEIL_RATIO = 2.5; // ceiling ≈ 2.5× projection for average matchup
+  const TYPICAL_CEIL_RATIO = 4.0; // baseline for sdMult; higher = more dampening for avg players → concentrated ownership
   const params = new Map();
   for (const p of allElig) {
     const pid = p.player_id;

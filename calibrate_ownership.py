@@ -124,6 +124,19 @@ def pearson_r(xs, ys):
     return cov / (sx * sy) if sx > 0 and sy > 0 else 0.0
 
 
+def spearman_r(xs, ys):
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    def rank(arr):
+        order = sorted(range(n), key=lambda i: arr[i])
+        ranks = [0] * n
+        for r, i in enumerate(order):
+            ranks[i] = r + 1
+        return ranks
+    return pearson_r(rank(xs), rank(ys))
+
+
 # ── Step 4: Compute calibration metrics ─────────────────────────────────
 deltas = [m['delta'] for m in matched]
 abs_deltas = [abs(d) for d in deltas]
@@ -133,6 +146,7 @@ actual_vals = [m['actual_own'] for m in matched]
 mean_bias = sum(deltas) / len(deltas)
 mae = sum(abs_deltas) / len(abs_deltas)
 corr = pearson_r(proj_vals, actual_vals)
+rank_corr = spearman_r(proj_vals, actual_vals)
 
 print(f"\n{'=' * 60}")
 print(f"  Ownership Calibration Results")
@@ -140,7 +154,7 @@ print(f"{'=' * 60}")
 print(f"  Matched players: {len(matched)}")
 print(f"  Bias: {mean_bias:+.2f}% (positive = we over-project ownership)")
 print(f"  MAE:  {mae:.2f}%")
-print(f"  Correlation: r={corr:.3f}")
+print(f"  Correlation: r={corr:.3f}  Rank rho={rank_corr:.3f} (GPP leverage quality)")
 
 # ── Step 5: Tier + position breakdown ───────────────────────────────────
 tiers = {
@@ -155,7 +169,8 @@ for label, group in tiers.items():
         tier_bias = sum(m['delta'] for m in group) / len(group)
         tier_mae = sum(abs(m['delta']) for m in group) / len(group)
         tier_r = pearson_r([m['proj_own'] for m in group], [m['actual_own'] for m in group])
-        print(f"    {label:<25}: n={len(group):3d}, bias={tier_bias:+.2f}%, MAE={tier_mae:.2f}%, r={tier_r:.3f}")
+        tier_rho = spearman_r([m['proj_own'] for m in group], [m['actual_own'] for m in group])
+        print(f"    {label:<25}: n={len(group):3d}, bias={tier_bias:+.2f}%, MAE={tier_mae:.2f}%, r={tier_r:.3f}, rho={tier_rho:.3f}")
 
 # SP vs hitter breakdown — load position data from slate_ownership + dk_salaries
 print(f"\n  By player type (SP vs hitter):")
@@ -201,7 +216,7 @@ with open(findings_path, 'a', encoding='utf-8') as f:
     f.write(f"- **Matched players**: {len(matched)} ({ghost_count} 0%-actual ghosts excluded)\n")
     f.write(f"- **Bias**: {mean_bias:+.2f}% (positive = over-project ownership)\n")
     f.write(f"- **MAE**: {mae:.2f}%\n")
-    f.write(f"- **Correlation**: r={corr:.3f}\n\n")
+    f.write(f"- **Correlation**: r={corr:.3f}  Rank rho={rank_corr:.3f} (GPP leverage quality)\n\n")
     for label, group in tiers.items():
         if group:
             tier_bias = sum(m['delta'] for m in group) / len(group)

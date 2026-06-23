@@ -17,6 +17,11 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 **Rule:** When `pms.js` is already loaded and all required datasets are in scope, call `computePMS()` directly rather than depending on a separate pre-computed DB value. Use stored value as primary, computed as fallback: `storedPms ?? computedPms`.
 **Fix:** Added pitcher throws fetch for `spIds` into `throwsMap` (after arsenal maps are built). Replaced the `computedPms = null` stub with a real `computePMS()` call using `spStatMap`, `pSplitMap`, `batTrackMap`, `bStatMap`, `batsMap`, `bSplitMap`, `arsenalMap`, `l7Map`, `throwsMap`.
 
+### FanGraphs CSV export requires a click event, not hover/scroll/networkidle
+**What happened:** `a.data-export` has `href="data:application/csv;charset=utf-8,undefined"` on page load. The href stays `undefined` even after `networkidle`, hover, and scrolling. FanGraphs only computes the CSV data when the export button receives an actual click event.
+**Rule:** Use `page.expect_download()` + `page.click('a.data-export')` to capture the file download. Do NOT wait for the href to change — the download fires as a browser download directly after click. Splits pages (vLHP/vRHP/vLHH/vRHH) pre-populate the href and skip the click.
+**Fix:** Replaced `wait_for_function` href polling with `with page.expect_download(timeout=20000) as dl_info: page.click('a.data-export')`. Read file from `dl.path()`.
+
 ---
 
 ## Projection Engine
@@ -95,6 +100,30 @@ Recurring issues that have burned us. When a new solution is found, add it here 
 **What happened:** `_compute_pa_rates` returns `sb_rate = sb_per_pa * speed_mult * 3.5` — the 3.5× converts from per-PA to per-on-base-event rate for the sim (where SBs are checked once per on-base event). When `direct_dk` became the primary projection (`proj_dk_pts`), the direct calc used `exp_sb = proj_pa * blended['sb']`, multiplying the already-3.5×-scaled rate by ALL plate appearances, not just on-base events. For fast players (sb_per_pa ≈ 0.04), this added 2.5+ phantom DK pts.
 **Rule:** In `direct_dk`, SB must use `talent.get('sb_per_pa', 0.01) * speed_mult * proj_pa` — the raw career SB rate, NOT the sim-scaled `blended['sb']`. The 3.5× in `_compute_pa_rates` is for `sim_full_game` only.
 **Fix:** Changed `exp_sb = proj_pa * blended['sb']` to `exp_sb = proj_pa * talent.get('sb_per_pa', 0.01) * _sb_speed_mult`, computing speed_mult inline from `talent.get('sprint_speed', 4.40)`.
+
+---
+
+## Backtesting & Validation (Session 55 — 2026-06-23)
+
+### MAE is the wrong primary metric for GPP — Spearman rank correlation is what matters
+**What happened:** `validate_sim.py` only tracked MAE and Pearson r. GPP tournament success depends on correctly RANKING players (getting the top players right), not minimizing average error. A model with MAE=5.0 that always ranks the right players #1-5 beats a model with MAE=4.5 that scatters its top projections across mid-tier players.
+**Rule:** Track Spearman rank correlation (ρ) as the primary GPP quality metric. Target: ρ > 0.45 for hitters, ρ > 0.40 for pitchers. MAE is still useful for calibration but not for evaluating tournament lineup quality.
+**Fix:** Added `spearman_r()` function to `validate_sim.py` and `calibrate_ownership.py`. Added `rank_corr_hitters`/`rank_corr_pitchers` to Section B output, CSV columns, verdicts, and `season_review.py` trending.
+
+### Softmax systematically under-projects chalk players (-4.94% bias)
+**What happened:** `sim_ownership.py` softmax with temperature SP=0.30, hitters=0.42 still under-projects players with actual ownership >20% by an average of -4.94%. The model distributes ownership too evenly even after previous temperature tuning.
+**Rule:** After softmax normalization, apply a chalk amplification step: boost players projected above 15% by 1.20× then renormalize to keep position totals constant. This is a structural fix to the softmax's flattening tendency at the top.
+**Fix:** Added `CHALK_AMP_THRESHOLD=15.0` and `CHALK_AMP_FACTOR=1.20` constants. Added amplification + renormalization block inside `compute_ownership_scores()` after `raw_own` is computed.
+
+### Pitcher P10-P90 coverage at 70% — clips were truncating fat tails
+**What happened:** `stuff_day.clip(0.55, 1.50)` and `workload_day.clip(0.70, 1.30)` in `sim_pitcher_game()` truncated extreme starts. A pitcher getting knocked out in 1.5 IP (stuff_day ≈ 0.35) or a dominant gem (1.65x) were impossible, causing pitcher P10-P90 to be too narrow.
+**Rule:** Pitcher variance requires room for blowup starts (knocked out early) AND dominant shutout performances. The clips need to be wide enough to allow these tail events. After any clip change, validate with `validate_sim.py` Section A and check pct_in_p10_p90_pitchers toward 80%.
+**Fix:** Widened `stuff_day` clip 0.55→0.48 (low) and 1.50→1.58 (high). Widened `workload_day` clip 0.70→0.58 and 1.30→1.38. Raised `stuff_sd` base 0.22→0.24 and floor 0.14→0.16.
+
+### Hardcoded contest lines produce wrong backtest success metrics
+**What happened:** `backtest_portfolio.py` had `GPP_LINE=148.0` and `CASH_LINE=111.0` hardcoded as averages from 4 real contest standings. Actual cash lines from `dk_contests.min_cash` vary by 103-129. Using a fixed 111.0 misclassifies cash vs non-cash performance on many dates.
+**Rule:** Always load `CASH_LINE` dynamically from `dk_contests.min_cash` for the relevant date and slate (filtered to large-field GPPs with 1000+ entries). `GPP_LINE` cannot be dynamically computed without actual contest standings; keep it configurable but document the limitation.
+**Fix:** Added `load_cash_line(game_date, slate)` function to `backtest_portfolio.py`. Updated `score_strategy()` to accept `gpp_line`/`cash_line` params. Updated `backtest_date()` to load dynamic cash_line and pass it through.
 
 ### r_per_pa and rbi_per_pa have no quality regression — weak hitters over-project for R/RBI
 **What happened:** `_counting_rate('r', 0.11, ...)` and `_counting_rate('rbi', 0.10, ...)` do NOT do any Bayesian regression — they return a raw PA-weighted average, or fall back to the league-average DEFAULT (0.11/0.10) when there's no data. A call-up with wRC+ 43 and thin data was getting projected at league-average R/RBI rates, far exceeding what their offensive talent warrants.
@@ -993,3 +1022,17 @@ httpx.RemoteProtocolError: Server disconnected
 ### Auto-fixed DK ID mismatches: Carlos Cortes, Junior Perez
 **What happened:** Pipeline auto-fixed 2 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+## Pitcher Projections (Session 56 — 2026-06-23)
+
+### 80% of starters clustering at 11–13 DK pts — IP regression was the root cause
+**What happened:** Diagnostic showed 45% of starts in 10–14 band. Component breakdown revealed IP only spanning 4.49–6.03 across the full projection range (1.5 IP spread). K rate was 3.26 Ks of spread across the range. Win prob contributed ~0.40 pts total swing — negligible.
+**Rule:** When pitcher projections are compressed, check IP spread first (2.25 pts/IP makes it the biggest lever), then K rate. Win prob and ER adjustments barely move the number.
+
+### Four targeted changes widened pitcher IQR by 38% (3.4→4.7 pts)
+**What happened:** quality_ip ceiling raised 6.5→6.8, actual_wt cap raised 0.60→0.70, ip_reg minimum lowered 0.25→0.15, K improvement weight raised 0.5→0.7, ip_quality_adj ceiling raised 1.12→1.18. P75 moved from 13.8→15.8.
+**Rule:** Don't change the DK scoring formula coefficients (those are DK rules). Change the *input* estimates (IP, K rate) — that's where compression lives.
+
+### Diagnostic scripts should query today's player_projections, not projection_history
+**What happened:** Re-ran diagnostic after code changes and saw no difference — because the script was reading 60-day projection_history (historical data unchanged). Only today's 29 new rows had the new parameters.
+**Rule:** For before/after calibration checks, compare player_projections (today) vs projection_history (yesterday). Don't use projection_history alone — it won't show same-day changes.

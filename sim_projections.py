@@ -819,7 +819,7 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
     #   blend in actual IP/GS — captures manager intent, injury management, and
     #   role changes that Pitching+ doesn't know about.
     #   Ramps from 30% actual at 3 GS → 60% actual at 12+ GS.
-    quality_ip = clip(4.7 + (pitching_plus - 100) * 0.10, 3.5, 6.5)
+    quality_ip = clip(4.7 + (pitching_plus - 100) * 0.10, 3.5, 6.8)
     ip_per_gs = quality_ip
     if use_current:
         curr_ip_row = stats_by_season.get(current_season)
@@ -828,7 +828,7 @@ def marcel_pitcher(stats_by_season: dict, current_season: int, target_date=None)
         if c_gs >= 2 and c_ip > 0:
             curr_ipgs = clip(c_ip / c_gs, 3.0, 7.0)
             # Ramp: 25% at 2 GS → 60% at 12+ GS
-            actual_wt = clip(0.25 + (c_gs - 2) * (0.35 / 10), 0.25, 0.60)
+            actual_wt = clip(0.25 + (c_gs - 2) * (0.35 / 10), 0.25, 0.70)
             ip_per_gs = quality_ip * (1.0 - actual_wt) + curr_ipgs * actual_wt
 
     # Opener/reliever detection: if pitcher is primarily a reliever (GS < 20% of G
@@ -1328,7 +1328,9 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # Mid/low-tier pitchers (higher ERA) are LESS consistent → wider SD
     # Elite arms (low ERA) are more consistent → tighter SD
     era_consistency = clip(era_anchor / LEAGUE_AVG_XFIP, 0.70, 1.50)
-    stuff_sd = 0.22 + 0.06 * era_consistency  # elite ~0.26, mid ~0.28, bad ~0.31
+    # Raised base from 0.22→0.24: pitcher P10-P90 coverage was 70% vs 80% target;
+    # wider stuff_sd and looser clips close the gap by allowing more extreme starts.
+    stuff_sd = 0.24 + 0.06 * era_consistency  # elite ~0.28, mid ~0.30, bad ~0.33
     # Pitching+ (composite of stuff + location + command) is the best consistency predictor
     # A pitcher with Pitching+ 120 is far more reliable start-to-start than Stuff+ 120 alone
     pitching_plus = talent.get('pitching_plus', 100)
@@ -1336,15 +1338,17 @@ def sim_pitcher_game(talent: dict, opp_quality: float,
     # Location+ further tightens walk variance (high location = fewer blowup games)
     location_plus = talent.get('location_plus', 100)
     stuff_sd -= (location_plus - 100) / 100.0 * 0.02  # ±2% additional from command
-    stuff_sd = max(0.14, stuff_sd)  # floor
+    stuff_sd = max(0.16, stuff_sd)  # floor raised from 0.14→0.16
     # Separate random drivers: stuff quality (K/ER/hit) vs workload (IP).
     # In reality, IP is driven by pitch count, bullpen state, and game script —
     # NOT perfectly correlated with stuff quality. A pitcher can dominate (high K)
     # but get pulled at 5 IP, or go deep on an off-stuff day with weak contact.
     # The old single stuff_day driving both created +1.4 DK inflation from
     # correlated IP × K compounding on good stuff days.
-    stuff_day = rng.normal(1.0, stuff_sd, size=n_sims).clip(0.55, 1.50)
-    workload_day = rng.normal(1.0, 0.13, size=n_sims).clip(0.70, 1.30)
+    # Clips widened (0.55→0.48, 1.50→1.58) to allow more extreme blowup/gem starts
+    # and (0.70→0.58, 1.30→1.38) for IP to capture shorter/longer outings.
+    stuff_day = rng.normal(1.0, stuff_sd, size=n_sims).clip(0.48, 1.58)
+    workload_day = rng.normal(1.0, 0.13, size=n_sims).clip(0.58, 1.38)
 
     # K/BB/hit rates driven by stuff quality (stuff_day)
     sim_k_rate  = np.clip(k_rate * stuff_day, 0.08, 0.50)
@@ -3044,7 +3048,7 @@ def run():
                 exp_ip = v_ip * VEGAS_IP_WEIGHT + talent_ip * (1.0 - VEGAS_IP_WEIGHT)
             else:
                 career_ip = sum(safe((p_stats.get(yr) or {}).get('ip'), 0) for yr in [SEASON, SEASON-1, SEASON-2])
-                ip_reg = clip(0.50 - (career_ip - 100) * 0.001, 0.25, 0.50)
+                ip_reg = clip(0.50 - (career_ip - 100) * 0.001, 0.15, 0.50)
                 exp_ip = talent_ip * (1.0 - ip_reg) + 4.7 * ip_reg
             exp_bf = exp_ip * PA_PER_IP
 
@@ -3069,7 +3073,7 @@ def run():
                     blended_k = bayesian_k * (1.0 - curr_k_wt) + curr_k * curr_k_wt
                 else:
                     # Improvement: half weight — early-season K spikes are often schedule-driven
-                    blended_k = bayesian_k * (1.0 - curr_k_wt * 0.5) + curr_k * curr_k_wt * 0.5
+                    blended_k = bayesian_k * (1.0 - curr_k_wt * 0.7) + curr_k * curr_k_wt * 0.7
             else:
                 blended_k = bayesian_k
             exp_k_rate = clip(blended_k * park_k_edge_dc, 0.08, 0.45)
@@ -3081,7 +3085,7 @@ def run():
             if not is_opener:
                 k_ip_factor = blended_k / LEAGUE_AVG_K_PCT
                 if k_ip_factor >= 1.0:
-                    ip_quality_adj = clip(1.0 + (k_ip_factor - 1.0) * 0.30, 1.0, 1.12)
+                    ip_quality_adj = clip(1.0 + (k_ip_factor - 1.0) * 0.40, 1.0, 1.18)
                 else:
                     ip_quality_adj = clip(1.0 + (k_ip_factor - 1.0) * 0.55, 0.84, 1.0)
                 exp_ip = clip(exp_ip * ip_quality_adj, 2.0, 8.0)

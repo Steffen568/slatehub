@@ -68,6 +68,19 @@ def pearson_r(xs, ys):
     return num / (dx * dy) if dx > 0 and dy > 0 else 0
 
 
+def spearman_r(xs, ys):
+    n = len(xs)
+    if n < 5:
+        return 0
+    def rank(arr):
+        order = sorted(range(n), key=lambda i: arr[i])
+        ranks = [0] * n
+        for r, i in enumerate(order):
+            ranks[i] = r + 1
+        return ranks
+    return pearson_r(rank(xs), rank(ys))
+
+
 def verdict(value, pass_lo, pass_hi, warn_lo, warn_hi):
     if pass_lo <= value <= pass_hi:
         return 'PASS'
@@ -283,8 +296,9 @@ def section_b(data):
         mae = np.mean(np.abs(errors))
         bias = np.mean(errors)
         corr = pearson_r(projs, acts)
-        print(f"{' '*indent}{label} (n={len(rows)}):  MAE={mae:.2f}  Bias={bias:+.2f}  r={corr:.3f}")
-        return {'mae': mae, 'bias': bias, 'corr': corr, 'n': len(rows)}
+        rank_corr = spearman_r(projs, acts)
+        print(f"{' '*indent}{label} (n={len(rows)}):  MAE={mae:.2f}  Bias={bias:+.2f}  r={corr:.3f}  ρ={rank_corr:.3f}")
+        return {'mae': mae, 'bias': bias, 'corr': corr, 'rank_corr': rank_corr, 'n': len(rows)}
 
     # Overall
     overall = compute_accuracy(all_rows, "Overall")
@@ -296,8 +310,12 @@ def section_b(data):
     p = compute_accuracy(pitchers, "Pitchers")
     metrics['hitter_mae'] = round(h['mae'], 2) if h else 0
     metrics['pitcher_mae'] = round(p['mae'], 2) if p else 0
+    metrics['rank_corr_hitters'] = round(h['rank_corr'], 3) if h else 0
+    metrics['rank_corr_pitchers'] = round(p['rank_corr'], 3) if p else 0
     metrics['verdict_hitter_mae'] = verdict_below(h['mae'], 6.0, 8.0) if h else 'N/A'
     metrics['verdict_pitcher_mae'] = verdict_below(p['mae'], 7.5, 9.0) if p else 'N/A'
+    metrics['verdict_rank_corr_hitters'] = verdict_above(h['rank_corr'], 0.45, 0.35) if h else 'N/A'
+    metrics['verdict_rank_corr_pitchers'] = verdict_above(p['rank_corr'], 0.40, 0.30) if p else 'N/A'
 
     # By position
     print(f"\n    By Position:")
@@ -524,11 +542,13 @@ def section_f(dates, metrics):
     csv_cols = [
         'date', 'sample_n',
         'hitter_mae', 'pitcher_mae', 'overall_bias', 'overall_corr',
+        'rank_corr_hitters', 'rank_corr_pitchers',
         'pct_in_p10_p90_hitters', 'pct_in_p10_p90_pitchers',
         'ip_mae', 'ks_mae', 'er_mae',
         'own_mae', 'own_bias',
         'pitcher_mult_corr', 'vegas_mult_corr', 'context_mult_corr',
         'verdict_hitter_mae', 'verdict_pitcher_mae', 'verdict_ownership',
+        'verdict_rank_corr_hitters', 'verdict_rank_corr_pitchers',
     ]
 
     # Read existing history
@@ -564,15 +584,16 @@ def section_f(dates, metrics):
     # Show trends if 2+ rows
     if len(history) >= 2:
         print(f"\n  Historical Trends ({len(history)} dates):")
-        key_metrics = ['hitter_mae', 'pitcher_mae', 'overall_corr', 'pct_in_p10_p90_hitters', 'own_mae']
-        print(f"    {'Date':12s} {'Hit MAE':>8s} {'Pit MAE':>8s} {'Corr':>7s} {'Dist%':>6s} {'Own MAE':>8s}")
-        print(f"    {'─'*52}")
+        key_metrics = ['hitter_mae', 'pitcher_mae', 'rank_corr_hitters', 'overall_corr', 'pct_in_p10_p90_hitters', 'own_mae']
+        print(f"    {'Date':12s} {'Hit MAE':>8s} {'Pit MAE':>8s} {'Rank rho':>9s} {'Corr':>7s} {'Dist%':>6s} {'Own MAE':>8s}")
+        print(f"    {'─'*62}")
         for r in history[-10:]:
             def fv(v):
                 return str(v) if v else '--'
             print(f"    {fv(r.get('date')):12s} "
                   f"{fv(r.get('hitter_mae')):>8s} "
                   f"{fv(r.get('pitcher_mae')):>8s} "
+                  f"{fv(r.get('rank_corr_hitters')):>9s} "
                   f"{fv(r.get('overall_corr')):>7s} "
                   f"{fv(r.get('pct_in_p10_p90_hitters')):>6s} "
                   f"{fv(r.get('own_mae')):>8s}")
@@ -594,6 +615,10 @@ def print_verdicts(metrics):
          f"{metrics.get('hitter_mae', '?')} pts, target <6.0"),
         ('Pitcher Projection MAE', metrics.get('verdict_pitcher_mae', 'N/A'),
          f"{metrics.get('pitcher_mae', '?')} pts, target <8.0"),
+        ('Rank Corr (Hitters)', metrics.get('verdict_rank_corr_hitters', 'N/A'),
+         f"rho={metrics.get('rank_corr_hitters', '?')}, target >0.45 (GPP ranking quality)"),
+        ('Rank Corr (Pitchers)', metrics.get('verdict_rank_corr_pitchers', 'N/A'),
+         f"rho={metrics.get('rank_corr_pitchers', '?')}, target >0.40"),
         ('Ownership MAE', metrics.get('verdict_ownership', 'N/A'),
          f"{metrics.get('own_mae', '?')}%, target <4.0%"),
     ]
@@ -629,8 +654,8 @@ def write_findings(dates, metrics, data):
     # Accuracy
     lines.append("\n### Projection Accuracy")
     lines.append(f"- Overall: MAE={metrics.get('overall_mae','?')}, Bias={metrics.get('overall_bias','?'):+.2f}, r={metrics.get('overall_corr','?')}")
-    lines.append(f"- Hitters: MAE={metrics.get('hitter_mae','?')} [{metrics.get('verdict_hitter_mae','?')}]")
-    lines.append(f"- Pitchers: MAE={metrics.get('pitcher_mae','?')} [{metrics.get('verdict_pitcher_mae','?')}]")
+    lines.append(f"- Hitters: MAE={metrics.get('hitter_mae','?')} [{metrics.get('verdict_hitter_mae','?')}], Rank rho={metrics.get('rank_corr_hitters','?')} [{metrics.get('verdict_rank_corr_hitters','?')}]")
+    lines.append(f"- Pitchers: MAE={metrics.get('pitcher_mae','?')} [{metrics.get('verdict_pitcher_mae','?')}], Rank rho={metrics.get('rank_corr_pitchers','?')} [{metrics.get('verdict_rank_corr_pitchers','?')}]")
 
     # Pitcher components
     if metrics.get('ip_mae'):

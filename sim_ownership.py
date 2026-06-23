@@ -68,6 +68,12 @@ SOFTMAX_TEMP = {'SP': 0.30, 'C': 0.42, '1B': 0.42, '2B': 0.42,
 POSITION_MAX_OWN = {'SP': 70.0, 'C': 30.0, '1B': 30.0, '2B': 30.0,
                     '3B': 30.0, 'SS': 30.0, 'OF': 25.0}
 
+# Chalk amplification — calibrate_ownership.py shows chalk tier (actual >20%) has -4.94% bias.
+# Players projected above this threshold are systematically under-owned by the softmax model.
+# After applying the boost, we renormalize so position total ownership is unchanged.
+CHALK_AMP_THRESHOLD = 15.0   # projected own% above which chalk boost applies
+CHALK_AMP_FACTOR    = 1.20   # 20% boost → compensates for ~5% systematic under-projection
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -404,6 +410,14 @@ def compute_ownership_scores(pool):
 
         # Scale to target sum
         raw_own = [s * target_sum for s in shares]
+
+        # Chalk amplification: boost players projected above threshold, then renormalize.
+        # Corrects the softmax's tendency to under-project top-owned players (-4.94% bias).
+        if any(o > CHALK_AMP_THRESHOLD for o in raw_own):
+            raw_own = [o * CHALK_AMP_FACTOR if o > CHALK_AMP_THRESHOLD else o for o in raw_own]
+            total_after_amp = sum(raw_own)
+            if total_after_amp > 0:
+                raw_own = [o * target_sum / total_after_amp for o in raw_own]
 
         # Cap and redistribute
         for _ in range(5):  # iterate to converge

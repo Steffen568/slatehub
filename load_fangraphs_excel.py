@@ -27,7 +27,7 @@ from config import SEASON
 load_dotenv()
 sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
 
-EXCEL_PATH = os.path.join(os.path.expanduser('~'), 'Desktop', 'WebDev', 'MLB_PQs', 'MLB_PQs_ALL.xlsx')
+CSV_DIR = os.path.join(os.path.expanduser('~'), 'Desktop', 'WebDev', 'MLB_PQs')
 DRY_RUN = '--dry-run' in sys.argv
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -162,20 +162,25 @@ def resolve_id(name, team_abbr=None):
     return None
 
 
-# ── Read Excel ───────────────────────────────────────────────────────────────
+# ── Read CSVs ─────────────────────────────────────────────────────────────────
+# CSV files are downloaded by download_fangraphs.py into CSV_DIR.
+# Each sheet name maps directly to {name}.csv.
 
-print(f"\nReading {EXCEL_PATH}...")
-xls = pd.ExcelFile(EXCEL_PATH)
-print(f"  Sheets: {xls.sheet_names}")
+print(f"\nReading CSVs from {CSV_DIR}...")
 
 def read_sheet(name):
-    if name not in xls.sheet_names:
-        print(f"  WARNING: Sheet '{name}' not found")
+    path = os.path.join(CSV_DIR, f"{name}.csv")
+    if not os.path.exists(path):
+        print(f"  WARNING: {name}.csv not found — run download_fangraphs.py first")
         return pd.DataFrame()
-    df = xls.parse(name)
-    # Drop separator columns
-    df = df[[c for c in df.columns if 'Line Break' not in str(c)]]
-    return df
+    try:
+        df = pd.read_csv(path, encoding='utf-8-sig', on_bad_lines='skip')
+        df = df[[c for c in df.columns if 'Line Break' not in str(c)
+                 and not str(c).startswith('Unnamed')]]
+        return df
+    except Exception as e:
+        print(f"  ERROR reading {name}.csv: {e}")
+        return pd.DataFrame()
 
 
 # ══════════════════════════════════════════════

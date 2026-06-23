@@ -293,6 +293,9 @@ PLAYER_ID_REMAP = {
     1159920 : 686554,   # Oliver Dunn (auto-fixed)
     1452088 : 694378,   # Jacob Gonzalez (auto-fixed)
     1316949 : 695490,   # Edwin Arroyo (auto-fixed)
+    1507943 : 665877,   # Jose Fermin (auto-fixed)
+    1318771 : 687282,   # Gabriel Rincones Jr. (auto-fixed)
+    1118383 : 678577,   # Junior Perez (auto-fixed)
 }
 
 # Build name → mlbam_id lookup AND a set of valid mlbam_ids

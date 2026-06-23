@@ -41,8 +41,25 @@ from optimize_portfolio import (
 load_dotenv()
 sb = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'])
 
-GPP_LINE  = 148.0   # avg top-1% threshold from 4 real contest standings (133–172 range)
-CASH_LINE = 111.0   # avg cash line (~top 22%) from 4 real contest standings (103–129 range)
+GPP_LINE  = 148.0   # avg top-1% threshold — needs actual contest standings to compute dynamically
+# CASH_LINE is loaded dynamically from dk_contests.min_cash; this fallback is used when no data exists
+_CASH_LINE_FALLBACK = 111.0
+
+
+def load_cash_line(game_date: str, slate: str) -> float:
+    """Load the cash line from dk_contests for the given date/slate.
+    Returns the average min_cash across large-field GPP contests (1000+ entries).
+    Falls back to _CASH_LINE_FALLBACK if no data is found."""
+    try:
+        rows = sb.table('dk_contests').select('min_cash,entry_count').eq('game_date', game_date).execute().data or []
+        # Filter to large-field GPPs where min_cash is meaningful
+        vals = [r['min_cash'] for r in rows
+                if r.get('min_cash') and r.get('entry_count', 0) >= 1000]
+        if vals:
+            return round(sum(vals) / len(vals), 1)
+    except Exception:
+        pass
+    return _CASH_LINE_FALLBACK
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────
@@ -106,7 +123,8 @@ def score_lineup(lineup: dict, actual_by_pid: dict[int, float]) -> float:
 
 
 def score_strategy(picks: list[dict], actual_by_pid: dict[int, float],
-                   player_quality: dict, pool: list[dict]) -> dict:
+                   player_quality: dict, pool: list[dict],
+                   gpp_line: float = GPP_LINE, cash_line: float = _CASH_LINE_FALLBACK) -> dict:
     """Compute all metrics for a set of K selected lineups."""
     actuals = [score_lineup(lu, actual_by_pid) for lu in picks]
     if not actuals:
@@ -122,8 +140,8 @@ def score_strategy(picks: list[dict], actual_by_pid: dict[int, float],
     return {
         'max_actual':   round(best, 1),
         'avg_actual':   round(np.mean(actuals), 1),
-        'gpp_count':    sum(a >= GPP_LINE for a in actuals),
-        'cash_count':   sum(a >= CASH_LINE for a in actuals),
+        'gpp_count':    sum(a >= gpp_line for a in actuals),
+        'cash_count':   sum(a >= cash_line for a in actuals),
         'best_rank':    best_rank,
         'avg_overlap':  div['avg_overlap_pct'],
     }
@@ -184,18 +202,21 @@ def backtest_date(game_date: str, slate: str, k: int, alpha: float,
     proj_picks = top_k_by(pool, 'proj', k)
     rand_picks = random_k(pool, k)
 
+    cash_line = load_cash_line(game_date, slate)
+
     results = {
         'date':          game_date,
         'slate':         slate,
         'pool_size':     len(pool),
         'pool_best':     round(pool_best, 1),
         'pool_avg':      round(pool_avg, 1),
-        'leverage_port': score_strategy(lev_picks,  actual_by_pid, player_quality, pool),
-        'portfolio':     score_strategy(port_picks, actual_by_pid, player_quality, pool),
-        'sim_port':      score_strategy(sim_picks,  actual_by_pid, player_quality, pool),
-        'gpp_score':     score_strategy(gpp_picks,  actual_by_pid, player_quality, pool),
-        'projection':    score_strategy(proj_picks, actual_by_pid, player_quality, pool),
-        'random':        score_strategy(rand_picks, actual_by_pid, player_quality, pool),
+        'cash_line_used': cash_line,
+        'leverage_port': score_strategy(lev_picks,  actual_by_pid, player_quality, pool, GPP_LINE, cash_line),
+        'portfolio':     score_strategy(port_picks, actual_by_pid, player_quality, pool, GPP_LINE, cash_line),
+        'sim_port':      score_strategy(sim_picks,  actual_by_pid, player_quality, pool, GPP_LINE, cash_line),
+        'gpp_score':     score_strategy(gpp_picks,  actual_by_pid, player_quality, pool, GPP_LINE, cash_line),
+        'projection':    score_strategy(proj_picks, actual_by_pid, player_quality, pool, GPP_LINE, cash_line),
+        'random':        score_strategy(rand_picks, actual_by_pid, player_quality, pool, GPP_LINE, cash_line),
     }
     return results
 
