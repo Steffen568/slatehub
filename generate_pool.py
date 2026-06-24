@@ -36,11 +36,82 @@ UPSIDE_BLEND = 0.40    # user pool scoring: 40% toward ceiling for GPP upside (w
 USER_EXCLUDE_TEAMS = set()
 CONTEST_DISCOUNT_TEAMS = {}
 
-# Contest type profiles for contest pool generation
+# Contest type profiles for contest pool generation (legacy fallback for CLI mode)
 CONTEST_PROFILES = {
     'gpp':   {'noise_pit': 0.50, 'noise_hit': 0.30, 'pitcher_mult': 5.0, 'unconf_pen': 0.4},
     'small': {'noise_pit': 0.25, 'noise_hit': 0.15, 'pitcher_mult': 6.0, 'unconf_pen': 0.2},
 }
+
+# ── Contest-driven build parameters ─────────────────────────────────────────
+# Validated tables from optimize_portfolio.py (4for4, FantasyLabs, SaberSim)
+# Pool build params are DERIVED from these — not independently invented.
+_COVERAGE_ALPHA = {
+    'large':  0.10,   # 15k+ field — needs max variance to compete
+    'mid':    0.07,
+    'small':  0.04,
+    'single': 0.00,   # SE — pure projection wins
+}
+_EXP_RANGES = {
+    'gpp_large': (0.02, 0.65),
+    'gpp_mid':   (0.03, 0.70),
+    'gpp_small': (0.05, 0.75),
+    'se_large':  (0.10, 0.80),
+    'se_mid':    (0.15, 0.85),
+    'se_small':  (0.20, 0.90),
+}
+_CONTEST_PERCENTILE = {
+    'gpp_large': 99.5,
+    'gpp_mid':   99.0,
+    'gpp_small': 97.0,
+    'se_large':  95.0,
+    'se_mid':    90.0,
+    'se_small':  85.0,
+}
+_ALPHA_KEY = {
+    'gpp_large': 'large', 'gpp_mid': 'mid', 'gpp_small': 'small',
+    'se_large': 'single', 'se_mid': 'single', 'se_small': 'single',
+}
+# Map legacy 2-type names to nearest 6-type equivalent
+_LEGACY_TYPE_MAP = {'gpp': 'gpp_mid', 'small': 'se_mid'}
+
+
+def classify_contest(max_entries, max_per_user):
+    """Map raw contest fields to the 6-type taxonomy."""
+    if (max_per_user or 1) <= 3:
+        if (max_entries or 0) >= 1500: return 'se_large'
+        elif (max_entries or 0) >= 500: return 'se_mid'
+        return 'se_small'
+    else:
+        if (max_entries or 0) >= 15000: return 'gpp_large'
+        elif (max_entries or 0) >= 10000: return 'gpp_mid'
+        return 'gpp_small'
+
+
+def derive_build_params(contest_type):
+    """Derive pool build parameters from validated tables (optimize_portfolio.py)."""
+    ct         = _LEGACY_TYPE_MAP.get(contest_type, contest_type)
+    if ct not in _CONTEST_PERCENTILE:
+        ct = 'gpp_mid'
+    alpha      = _COVERAGE_ALPHA[_ALPHA_KEY[ct]]
+    min_exp    = _EXP_RANGES[ct][0]
+    percentile = _CONTEST_PERCENTILE[ct]
+
+    noise_hit    = round(0.12 + alpha * 2.2, 3)
+    noise_pit    = round(noise_hit * 1.65, 3)
+    upside_h     = round((percentile - 85.0) / 14.5 * 0.52 + 0.18, 3)
+    upside_p     = round(min(upside_h + 0.15, 0.85), 3)
+    value_w      = round(min_exp * 2.0, 3)
+    salary_floor = int(46000 + value_w * 6000)
+    pitcher_mult = 7.0 if ct.startswith('se') else 5.0
+
+    return {
+        'contest_type': ct,
+        'noise_pit': noise_pit, 'noise_hit': noise_hit,
+        'pitcher_mult': pitcher_mult, 'unconf_pen': 0.40,
+        'upside_h': upside_h, 'upside_p': upside_p,
+        'value_w': value_w, 'salary_floor': salary_floor,
+    }
+
 
 # Normalize projection team abbreviations to DK abbreviations
 TEAM_ABBR_MAP = {'CHW': 'CWS', 'KCR': 'KC', 'SDP': 'SD', 'TBR': 'TB', 'WSN': 'WSH'}
@@ -795,18 +866,19 @@ def build_lineup_greedy(pool, scores, main_team=None, main_size=4,
 
 # ── Noise Sampling ───────────────────────────────────────────────────────────
 
-def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_discounts=None):
+def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_discounts=None, prof=None):
     """
     Sample noisy projection scores for one sim.
     mode='user': real projections with game/team/individual correlation
     mode='contest': ownership-weighted public bias scoring
+    prof: build params dict from derive_build_params(); overrides CONTEST_PROFILES when provided
     """
     scores = np.zeros(len(pool))
     if contest_discounts is None:
         contest_discounts = CONTEST_DISCOUNT_TEAMS
 
     if mode == 'contest':
-        profile = CONTEST_PROFILES.get(contest_type, CONTEST_PROFILES['gpp'])
+        profile = prof if prof else CONTEST_PROFILES.get(contest_type, CONTEST_PROFILES['gpp'])
         # Public bias scoring (same as sim_ownership.py)
         for i, p in enumerate(pool):
             proj_score = p['proj'] ** 1.5
@@ -851,6 +923,12 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
         BAT_ORDER_PA = {1: 1.13, 2: 1.10, 3: 1.07, 4: 1.03, 5: 1.00,
                         6: 0.97, 7: 0.97, 8: 0.95, 9: 0.93}
 
+        # Upside blend: proj + (ceiling - proj) * blend
+        # SE: low blend (play to projection), GPP: high blend (chase ceiling)
+        _upside_h = prof.get('upside_h', UPSIDE_BLEND) if prof else UPSIDE_BLEND
+        _upside_p = prof.get('upside_p', UPSIDE_BLEND + 0.15) if prof else UPSIDE_BLEND + 0.15
+        _value_w  = prof.get('value_w', 0.15) if prof else 0.15
+
         # Leverage gate: only apply ownership-based scoring when sim_ownership.py has run.
         # >30% of players having non-default (5.0) ownership means it was loaded.
         ownership_loaded = sum(1 for p in pool if abs(p.get('ownership', 5.0) - 5.0) > 0.1) > len(pool) * 0.30
@@ -864,14 +942,16 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
                 pms_val = 5.0
 
             if p['is_pitcher']:
-                # Pitcher mean: ceiling drives upside; no PA-slot adjustment
-                mean = p['ceiling']
+                # Pitcher mean: blend proj toward ceiling based on contest type
+                base = p['proj'] + (p['ceiling'] - p['proj']) * _upside_p
+                mean = base
             else:
-                # Hitter mean: ceiling × matchup quality × batting-order PA opportunity
+                # Hitter mean: blended proj→ceiling × matchup quality × batting-order PA
                 # PMS 5 (neutral) = 1.0x, PMS 10 = 2.0x, PMS 1 = 0.2x
                 pms_norm = pms_val / 5.0
                 bo = int(p.get('batting_order') or 5)
-                mean = p['ceiling'] * pms_norm * BAT_ORDER_PA.get(bo, 1.0)
+                base = p['proj'] + (p['ceiling'] - p['proj']) * _upside_h
+                mean = base * pms_norm * BAT_ORDER_PA.get(bo, 1.0)
 
             sd = (p['ceiling'] - p['floor']) / 3.3 if p['ceiling'] > p['floor'] else max(mean * 0.20, 0.5)
             sd = max(sd, 0.5)
@@ -899,15 +979,23 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
                 k_z = (raw_k - 0.22) / 0.06
                 stuff_z = (p.get('stuff_plus', 100) - 100) / 15
                 talent_z = k_z * 0.6 + stuff_z * 0.4
-                talent_mult = max(0.80, min(1.20, 1.0 + talent_z * 0.12))
+                talent_mult = max(0.72, min(1.28, 1.0 + talent_z * 0.20))
             else:
                 # wRC+ (r=+0.218) and ISO (r=+0.192) predict hitter outperformance
                 wrc_z = (p.get('wrc_plus', 100) - 100) / 30
                 iso_z = (p.get('iso', 0.150) - 0.150) / 0.080
                 talent_z = wrc_z * 0.5 + iso_z * 0.5
-                talent_mult = max(0.85, min(1.18, 1.0 + talent_z * 0.10))
+                talent_mult = max(0.77, min(1.23, 1.0 + talent_z * 0.16))
 
             scores[i] *= talent_mult
+
+            # Value scoring: prefer salary-efficient players in SE, ignore in GPP
+            # Applies to hitters only — pitcher salary is already a quality signal
+            if _value_w > 0 and not p['is_pitcher'] and p.get('salary', 0) > 0:
+                # pts per $1k salary; league avg ~2.0 (10 pts / $5k player)
+                pts_per_k = scores[i] / max(p['salary'] / 1000.0, 3.0)
+                value_mult = 1.0 + (pts_per_k / 2.0 - 1.0) * _value_w
+                scores[i] *= max(0.72, min(1.28, value_mult))
 
             # Leverage + chalk trap (Haugh/Singal 2021 — only when ownership is loaded)
             if ownership_loaded:
@@ -940,7 +1028,7 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
 def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
                      contest_type='gpp', contest_discounts=None,
                      exclude_teams=None, exposure_caps=None,
-                     hitter_exp_max=100, pitcher_exp_max=100):
+                     hitter_exp_max=100, pitcher_exp_max=100, prof=None):
     """Generate n_lineups unique lineups using greedy randomized builder."""
     if rng is None: rng = np.random.default_rng()
 
@@ -1178,13 +1266,15 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         # Sample noisy scores
         scores = sample_noisy_scores(build_pool, rng, mode=mode,
                                       contest_type=contest_type,
-                                      contest_discounts=contest_discounts)
+                                      contest_discounts=contest_discounts,
+                                      prof=prof)
 
         # Build lineup
+        eff_floor = prof.get('salary_floor', dynamic_floor) if prof else dynamic_floor
         lu = build_lineup_greedy(build_pool, scores, main_team=main_team, main_size=main_size,
                                   sub_teams=sub_teams, sub_sizes=sub_sizes, rng=rng,
                                   pvh_off=pvh_off, game_teams=game_teams,
-                                  pvh_stack_only=pvh_stack_only, salary_floor=dynamic_floor)
+                                  pvh_stack_only=pvh_stack_only, salary_floor=eff_floor)
         if lu is None:
             continue
 
@@ -1685,8 +1775,18 @@ def process_request(req):
         target_date = str(req['game_date'])
         slate = req['dk_slate']
         contest_type = req.get('contest_type', 'gpp')
+        contest_id   = req.get('contest_id')
         u_size = req.get('user_pool_size') or 10000
         c_size = req.get('contest_pool_size') or 15000
+
+        # Derive build params from actual contest if provided, else fall back to type
+        if contest_id:
+            crow = sb.table('dk_contests').select(
+                'max_entries,max_per_user'
+            ).eq('contest_id', contest_id).maybe_single().execute().data
+            if crow:
+                contest_type = classify_contest(crow.get('max_entries'), crow.get('max_per_user'))
+        build_prof = derive_build_params(contest_type)
 
         # Read user customizations
         exclude_teams = set(req.get('exclude_teams') or [])
@@ -1698,7 +1798,8 @@ def process_request(req):
         salary_cap_override = req.get('salary_cap', SALARY_CAP)
         min_salary_override = req.get('min_salary', SALARY_FLOOR)
 
-        print(f"  Date: {target_date}  Slate: {slate}  Contest: {contest_type}")
+        print(f"  Date: {target_date}  Slate: {slate}  Contest: {build_prof['contest_type']}")
+        print(f"  Build params: noise_hit={build_prof['noise_hit']} upside_h={build_prof['upside_h']} value_w={build_prof['value_w']} salary_floor=${build_prof['salary_floor']:,}")
         print(f"  User pool: {u_size:,}  Contest pool: {c_size:,}")
 
         excluded_count = len(req.get('excluded_players') or [])
@@ -1734,6 +1835,7 @@ def process_request(req):
             user_pool, u_size, mode='user', rng=rng, game_count=game_count,
             exclude_teams=exclude_teams,
             exposure_caps=exp_caps, hitter_exp_max=hitter_exp, pitcher_exp_max=pitcher_exp,
+            prof=build_prof,
         )
 
         # Generate contest pool (raw pool, ownership-weighted, no user overrides)
@@ -1741,6 +1843,7 @@ def process_request(req):
         contest_lineups = generate_lineups(
             raw_pool, c_size, mode='contest', rng=rng, game_count=game_count,
             contest_type=contest_type, contest_discounts=contest_discounts,
+            prof=build_prof,
         )
 
         # Clear existing pools for this date/slate and upload

@@ -1056,3 +1056,23 @@ httpx.RemoteProtocolError: Server disconnected
 ### Vegas R/RBI exponent 0.80 compressed talent spread by 20% in both directions
 **What happened:** `woba_quality = (woba/LEAGUE_AVG_WOBA)^0.80`. Exponent < 1.0 compresses the ratio toward 1.0 for both elite and weak batters. Elite wOBA 0.400 got 79% of its deserved advantage; weak wOBA 0.260 got 79% of its deserved penalty.
 **Rule:** wOBA quality in the R/RBI formula should use exponent 1.00 (linear) unless there's specific evidence of non-linearity. Default to full credit.
+
+---
+
+## Pool Generator (Session 56 — 2026-06-23)
+
+### UPSIDE_BLEND constant was defined but never wired into scoring
+**What happened:** `UPSIDE_BLEND = 0.40` was defined on line 33 but the user pool scoring used `mean = p['ceiling']` (raw ceiling). The blend was never applied. All lineups were purely ceiling-maximizing regardless of contest type.
+**Rule:** When adding a constant intended to parameterize behavior, grep for it immediately to verify it's actually referenced in the relevant code path. Dead constants cause the same behavior as having no constant at all.
+
+### Pool build parameters must be derived from validated tables, not invented independently
+**What happened:** First version of contest-aware build params used invented formula constants (`0.12 + 0.22 * field_var`, `log(50000)` etc.) with no grounding. optimize_portfolio.py already had validated tables (`COVERAGE_ALPHA`, `EXP_RANGES`, `CONTEST_PERCENTILE`) backed by industry research (4for4, FantasyLabs, SaberSim) that directly encode the same intent.
+**Rule:** Before inventing new formula constants, grep the codebase for existing validated tables that encode the same domain knowledge. Pool build params now derived from optimize_portfolio.py tables — no independent magic numbers.
+
+### Talent multipliers barely differentiated players (step size too small)
+**What happened:** Pitcher talent_mult used step 0.12, hitter step 0.10. With normal z-scores, 90% of players landed within ±1.5 SD = ±0.18/±0.15 total range. The analyze_leverage.py r-values (K% r=0.320, wRC+ r=0.218) are real signals that the step size was crushing.
+**Rule:** Pitcher step 0.12 → 0.20, bounds [0.80,1.20] → [0.72,1.28]. Hitter step 0.10 → 0.16, bounds [0.85,1.18] → [0.77,1.23]. When a real predictive signal shows near-zero range in practice, the coefficient is too small, not the signal.
+
+### Contest profile should be derived from actual contest data, not canned profiles
+**What happened:** Original 2-profile system ('gpp' / 'small') used 4 hardcoded parameters. These are averages of a wide range of contests. A 15k-entry GPP and a 5k-entry GPP have very different variance requirements; a 300-entry SE and 1500-entry SE are different strategies.
+**Rule:** When the frontend has a specific contest selected (via _activeContestId), send that contest_id in the pool request. `process_request()` fetches `max_entries` and `max_per_user` from `dk_contests`, calls `classify_contest()` to get the 6-way type, then `derive_build_params()` to compute noise/upside/value from the validated tables. CONTEST_PROFILES is kept only as a CLI fallback.

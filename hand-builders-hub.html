@@ -8206,6 +8206,7 @@ async function requestPoolGeneration() {
     game_date: date,
     dk_slate: slate,
     contest_type: document.getElementById('contest-type-select')?.value || 'gpp',
+    contest_id: _activeContestId ? String(_activeContestId) : null,
     user_pool_size: +(document.getElementById('opto-poolsize')?.value) || (isSD ? 5000 : 10000),
     contest_pool_size: +(document.getElementById('contest-pool-size')?.value) || (isSD ? 8000 : 15000),
     proj_overrides: projOverrides,
