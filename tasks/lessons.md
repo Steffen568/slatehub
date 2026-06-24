@@ -1077,6 +1077,10 @@ httpx.RemoteProtocolError: Server disconnected
 **What happened:** Original 2-profile system ('gpp' / 'small') used 4 hardcoded parameters. These are averages of a wide range of contests. A 15k-entry GPP and a 5k-entry GPP have very different variance requirements; a 300-entry SE and 1500-entry SE are different strategies.
 **Rule:** When the frontend has a specific contest selected (via _activeContestId), send that contest_id in the pool request. `process_request()` fetches `max_entries` and `max_per_user` from `dk_contests`, calls `classify_contest()` to get the 6-way type, then `derive_build_params()` to compute noise/upside/value from the validated tables. CONTEST_PROFILES is kept only as a CLI fallback.
 
+### Never invent data mappings when the real data is available from the source
+**What happened:** Small contests had null payout_json because load_contest_data.py capped payout fetches at top-200 by prize pool. Instead of fixing the cap, Claude invented a name-based heuristic (Jukebox -> 50% cash rate) that was completely wrong.
+**Rule:** If data is missing, fix the fetch — don't invent a substitute. When DK has the payout structure, pull it. load_contest_data.py now fetches payout for all contests (max_contests = None).
+
 ### ROI badge and sort silently fail for small-prize contests with no payout_json
 **What happened:** `load_contest_data.py` only fetches payout details for the top 200 contests by prize pool. Small contests ($0.25 "Quarter Jukebox" etc.) have `payout_json = null` in `dk_contests`. `simulateContest()` sets `payoutTiers = null`, `hasPayouts = false`, and `roi = null` for all lineups. Sort by ROI falls through to projection tiebreaker; ROI badge never appears.
 **Rule:** After the `payout_json` parse block, add a fallback synthetic payout tier whenever `payoutTiers` is still null but `entry_fee > 0`. Use stored `min_cash`/`positions_paid` if available; otherwise estimate: detect flat-payout contests by name (/double.?up|50.?50|jukebox/i) and use `entry_fee * 1.9`, else `entry_fee * 1.5`. This gives meaningful ROI differentiation for any contest type.
