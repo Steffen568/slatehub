@@ -135,6 +135,17 @@ def run():
         }
 
     # 2. Filter to Classic GPP contests
+    # Print all unique gameTypes so we can see what's being excluded
+    game_types = {}
+    for c in contests:
+        gt = c.get('gameType', 'Unknown')
+        game_types[gt] = game_types.get(gt, 0) + 1
+    print(f"  GameTypes in lobby: {dict(sorted(game_types.items(), key=lambda x: -x[1]))}")
+    for c in contests:
+        if 'jukebox' in (c.get('n') or '').lower():
+            print(f"  Jukebox found: name={c.get('n')!r} gameType={c.get('gameType')!r} fee=${c.get('a')} id={c.get('id')}")
+            break
+
     classic = []
     for c in contests:
         if c.get('gameType') != 'Classic':

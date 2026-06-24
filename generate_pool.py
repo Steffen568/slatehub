@@ -1791,10 +1791,10 @@ def process_request(req):
                 max_per_user = crow.get('max_per_user') or 1
                 max_entries  = crow.get('max_entries') or 1000
                 contest_type = classify_contest(max_entries, max_per_user)
-                # Both pools match the field size — user pool is what you pick FROM,
-                # not limited by how many entries you can submit
-                c_size = min(max_entries, 25000)
-                u_size = c_size
+                # Contest pool: large enough for representative sampling (fieldMult handles the rest)
+                # User pool: large enough to have real selection diversity
+                c_size = min(max_entries, 2000)
+                u_size = min(max_entries, 3000)
                 print(f"  Contest: {crow.get('name', contest_id)} "
                       f"(entries={max_entries:,} max/user={max_per_user})")
         build_prof = derive_build_params(contest_type)
