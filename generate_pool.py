@@ -1784,7 +1784,7 @@ def process_request(req):
         crow = None
         if contest_id:
             _rows = sb.table('dk_contests').select(
-                'max_entries,max_per_user,contest_name'
+                'max_entries,max_per_user,name'
             ).eq('contest_id', contest_id).limit(1).execute().data
             crow = _rows[0] if _rows else None
             if crow:
@@ -1795,7 +1795,7 @@ def process_request(req):
                 # not limited by how many entries you can submit
                 c_size = min(max_entries, 25000)
                 u_size = c_size
-                print(f"  Contest: {crow.get('contest_name', contest_id)} "
+                print(f"  Contest: {crow.get('name', contest_id)} "
                       f"(entries={max_entries:,} max/user={max_per_user})")
         build_prof = derive_build_params(contest_type)
 
