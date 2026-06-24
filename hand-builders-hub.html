@@ -9980,6 +9980,25 @@ function simulateContest() {
       })).filter(t => t.value > 0);
     } catch(e) { console.warn('payout parse error', e); }
   }
+  // Fallback: small-prize contests never get payout_json fetched — construct synthetic tiers
+  if (!payoutTiers && contestDb?.entry_fee > 0) {
+    const ef = contestDb.entry_fee;
+    const minCash = contestDb.min_cash || 0;
+    const fp = contestDb.first_place || 0;
+    const pp = contestDb.positions_paid || 0;
+    if (minCash > 0 && pp > 0) {
+      // Use stored metadata when available (partially-fetched contests)
+      payoutTiers = [];
+      if (fp > minCash) payoutTiers.push({ minPos: 1, maxPos: 1, value: fp });
+      payoutTiers.push({ minPos: fp > minCash ? 2 : 1, maxPos: pp, value: minCash });
+    } else {
+      // Estimate from contest name and payoutPct
+      const isFlat = /double.?up|50.?50|jukebox/i.test(contestDb.name || '');
+      const estCash = isFlat ? ef * 1.9 : ef * 1.5;
+      const posPaid = Math.ceil(fieldSize * (isFlat ? 0.50 : payoutPct / 100));
+      payoutTiers = [{ minPos: 1, maxPos: posPaid, value: +estCash.toFixed(2) }];
+    }
+  }
 
   let simIdx = 0;
   showPoolLoading('Simulating Contest...');
