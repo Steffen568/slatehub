@@ -1783,9 +1783,10 @@ def process_request(req):
         # build style, pool sizes, and contest type — ignore the manual UI fields.
         crow = None
         if contest_id:
-            crow = sb.table('dk_contests').select(
+            _rows = sb.table('dk_contests').select(
                 'max_entries,max_per_user,contest_name'
-            ).eq('contest_id', contest_id).maybe_single().execute().data
+            ).eq('contest_id', contest_id).limit(1).execute().data
+            crow = _rows[0] if _rows else None
             if crow:
                 max_per_user = crow.get('max_per_user') or 1
                 max_entries  = crow.get('max_entries') or 1000
