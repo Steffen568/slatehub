@@ -8618,13 +8618,16 @@ let _contestPool = [];     // contest pool player_id arrays for sim
 let _contestPoolFieldMult = 1;
 
 // Fetch all pages of a Supabase query in parallel (first page sequential, rest parallel)
-async function fetchAllPages(queryBuilder) {
-  const { data: first } = await queryBuilder.range(0, 999);
+async function fetchAllPages(queryFn) {
+  // queryFn must be a factory: () => supabase query builder (called fresh each time)
+  // The Supabase builder is mutable — reusing the same instance for multiple .range()
+  // calls clobbers the URL params, so we need a new builder per page.
+  const { data: first } = await queryFn().range(0, 999);
   const rows = [...(first || [])];
   if (rows.length < 1000) return rows;
   // Fire up to 29 more pages in parallel (covers up to 30k rows)
   const rest = await Promise.all(
-    Array.from({ length: 29 }, (_, i) => queryBuilder.range((i + 1) * 1000, (i + 2) * 1000 - 1))
+    Array.from({ length: 29 }, (_, i) => queryFn().range((i + 1) * 1000, (i + 2) * 1000 - 1))
   );
   for (const { data } of rest) {
     if (!data || !data.length) break;
@@ -8646,10 +8649,10 @@ async function loadPoolFromDB() {
     // Fetch user pool and contest pool in parallel, each with parallel pagination
     updatePoolLoading('Fetching pool from database...', '', 10);
     const [userRes, contestRes] = await Promise.all([
-      fetchAllPages(sb.from('sim_pool')
+      fetchAllPages(() => sb.from('sim_pool')
         .select('player_ids,salary,proj,stack_team,stack_size,sub_team,sub_size,avg_pms,gpp_score')
         .eq('game_date', today).eq('dk_slate', slate).eq('pool_type', 'user')),
-      fetchAllPages(sb.from('sim_pool')
+      fetchAllPages(() => sb.from('sim_pool')
         .select('player_ids')
         .eq('game_date', today).eq('dk_slate', slate).eq('pool_type', 'contest')),
     ]);
