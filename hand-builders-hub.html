@@ -9966,7 +9966,6 @@ function simulateContest() {
   console.log(`Contest sim: ${n} user lineups${hasContestPool ? ` vs ${_contestPool.length} contest pool` : ' (self-competition)'}, fieldMult=${fieldMult} (${fieldSize.toLocaleString()} field)`);
 
   // Build payout lookup from contest data for ROI calculation
-  console.log('[sim] contestDb:', contestDb ? { name: contestDb.name, entry_fee: contestDb.entry_fee, payout_pct: contestDb.payout_pct, positions_paid: contestDb.positions_paid, min_cash: contestDb.min_cash, has_payout_json: !!contestDb.payout_json } : null);
   let payoutTiers = null; // [{minPos, maxPos, value}]
   if (contestDb?.payout_json) {
     try {
@@ -9977,7 +9976,6 @@ function simulateContest() {
         maxPos: t.maxPosition,
         value: t.payoutDescriptions?.[0]?.value || 0,
       })).filter(t => t.value > 0);
-      console.log('[sim] payout_json raw (first entry):', raw[0], '| tiers built:', payoutTiers.length);
     } catch(e) { console.warn('payout parse error', e); }
   }
   // Fallback: build tiers from stored min_cash/positions_paid when payout_json is absent
@@ -9990,7 +9988,6 @@ function simulateContest() {
     if (fp > minCash) payoutTiers.push({ minPos: 1, maxPos: 1, value: fp });
     payoutTiers.push({ minPos: fp > minCash ? 2 : 1, maxPos: pp, value: minCash });
   }
-  console.log('[sim] payoutTiers after fallback:', payoutTiers);
   // Sync payoutPct from actual tier coverage when payout_pct wasn't stored
   if (payoutTiers && !contestDb?.payout_pct) {
     const tierMax = Math.max(...payoutTiers.map(t => t.maxPos));
