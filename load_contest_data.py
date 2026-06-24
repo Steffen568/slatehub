@@ -93,7 +93,7 @@ def run():
     args = sys.argv[1:]
     slate_filter = None
     min_fee = 0.25     # default: include $0.25+ contests
-    max_contests = 200  # payout API calls
+    max_contests = None  # fetch payout for all contests
 
     i = 0
     while i < len(args):
