@@ -9649,11 +9649,12 @@ function renderAllPMS() {
       const slates = [...getSlatesForGame(_snap.game)].filter(s => !s.startsWith('sd_'));
       if (!slates.length) return;
       const upserts = [];
+      const gamePk = _snap.game?.game_pk ?? null;
       _snap.scored.forEach(({ pid, score }) =>
-        slates.forEach(slate => upserts.push({ player_id: pid, game_date: _snap.date, dk_slate: slate, pms_score: score }))
+        slates.forEach(slate => upserts.push({ player_id: pid, game_pk: gamePk, game_date: _snap.date, dk_slate: slate, pms_score: score }))
       );
       for (let i = 0; i < upserts.length; i += 150) {
-        const { error } = await sb.from('slate_ownership').upsert(upserts.slice(i, i + 150), { onConflict: 'player_id,game_date,dk_slate' });
+        const { error } = await sb.from('slate_ownership').upsert(upserts.slice(i, i + 150), { onConflict: 'player_id,game_pk,dk_slate' });
         if (error) console.warn('[PMS write-back] upsert error:', error.message);
       }
       console.log(`[PMS write-back] ${upserts.length} scores written for ${_snap.date}`);
