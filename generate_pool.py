@@ -1779,13 +1779,23 @@ def process_request(req):
         u_size = req.get('user_pool_size') or 10000
         c_size = req.get('contest_pool_size') or 15000
 
-        # Derive build params from actual contest if provided, else fall back to type
+        # When a specific contest is selected, let it drive everything:
+        # build style, pool sizes, and contest type — ignore the manual UI fields.
+        crow = None
         if contest_id:
             crow = sb.table('dk_contests').select(
-                'max_entries,max_per_user'
+                'max_entries,max_per_user,contest_name'
             ).eq('contest_id', contest_id).maybe_single().execute().data
             if crow:
-                contest_type = classify_contest(crow.get('max_entries'), crow.get('max_per_user'))
+                max_per_user = crow.get('max_per_user') or 1
+                max_entries  = crow.get('max_entries') or 1000
+                contest_type = classify_contest(max_entries, max_per_user)
+                # User pool: 20x their entry count so optimizer has options (min 150, max 3000)
+                u_size = max(150, min(max_per_user * 20, 3000))
+                # Contest pool: simulate the actual field size (cap at 25k for performance)
+                c_size = min(max_entries, 25000)
+                print(f"  Contest: {crow.get('contest_name', contest_id)} "
+                      f"(entries={max_entries:,} max/user={max_per_user})")
         build_prof = derive_build_params(contest_type)
 
         # Read user customizations
@@ -1798,7 +1808,7 @@ def process_request(req):
         salary_cap_override = req.get('salary_cap', SALARY_CAP)
         min_salary_override = req.get('min_salary', SALARY_FLOOR)
 
-        print(f"  Date: {target_date}  Slate: {slate}  Contest: {build_prof['contest_type']}")
+        print(f"  Date: {target_date}  Slate: {slate}  Type: {build_prof['contest_type']}")
         print(f"  Build params: noise_hit={build_prof['noise_hit']} upside_h={build_prof['upside_h']} value_w={build_prof['value_w']} salary_floor=${build_prof['salary_floor']:,}")
         print(f"  User pool: {u_size:,}  Contest pool: {c_size:,}")
 
