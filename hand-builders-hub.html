@@ -9955,10 +9955,8 @@ function simulateContest() {
   // Use real contest data if a contest is selected, otherwise default estimates
   const contestDb = _activeContestId ? _dkContestData[+_activeContestId] : null;
   const fieldSize = contestDb?.max_entries || n;
-  const payoutPct = contestDb?.payout_pct || 22;
+  let payoutPct = contestDb?.payout_pct || 22;
   const top1Cutoff = Math.max(1, Math.ceil(n * 0.01));
-  const top10Cutoff = Math.max(1, Math.ceil(n * 0.10));
-  const cashCutoff = Math.max(1, Math.ceil(n * (payoutPct / 100)));
 
   // Contest pool: if loaded from DB, use it for realistic field positioning
   const hasContestPool = _contestPool.length > 0;
@@ -9998,6 +9996,12 @@ function simulateContest() {
       const posPaid = Math.ceil(fieldSize * (isFlat ? 0.50 : payoutPct / 100));
       payoutTiers = [{ minPos: 1, maxPos: posPaid, value: +estCash.toFixed(2) }];
     }
+  }
+  // Sync payoutPct from actual tier coverage so cashCount uses the right rate
+  // (payout_pct = 0.0 in DB when it wasn't fetched — e.g. Jukebox needs 50%, not 22%)
+  if (payoutTiers && !contestDb?.payout_pct) {
+    const tierMax = Math.max(...payoutTiers.map(t => t.maxPos));
+    payoutPct = Math.min(100, Math.round(tierMax / fieldSize * 100));
   }
 
   let simIdx = 0;
