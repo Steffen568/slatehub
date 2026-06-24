@@ -1036,3 +1036,23 @@ httpx.RemoteProtocolError: Server disconnected
 ### Diagnostic scripts should query today's player_projections, not projection_history
 **What happened:** Re-ran diagnostic after code changes and saw no difference — because the script was reading 60-day projection_history (historical data unchanged). Only today's 29 new rows had the new parameters.
 **Rule:** For before/after calibration checks, compare player_projections (today) vs projection_history (yesterday). Don't use projection_history alone — it won't show same-day changes.
+
+## FanGraphs Splits Loader (Session 56 — 2026-06-23)
+
+### Splits CSVs use `Tm` column; main leaderboard CSVs use `Team` — `resolve_id` was getting None for team
+**What happened:** `load_fangraphs_excel.py` called `row.get('Team')` for all CSV types. FanGraphs splits leaderboards (vRHP, vLHP, vRHH Adv/Stand, vLHH Adv/Stand) export team as `Tm`, not `Team`. `resolve_id` received `team_abbr=None` for every splits row, fell back to name-only lookup, and assigned splits stats to the wrong player for any common name (Eduardo Rodriguez → 121350 instead of 593958).
+**Rule:** When reading FanGraphs splits CSVs, always use `row.get('Tm') or row.get('Team')` to get the team column. Verify column names with `Get-Content <file>.csv -TotalCount 1` before assuming they match leaderboard format.
+
+### The Tm/Team bug corrupted batter_splits AND caused platoon adjustment removal
+**What happened:** Session 45 removed `platoon_adjust()` because it "showed r=0.000 across all postgame reviews." The r=0.000 was caused by the Tm/Team bug — corrupted splits data → random platoon noise → appeared invalid. Once the bug was fixed (this session), platoon adjustment was reinstated with the already-correct `platoon_adjust()` function.
+**Rule:** Before permanently removing a feature that "shows no correlation," verify the underlying data is correct. A data quality bug in the input will make any feature built on that data look invalid.
+
+## Hitter Projections (Session 56 — 2026-06-23)
+
+### xFIP not in batter rate computation — matchup signal was almost invisible
+**What happened:** `_compute_pa_rates()` used Pitching+ for suppression (0.004 per point → 1.8% boost for Pitching+ 95.5) but never used xFIP, the strongest pitcher quality signal. A pitcher with xFIP 5.13 vs 3.20 is a 24% hit rate difference. Model captured ~2% of that.
+**Rule:** When adding pitcher quality signals to batter rates, xFIP should be included as a direct hit multiplier: `clip(LEAGUE_AVG_XFIP / pitcher_xfip, 0.90, 1.10)`. It is independent of Pitching+ and available for essentially all pitchers.
+
+### Vegas R/RBI exponent 0.80 compressed talent spread by 20% in both directions
+**What happened:** `woba_quality = (woba/LEAGUE_AVG_WOBA)^0.80`. Exponent < 1.0 compresses the ratio toward 1.0 for both elite and weak batters. Elite wOBA 0.400 got 79% of its deserved advantage; weak wOBA 0.260 got 79% of its deserved penalty.
+**Rule:** wOBA quality in the R/RBI formula should use exponent 1.00 (linear) unless there's specific evidence of non-linearity. Default to full credit.

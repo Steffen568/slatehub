@@ -35,6 +35,7 @@ DRY_RUN = '--dry-run' in sys.argv
 def normalize(name):
     if not name or not isinstance(name, str):
         return ''
+    name = ' '.join(name.split())  # collapse embedded newlines/tabs/multi-spaces
     nfkd = unicodedata.normalize('NFKD', name)
     return nfkd.encode('ASCII', 'ignore').decode('ASCII').strip().lower()
 
@@ -386,7 +387,7 @@ for split_label, df in [('R', df_vrhp), ('L', df_vlhp)]:
         name = row.get('Name')
         if not name or not isinstance(name, str):
             continue
-        pid = resolve_id(name, row.get('Team'))
+        pid = resolve_id(name, row.get('Tm') or row.get('Team'))
         if not pid:
             continue
 
@@ -458,7 +459,7 @@ for split_label, df in [('L', df_vlhh_std), ('R', df_vrhh_std)]:
         name = row.get('Name')
         if not name or not isinstance(name, str):
             continue
-        pid = resolve_id(name, row.get('Team'))
+        pid = resolve_id(name, row.get('Tm') or row.get('Team'))
         if not pid:
             continue
         matched += 1
@@ -487,7 +488,7 @@ for split_label, df in [('L', df_vlhh_adv), ('R', df_vrhh_adv)]:
         name = row.get('Name')
         if not name or not isinstance(name, str):
             continue
-        pid = resolve_id(name, row.get('Team'))
+        pid = resolve_id(name, row.get('Tm') or row.get('Team'))
         if not pid:
             continue
         matched += 1

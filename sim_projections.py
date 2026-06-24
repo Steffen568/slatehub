@@ -1487,6 +1487,12 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     qoc_mult = clip(1.0 + (talent['barrel'] - 0.065) * 0.8 + (talent['hard_hit'] - 0.35) * 0.3, 0.85, 1.25)
     pitcher_hit_suppression = clip(1.0 - (pitcher_quality - 100) * 0.004, 0.87, 1.13)
     loc_hit_suppression = clip(1.0 - (location_quality - 100) * 0.001, 0.96, 1.04)
+    # xFIP hit multiplier: strongest predictive pitcher quality signal, independent of Pitching+.
+    # Catches weak pitchers where Pitching+ is null/average but xFIP reveals true quality.
+    # Applied to hit rate only (K rate already uses pitcher k_pct ratio directly).
+    xfip_mult = 1.0
+    if pitcher and pitcher.get('xfip') and pitcher['xfip'] > 1.0:
+        xfip_mult = clip(LEAGUE_AVG_XFIP / pitcher['xfip'], 0.90, 1.10)
     park_basic = safe(park.get('basic_factor'), 100) / 100.0 if park else 1.0
     wx_hit = weather_hit_mult(weather, park)
     ld_adj = clip(1.0 + (talent.get('ld_pct', 0.21) - 0.21) * 0.5, 0.90, 1.12)
@@ -1505,7 +1511,7 @@ def _compute_pa_rates(talent, pitcher, park, weather):
     # Dampen park_basic: Bayesian BABIP already reflects ~50% home park effect
     # via career xwOBA. Apply only 50% of the park deviation as an edge.
     park_basic_edge = 1.0 + (park_basic - 1.0) * 0.50
-    hit_prob = clip(hit_prob_base * adjusted_qoc * ev_adj * pitcher_hit_suppression * loc_hit_suppression * park_basic_edge * wx_hit * ld_adj, 0.14, 0.52)
+    hit_prob = clip(hit_prob_base * adjusted_qoc * ev_adj * pitcher_hit_suppression * xfip_mult * loc_hit_suppression * park_basic_edge * wx_hit * ld_adj, 0.14, 0.52)
 
     # HR rate — bat tracking metrics drive power ceiling
     park_hr = safe(park.get('hr_factor'), 100) / 100.0 if park else 1.0
@@ -2770,12 +2776,25 @@ def run():
             )
             talent['hr_plane_adj'] = hr_a
 
-            # Platoon adjustment — REMOVED (Session 45)
-            # Individual batter talent already reflects platoon tendencies via
-            # their own K%/BB%/ISO/BABIP. Applying a team-level platoon_adjust
-            # double-counted the split and showed r=0.000 across all postgame
-            # reviews. Keep _platoon_adj=1.0 for output compatibility.
-            talent['_platoon_adj'] = 1.0
+            # Platoon adjustment — REINSTATED (Session 56)
+            # Session 45 removal was due to corrupted batter_splits (Tm vs Team column
+            # bug in load_fangraphs_excel.py — all common-name batters had wrong splits).
+            # Bug fixed this session. platoon_adjust() at lines 2544-2570 already correct.
+            if opp_sp_hand:
+                split_row = data['batter_splits'].get(stats_pid, {}).get(opp_sp_hand)
+                if split_row:
+                    talent = platoon_adjust(talent, split_row)
+                    # Extend platoon adj to R/RBI — platoon_adjust only touches K/BB/ISO/BABIP.
+                    # R/RBI are ~35-40% of DK score; wRC+ split gives full offensive context.
+                    split_wrc = safe(split_row.get('wrc_plus'))
+                    split_pa  = safe(split_row.get('pa'), 0)
+                    if split_wrc and split_pa >= 30:
+                        pa_reg = clip(split_pa / 300.0, 0.0, 1.0)
+                        reg_wrc = split_wrc * pa_reg + 100.0 * (1 - pa_reg)
+                        r_ratio = clip(reg_wrc / 100.0, 0.75, 1.35)
+                        talent['r_per_pa']   = clip(talent.get('r_per_pa',  0.11) * r_ratio, 0.03, 0.25)
+                        talent['rbi_per_pa'] = clip(talent.get('rbi_per_pa', 0.10) * r_ratio, 0.03, 0.25)
+            talent['_platoon_adj'] = 1.0  # keep for output compatibility
 
             # Compute PA rates vs SP and vs bullpen
             rates_sp = _compute_pa_rates(talent, pitcher, park_row, wx_row)
@@ -2850,8 +2869,8 @@ def run():
             # wOBA quality: corrects Marcel regression toward 0.11 for weak/thin-sample hitters.
             # A wRC+ 43 player shouldn't project R/RBI at league-average rates.
             league_r, league_rbi = 0.11, 0.10
-            vegas_r_scale = clip((opp_implied_val / LEAGUE_AVG_IMPLIED) if opp_implied_val else 1.0, 0.75, 1.30)
-            woba_quality = clip(talent.get('woba', LEAGUE_AVG_WOBA) / LEAGUE_AVG_WOBA, 0.55, 1.45) ** 0.80
+            vegas_r_scale = clip((opp_implied_val / LEAGUE_AVG_IMPLIED) if opp_implied_val else 1.0, 0.70, 1.38)
+            woba_quality = clip(talent.get('woba', LEAGUE_AVG_WOBA) / LEAGUE_AVG_WOBA, 0.55, 1.45) ** 1.00
             k_discount = clip(1.0 - (talent['k_pct'] - 0.22) * 1.0, 0.85, 1.05)
             exp_r   = talent.get('r_per_pa', league_r)   * proj_pa * k_discount * vegas_r_scale * woba_quality
             exp_rbi = talent.get('rbi_per_pa', league_rbi) * proj_pa * k_discount * vegas_r_scale * woba_quality
