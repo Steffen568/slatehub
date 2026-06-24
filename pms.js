@@ -111,7 +111,15 @@ function computePMS(pd, pSplits, bt, bStats, batHand, bSplits, vaa, l7xwoba, ars
   // 4. Physics Matchup (3 pts) — pitch geometry vs swing plane
   const atk = bt?.attack_angle ?? null;
   const tilt = bt?.swing_path_tilt ?? null;
-  const spArm = pd?.arm_angle ?? null;
+  // Prefer aggregate arm angle from pitcher_stats; fall back to usage-weighted avg
+  // from pitch_arsenal (covers young pitchers not yet in aggregate Savant data)
+  let spArm = pd?.arm_angle ?? null;
+  if (spArm == null && arsenalRows && arsenalRows.length) {
+    const totalU = arsenalRows.reduce((s, r) => s + (r.usage_pct || 0), 0);
+    if (totalU > 0) {
+      spArm = arsenalRows.reduce((s, r) => s + (r.arm_angle || 45) * (r.usage_pct || 0), 0) / totalU;
+    }
+  }
   if (arsenalRows && arsenalRows.length) {
     const { kAdj, contactAdj, difficulty, hrPlaneAdj } = computePhysicsMatchup(arsenalRows, atk, tilt, spArm);
     const hrDiff = (hrPlaneAdj - 1.0) / 0.10;
