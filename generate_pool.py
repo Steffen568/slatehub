@@ -1826,12 +1826,10 @@ def process_request(req):
                 print(f"  Contest: {crow.get('name', contest_id)} "
                       f"(entries={max_entries:,} max/user={max_per_user})")
 
-        # Pool sizes auto-derived from final contest_type (and actual field size if known).
-        # Frontend can override by sending explicit non-zero values.
+        # Pool sizes always auto-derived — frontend inputs are display-only.
+        # Frontend always sends its last value (default 10k/15k), so we can't use `or` fallback.
         _max_ent = crow.get('max_entries') if crow else None
-        auto_u, auto_c = derive_pool_sizes(contest_type, _max_ent)
-        u_size = req.get('user_pool_size') or auto_u
-        c_size = req.get('contest_pool_size') or auto_c
+        u_size, c_size = derive_pool_sizes(contest_type, _max_ent)
 
         build_prof = derive_build_params(contest_type)
 
@@ -1846,7 +1844,7 @@ def process_request(req):
         min_salary_override = req.get('min_salary', SALARY_FLOOR)
 
         print(f"  Date: {target_date}  Slate: {slate}  Type: {build_prof['contest_type']}")
-        print(f"  Build params: noise_hit={build_prof['noise_hit']} upside_h={build_prof['upside_h']} value_w={build_prof['value_w']} salary_floor=${build_prof['salary_floor']:,}")
+        print(f"  Build params: noise_hit={build_prof['noise_hit']} upside_h={build_prof['upside_h']} value_w={build_prof['value_w']} salary_floor=${build_prof['salary_floor']:,} softmax_T={build_prof['softmax_temp']} lev_fade={build_prof['leverage_fade']}")
         print(f"  User pool: {u_size:,}  Contest pool: {c_size:,}")
 
         excluded_count = len(req.get('excluded_players') or [])
