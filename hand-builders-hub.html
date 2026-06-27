@@ -9352,14 +9352,38 @@ function filterByExposure(lineups) {
     }
     if (skip) continue;
 
+    // Automatic pitcher cap for large GPP portfolios (targetN≥100): limit each SP to 40%.
+    // Prevents 2-pitcher lock-in when building 100+ entry sets (e.g. mini-MAX GPP).
+    // Skipped for SE contests where high pitcher concentration is correct.
+    if (_contestMode !== 'showdown' && targetN >= 100) {
+      const pct = document.getElementById('portfolio-contest-type')?.value || '';
+      if (!pct.startsWith('se')) {
+        const pitcherCap = Math.round(targetN * 0.40);
+        const p1 = c.lineup?.sp1?.player_id;
+        const p2 = c.lineup?.sp2?.player_id;
+        if ((p1 && (playerCount[p1] || 0) >= pitcherCap) ||
+            (p2 && (playerCount[p2] || 0) >= pitcherCap)) continue;
+      }
+    }
+
     // Min unique: compare against last 100 results only (O(n) not O(n²))
     if (minUniq > 0 && result.length > 0) {
       const checkWindow = result.slice(-100);
+      // In classic mode, identify this lineup's pitcher PIDs for position-aware check
+      const cP1 = _contestMode !== 'showdown' ? (c.lineup?.sp1?.player_id ?? null) : null;
+      const cP2 = _contestMode !== 'showdown' ? (c.lineup?.sp2?.player_id ?? null) : null;
       const tooSimilar = checkWindow.some(prev => {
-        let shared = 0;
-        for (const pid of c.metrics.pids) { if (prev.metrics.pids.has(pid)) shared++; }
+        let shared = 0, sharedPitchers = 0;
+        for (const pid of c.metrics.pids) {
+          if (prev.metrics.pids.has(pid)) {
+            shared++;
+            if (pid === cP1 || pid === cP2) sharedPitchers++;
+          }
+        }
         const luSize = _contestMode === 'showdown' ? 6 : 10;
-        return (luSize - shared) < minUniq;
+        // When both pitchers are shared, require one extra unique player to force hitter variety
+        const effectiveMinUniq = (sharedPitchers >= 2 && _contestMode !== 'showdown') ? minUniq + 1 : minUniq;
+        return (luSize - shared) < effectiveMinUniq;
       });
       if (tooSimilar) continue;
     }
@@ -10985,6 +11009,19 @@ function applyPortfolioRank() {
   }
   const fallbackPct = (minExp + maxExp) / 2;
 
+  // Pitcher cap: for large portfolios (K≥100) limit each pitcher to 40% max to prevent
+  // 2-pitcher lock-in across 100+ lineups. The normal leverage-based cap (70-75%) was
+  // calibrated for K=20 entries and allows 105+ appearances at K=150.
+  const k = _poolCardsShown < Infinity ? _poolCardsShown : fullPool.length;
+  const pitcherPids = new Set();
+  for (const c of fullPool) {
+    const p1 = c.lineup['sp1']?.player_id;
+    const p2 = c.lineup['sp2']?.player_id;
+    if (p1) pitcherPids.add(p1);
+    if (p2) pitcherPids.add(p2);
+  }
+  const pitcherMaxExp = k >= 100 ? 0.40 : maxExp;
+
   // Pre-compute lineup-level leverage (sum of player leverage scores) for sort
   // This has much higher variance than gpp_score (flat 0.55-0.70) and naturally
   // surfaces contrarian high-ceiling lineups over chalk-heavy ones.
@@ -10997,9 +11034,8 @@ function applyPortfolioRank() {
   // Sort by lineup leverage descending
   const sorted = fullPool.slice().sort((a, b) => (b._lineupLev || 0) - (a._lineupLev || 0));
 
-  // Percentage-based selection — K-independent ranking
+  // Percentage-based selection — K-independent ranking for hitters, K-aware for pitchers.
   // A player is blocked if their running % (count/selected) exceeds their target_pct.
-  // Same state at step N regardless of K → same lineup chosen → stable ordering.
   const playerCounts = {};
   const selected = [];
 
@@ -11012,9 +11048,10 @@ function applyPortfolioRank() {
   for (const c of sorted) {
     const n = selected.length;
     if (n > 0) {
-      const blocked = [...c._portfolioPids].some(pid =>
-        (playerCounts[pid] || 0) / n > (targetPct[pid] ?? fallbackPct)
-      );
+      const blocked = [...c._portfolioPids].some(pid => {
+        const cap = pitcherPids.has(pid) ? pitcherMaxExp : (targetPct[pid] ?? fallbackPct);
+        return (playerCounts[pid] || 0) / n > cap;
+      });
       if (blocked) continue;
     }
     // Overlap badge vs previously selected
@@ -11055,7 +11092,8 @@ function applyPortfolioRank() {
   renderPoolCards();
   renderPoolExposure();
 
-  showToast(`Portfolio (${contestType}): ${total} ranked | avg overlap ${avgOverlap}% | max ${maxOverlap}% | ${elapsed}s`);
+  const pitcherCapStr = k >= 100 ? ` | SP cap ${Math.round(pitcherMaxExp * 100)}%` : '';
+  showToast(`Portfolio (${contestType}): ${total} ranked | avg overlap ${avgOverlap}% | max ${maxOverlap}%${pitcherCapStr} | ${elapsed}s`);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -351,6 +351,23 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 
 **What happened:** `load_odds.py` loaded DB games for `today` only, but late-night US games have UTC commence times one day ahead (e.g. NYY@SF on Mar 25 local = `2026-03-26T00:05:00Z`). Also, the DB stores short team names ("Yankees") but the lookup was comparing Odds API full names ("New York Yankees") against mapped short names.
 **Rule:** Always load games for today AND tomorrow when matching odds. Build `db_lookup` indexed by both full and short team name formats.
 
+---
+
+## Portfolio Selection / Contest Sim (Session 57 — 2026-06-27)
+
+### ROI sort → top-N is a convergence funnel, not portfolio optimization
+**What happened:** Sorting 10k pool lineups by individual ROI and taking the top 150 for a mini-MAX produced 65-68% pitcher concentration (Logan Gilbert/Reid Detmers in nearly all lineups) and flat hitter exposures across 30-50% of the portfolio. Pool was well-distributed (16 teams); the problem was entirely in the selection phase.
+**Why:** ROI sort is individual lineup optimization applied N times. The top-150 by ROI are 150 near-identical templates of the "optimal construction" (best pitchers + best matchup stack). They share 8 of 10 roster spots. The correct approach is portfolio optimization (expected-improvement greedy) where each lineup is selected to maximize incremental value OVER already-selected lineups.
+**Rule:** For large entry sets (K≥50), do NOT use pure ROI sort as the portfolio selection mechanism. Use Portfolio Rank (applyPortfolioRank) with pitcher caps enforced, or expected-improvement greedy. `optimize_portfolio.py` sim mode already implements the correct greedy algorithm.
+
+### Exposure caps were K-blind — 70% cap = 105/150 lineups per pitcher
+**What happened:** `applyPortfolioRank()` and `filterByExposure()` both used percentage-based caps calibrated for K=20 entries. At K=150, a 70% cap allows 105 appearances per pitcher.
+**Rule:** For GPP portfolios with K≥100 lineups, cap each pitcher at 40% (60 of 150 max). This is now enforced automatically in both `applyPortfolioRank()` (at K≥100) and `filterByExposure()` (at targetN≥100 for non-SE contests). The cap uses the display count (`_poolCardsShown`) as K — user must set Show N to the intended export count.
+
+### Min-unique=2 never forces pitcher rotation in classic mode
+**What happened:** Two lineups sharing both pitchers (2 slots) + 6 hitters = shared=8, different=2. This PASSES min-unique=2 while being virtually identical. The same pitcher pair appeared in 59/150 = 39% of lineups together (each appeared 65-68% individually).
+**Rule:** When both pitchers are shared between two lineups in classic mode, require one additional unique player (effectiveMinUniq = minUniq + 1). Now enforced in `filterByExposure()` via position-aware min-unique check using `sp1`/`sp2` slot keys.
+
 ### SD projections leaked across games — no game_pk scoping (Session 26)
 **What happened:** SD projection query filtered by date only, returning all 198 hitter projections from 11 games on the date. Hitters from unrelated games got full projections in the SD pool.
 **Rule:** In SD mode, extract `game_pk` from the slate label (`sd_AWAY@HOME_YYYY-MM-DD`) and scope projection queries with `.eq('game_pk', sdGamePk)`.
