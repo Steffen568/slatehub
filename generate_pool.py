@@ -74,6 +74,24 @@ _ALPHA_KEY = {
 # Map legacy 2-type names to nearest 6-type equivalent
 _LEGACY_TYPE_MAP = {'gpp': 'gpp_mid', 'small': 'se_mid'}
 
+# Pool sizes by contest type: (user_pool, contest_pool)
+_POOL_SIZES = {
+    'se_small':  (500,    300),
+    'se_mid':    (1000,   700),
+    'se_large':  (2000,  1200),
+    'gpp_small': (3000,  2000),
+    'gpp_mid':   (6000,  4000),
+    'gpp_large': (10000, 8000),
+}
+
+def derive_pool_sizes(contest_type, max_entries=None):
+    """Auto-size user and contest pools based on contest type."""
+    ct = _LEGACY_TYPE_MAP.get(contest_type, contest_type)
+    u, c = _POOL_SIZES.get(ct, (10000, 8000))
+    if max_entries:
+        c = min(max_entries, c)
+    return u, c
+
 
 def classify_contest(max_entries, max_per_user):
     """Map raw contest fields to the 6-type taxonomy."""
@@ -104,12 +122,27 @@ def derive_build_params(contest_type):
     salary_floor = int(46000 + value_w * 6000)
     pitcher_mult = 7.0 if ct.startswith('se') else 5.0
 
+    # Softmax temperature: controls team-selection diversity across lineups.
+    # Lower = concentrate on best matchup team (SE); Higher = spread across teams (GPP large).
+    _SOFTMAX_TEMP = {
+        'se_small': 0.30, 'se_mid': 0.35, 'se_large': 0.40,
+        'gpp_small': 0.45, 'gpp_mid': 0.50, 'gpp_large': 0.60,
+    }
+    # Leverage fade: ownership leverage weight for individual player scoring.
+    # Lower for SE = pick best players on quality; higher for GPP large = steer flex toward contrarian.
+    _LEV_FADE = {
+        'se_small': 0.08, 'se_mid': 0.10, 'se_large': 0.12,
+        'gpp_small': 0.13, 'gpp_mid': 0.15, 'gpp_large': 0.17,
+    }
+
     return {
         'contest_type': ct,
         'noise_pit': noise_pit, 'noise_hit': noise_hit,
         'pitcher_mult': pitcher_mult, 'unconf_pen': 0.40,
         'upside_h': upside_h, 'upside_p': upside_p,
         'value_w': value_w, 'salary_floor': salary_floor,
+        'softmax_temp':  _SOFTMAX_TEMP.get(ct, 0.45),
+        'leverage_fade': _LEV_FADE.get(ct, 0.15),
     }
 
 
@@ -925,9 +958,10 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
 
         # Upside blend: proj + (ceiling - proj) * blend
         # SE: low blend (play to projection), GPP: high blend (chase ceiling)
-        _upside_h = prof.get('upside_h', UPSIDE_BLEND) if prof else UPSIDE_BLEND
-        _upside_p = prof.get('upside_p', UPSIDE_BLEND + 0.15) if prof else UPSIDE_BLEND + 0.15
-        _value_w  = prof.get('value_w', 0.15) if prof else 0.15
+        _upside_h  = prof.get('upside_h', UPSIDE_BLEND) if prof else UPSIDE_BLEND
+        _upside_p  = prof.get('upside_p', UPSIDE_BLEND + 0.15) if prof else UPSIDE_BLEND + 0.15
+        _value_w   = prof.get('value_w', 0.15) if prof else 0.15
+        _lev_fade  = prof.get('leverage_fade', 0.15) if prof else 0.15
 
         # Leverage gate: only apply ownership-based scoring when sim_ownership.py has run.
         # >30% of players having non-default (5.0) ownership means it was loaded.
@@ -1007,7 +1041,7 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
 
                 if p['is_pitcher']:
                     lev_z = (p['ceiling'] / eff_own - 2.0) / 2.5
-                    scores[i] *= max(0.87, min(1.22, 1.0 + lev_z * 0.15))
+                    scores[i] *= max(0.87, min(1.22, 1.0 + lev_z * _lev_fade))
                     # Metric-based chalk traps: high-owned + bad stuff only (validated data)
                     if own_raw > 25 and p.get('stuff_plus', 100) < 100:
                         scores[i] *= 0.88
@@ -1015,7 +1049,7 @@ def sample_noisy_scores(pool, rng, mode='user', contest_type='gpp', contest_disc
                         scores[i] *= 0.90
                 else:
                     lev_z = (p['ceiling'] / eff_own - 3.0) / 3.0
-                    scores[i] *= max(0.88, min(1.18, 1.0 + lev_z * 0.15))
+                    scores[i] *= max(0.88, min(1.18, 1.0 + lev_z * _lev_fade))
                     # Chalk trap: high-owned hitter with high K% (n=15, 60% bust rate)
                     if own_raw > 20 and p.get('k_pct_raw', 0.22) > 0.28:
                         scores[i] *= 0.88
@@ -1135,9 +1169,10 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
             team_stack_scores[t] *= chalk_opp_mult
 
     # Softmax over stack scores → team selection probabilities.
-    # T=0.45: sharper than the old T=0.7, concentrates weight on best matchups
-    # while letting the data (game total, PMS when available) determine which teams rank.
-    TEAM_SOFTMAX_TEMP = 0.45
+    # Temperature from contest type: lower = concentrate on best team (SE); higher = spread across teams (GPP large).
+    # SE (T=0.30): pool stacks the best matchup team reliably.
+    # GPP large (T=0.60): pool spreads across chalk and contrarian teams, providing the mix GPP needs.
+    TEAM_SOFTMAX_TEMP = prof.get('softmax_temp', 0.45) if prof else 0.45
     scores_arr = np.array([team_stack_scores[t] for t in viable_teams])
     if scores_arr.sum() > 0:
         scores_arr = scores_arr ** (1.0 / TEAM_SOFTMAX_TEMP)
@@ -1150,7 +1185,7 @@ def generate_lineups(pool, n_lineups, mode='user', rng=None, game_count=0,
         tw_sorted = sorted(zip(viable_teams, team_weights), key=lambda x: -x[1])
         top5 = ', '.join(f'{t}={w*100:.1f}%(pms={team_leverage[t]["avg_pms"]:.1f},gt={team_leverage[t]["gt"]:.1f})' for t, w in tw_sorted[:5])
         bot3 = ', '.join(f'{t}={w*100:.1f}%' for t, w in tw_sorted[-3:])
-        print(f"  Team weights: top={top5} | bot={bot3}")
+        print(f"  Team weights (T={TEAM_SOFTMAX_TEMP}): top={top5} | bot={bot3}")
     # Also compute for viable_5
     if viable_5:
         v5_scores = np.array([team_stack_scores[t] for t in viable_5])
@@ -1776,11 +1811,8 @@ def process_request(req):
         slate = req['dk_slate']
         contest_type = req.get('contest_type', 'gpp')
         contest_id   = req.get('contest_id')
-        u_size = req.get('user_pool_size') or 10000
-        c_size = req.get('contest_pool_size') or 15000
 
-        # When a specific contest is selected, let it drive everything:
-        # build style, pool sizes, and contest type — ignore the manual UI fields.
+        # When a specific contest is selected, reclassify contest_type from actual field data.
         crow = None
         if contest_id:
             _rows = sb.table('dk_contests').select(
@@ -1791,10 +1823,16 @@ def process_request(req):
                 max_per_user = crow.get('max_per_user') or 1
                 max_entries  = crow.get('max_entries') or 1000
                 contest_type = classify_contest(max_entries, max_per_user)
-                # Contest pool = full field size (capped at configured max to keep generation time sane)
-                c_size = min(max_entries, c_size)
                 print(f"  Contest: {crow.get('name', contest_id)} "
                       f"(entries={max_entries:,} max/user={max_per_user})")
+
+        # Pool sizes auto-derived from final contest_type (and actual field size if known).
+        # Frontend can override by sending explicit non-zero values.
+        _max_ent = crow.get('max_entries') if crow else None
+        auto_u, auto_c = derive_pool_sizes(contest_type, _max_ent)
+        u_size = req.get('user_pool_size') or auto_u
+        c_size = req.get('contest_pool_size') or auto_c
+
         build_prof = derive_build_params(contest_type)
 
         # Read user customizations

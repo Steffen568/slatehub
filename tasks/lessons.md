@@ -915,6 +915,26 @@ requests.exceptions.HTTPError: Error accessing 'https://www.fangraphs.com/leader
 **What happened:** Pipeline auto-fixed 3 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
 **Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
 
+---
+
+## Session 57 — Pitcher Projection Audit (2026-06-25 to 2026-06-26)
+
+### Marcel current-season weight too low — vet/breakout distinction was 1 pt (should be 3–5)
+**What happened:** `PITCHER_CURRENT_WEIGHT = 10` gave current-season data only 13% weight at 50 IP. Prior years dominated 5×. Declining vets (Gausman's struggling 2026) barely moved from their historical peak; improving pitchers (Schlittler breakout) were dampened by the 70% improvement cap. Result: 1 pt separation where there should be 3–5 pts.
+**Rule:** Raise `PITCHER_CURRENT_WEIGHT` to 16 (20% current-season weight at 50 IP). Remove the 70% asymmetric improvement dampening for pitchers with ≥50 current-season IP — that sample is real evidence, not early-season noise.
+
+### pitcher_context_mult with 80% Vegas weight produced extreme multipliers
+**What happened:** With `_pit_vegas_mult` at 80% weight, an ace facing a 2.8-implied team (Pirates) got `pitcher_context_mult` of 1.36. Applied to a 25-pt base: 34 pts — above the pitcher's own P90 from simulation.
+**Rule:** Vegas weight in `pitcher_context_mult` must be ≤20% because `eff_opp_qual` already encodes batter talent quality. Vegas adds game-level environment (bullpen mix, game script). Clip must be [0.90, 1.15] to prevent >15% swing. Old formula used [0.5, 2.0] which allowed doubling a pitcher's projection from park/weather alone.
+
+### ip_quality_adj was calibrated without Session 57 signals — became pure double-counting
+**What happened:** `ip_quality_adj` was validated against "elite K% pitchers average 21.9 DK actual vs 16.9 projected without it" — a test run BEFORE Vegas Ks, opp_bb_pct, LOB%, pitcher splits, and context_mult were added to direct_dk. All five of those new signals push elite pitchers higher. After adding them, ip_quality_adj stacked multiplicatively: a Sánchez-tier pitcher (30% K rate) got 13.3% IP boost on top of all the new signals, landing at 28.9 pts — near his P90.
+**Rule:** Any time you add 4+ directional signals to a projection model (all pushing the same direction for elite players), recalibrate or remove prior adjustment constants that were filling the same gap. The test that validated ip_quality_adj is invalidated by the new signals. Removed ip_quality_adj entirely. Added `SP_DIRECT_CAL = 0.80` calibration applied after context_mult to correct remaining 20% systematic over-projection.
+
+### When multiple new signals compound, recalibrate the model output
+**What happened:** Session 57 added 5 signals to pitcher direct_dk (Vegas Ks, opp_bb_pct, LOB%, splits, context_mult). Each adds 0.5–2 pts for elite pitchers. Combined with existing ip_quality_adj (already adding ~3.5 pts for Sánchez), total over-projection was 7–9 pts. No single signal was obviously wrong — the issue was their compounding effect.
+**Rule:** After adding multiple signals to a model, always check whether the total output is in the right absolute range (not just the direction/ranking). For pitchers: elite ace in great matchup should project 20–24 pts (not 28+). Average SP should project 13–16 pts. After adding signals, run the engine and verify the distribution before committing.
+
 
 ### Session 53 — Ownership Study: actual_ownership data has critical gaps
 **What happened:** First full ownership accuracy study (study_ownership.py) ran against 842 actual_ownership rows across 2 dates. Matched only 657 records — zero SPs matched, zero $7K+ players matched, all slate labels were 'unknown'. The matched sample is biased toward low-salary hitters only.
@@ -1084,3 +1104,71 @@ httpx.RemoteProtocolError: Server disconnected
 ### ROI badge and sort silently fail for small-prize contests with no payout_json
 **What happened:** `load_contest_data.py` only fetches payout details for the top 200 contests by prize pool. Small contests ($0.25 "Quarter Jukebox" etc.) have `payout_json = null` in `dk_contests`. `simulateContest()` sets `payoutTiers = null`, `hasPayouts = false`, and `roi = null` for all lineups. Sort by ROI falls through to projection tiebreaker; ROI badge never appears.
 **Rule:** After the `payout_json` parse block, add a fallback synthetic payout tier whenever `payoutTiers` is still null but `entry_fee > 0`. Use stored `min_cash`/`positions_paid` if available; otherwise estimate: detect flat-payout contests by name (/double.?up|50.?50|jukebox/i) and use `entry_fee * 1.9`, else `entry_fee * 1.5`. This gives meaningful ROI differentiation for any contest type.
+
+### Auto-fixed DK ID mismatches: Carlos Cortes, Luis Urias
+**What happened:** Pipeline auto-fixed 2 salary ID mismatch(es) in dk_salaries and added 1 PLAYER_ID_REMAP entry/entries.
+**Rule:** Auto-fix handled it. If the same player keeps appearing, investigate the root cause in the players table.
+
+---
+
+## Projection Differentiation (Session 56 — 2026-06-25)
+
+### R_MULT and RBI_MULT were defined but never applied to direct_dk
+**What happened:** `R_MULT` and `RBI_MULT` dicts (lines 47–51) give lineup-position run/RBI opportunity multipliers. `direct_dk` used `LINEUP_PA[order]` for PA (correct) but never applied `R_MULT[order]` or `RBI_MULT[order]` to `exp_r`/`exp_rbi`. All 9 hitters on a team got identical R/RBI multipliers regardless of batting position.
+**Rule:** Both PA count AND R/RBI opportunity must scale by batting order. PA uses `LINEUP_PA.get(order, LEAGUE_AVG_PA)`. R/RBI uses `R_MULT.get(order, 1.0)` and `RBI_MULT.get(order, 1.0)` as additional multipliers.
+
+### sp_era_est (pitcher model) was disconnected from direct_dk — only Vegas was used
+**What happened:** `sp_era_est` is fully computed from SIERA + xFIP + Stuff+ + opposing lineup quality (~line 2702). It drove the sim's shell threshold and SP depth. But `direct_dk` used only raw `opp_implied_val` (Vegas) for R/RBI scaling. When our model identified a weak SP that Vegas hadn't priced, the signal was completely discarded from `proj_dk_pts`.
+**Rule:** Blend our pitcher model ERA with Vegas implied into a `matchup_scale`: `0.55 * vegas_implied_scale + 0.45 * pitcher_run_scale`. Use `matchup_scale` everywhere instead of `vegas_r_scale`. This lets our model override the market on pitcher quality while still weighting Vegas heavily.
+
+### Game environment (Vegas + pitcher quality) had zero effect on hit component
+**What happened:** By design, Vegas was only applied to R/RBI. Hits (1B=3, 2B=5, HR=10, ~60% of DK pts) were purely talent vs. pitcher — no environment. Teams in great spots couldn't differentiate from average teams on the hit component.
+**Rule:** Apply a dampened (40%) version of `matchup_scale` to `exp_hits` before deriving hit types: `hit_env_scale = 1.0 + (matchup_scale - 1.0) * 0.40`. This avoids double-counting with R/RBI (which get full matchup_scale) while propagating game environment to the biggest DK scoring components.
+
+### hit_prob ceiling 0.52 suppressed elite hitters in premium spots
+**What happened:** Elite contact hitters vs weak pitchers in hitter parks stacked multipliers producing hit probabilities of 0.55–0.60, all clipped to 0.52. This cost ~0.4 DK pts in genuinely premium multi-factor spots.
+**Rule:** Raise `hit_prob` ceiling from 0.52 to 0.55 in both `sim_batter_game()` (line 1007) and `_compute_pa_rates()` (line 1514). The sim ceiling at line 1070 stays at 0.45 (per-sim variance, not base rate).
+
+---
+
+## Pitcher Projection Audit (Session 57 — 2026-06-25)
+
+### PITCHER_CURRENT_WEIGHT=10 over-projected declining vets, under-projected in-season breakouts
+**What happened:** Marcel Bayesian update gave only 13% weight to current-season at 50 IP (data_wt=2.08 vs prior year data_wt=7.5). Declining veterans like Gausman kept historical peak projections from 2024/2025 dominating. Breakout pitchers like Schlittler had their improvement anchored to mediocre historical rates.
+**Rule:** Increase `PITCHER_CURRENT_WEIGHT` from 10 → 16. At 50 IP this raises current-season from 13% → 20% of the Marcel blend. At 150 IP: 44% weight, making current-season appropriately dominant by mid-season.
+
+### Asymmetric improvement cap (70%) penalized mid-season breakouts
+**What happened:** The direct_dk K blend used `curr_k_wt * 0.7` for improving pitchers regardless of sample size. A pitcher with 60+ IP of genuine K-rate improvement got treated as "early-season noise" and only received 70% credit for improvement. This compounded with the Marcel under-weighting to suppress players having real breakout years.
+**Rule:** Only apply the 70% dampening when `curr_ip_k < 50` (genuine small sample). At 50+ IP, treat improvement at full weight: `improvement_wt = curr_k_wt if curr_ip_k >= 50 else curr_k_wt * 0.7`.
+
+### pitcher_context_mult was computed but never applied to direct_dk
+**What happened:** `_pitcher_context_mult` was correctly computing the run environment signal (inverted Vegas opponent implied, park, weather) and storing it as `context_mult` metadata. But the line `direct_dk *= _pitcher_context_mult` was never written. Two pitchers with identical talent facing 3.0 vs 5.5 implied teams projected identically.
+**Rule:** After computing `_pitcher_context_mult`, add `direct_dk = clip(direct_dk * _pitcher_context_mult, 0.0, 60.0)`. This is the direct analog of `matchup_scale` for hitters.
+
+### pitcher_context_mult formula weight (0.80) was calibrated for display, not multiplication
+**What happened:** With 80% Vegas weight, an ace facing a 2.8-implied team got a 1.36× multiplier applied to the full direct_dk — boosting a 25 pt projection to 34 pts, above the sim's own P90 of 32.7. The formula was designed as metadata and not calibrated for actual multiplication.
+**Rule:** Reduce Vegas weight from 0.80 → 0.20. Tighten clip from [0.5, 2.0] → [0.90, 1.15]. This gives a realistic 10–15% swing between great and poor pitcher game environments, matching the actual DK pts difference expected from 2.8 vs 5.5 opp implied.
+
+### Vegas Ks (implied_ks) used in sim but ignored in direct_dk
+**What happened:** `sim_pitcher_game()` blended Vegas K lines at 25% weight (VEGAS_K_WEIGHT=0.25). The direct_dk block computed K rate from Bayesian talent and current-season blend only — never touching `v_ks`. direct_dk was less informed than the sim.
+**Rule:** After computing `exp_k_rate`, blend in Vegas Ks if available: `if v_ks and exp_bf > 0: exp_k_rate = clip(v_ks/exp_bf * 0.25 + exp_k_rate * 0.75, 0.08, 0.45)`. Apply BEFORE computing exp_ks.
+
+### opp_bb_pct (r=-0.490) only applied in sim, not direct_dk
+**What happened:** `opp_bb` was computed and in scope at the pitcher direct_dk site but never referenced. Patient lineups shorten starts and reduce K opportunities — a strong signal that was correctly applied in the sim but completely absent from proj_dk_pts.
+**Rule:** After setting exp_bb_rate, apply patient lineup adjustment: `if opp_bb is not None: exp_k_rate = clip(exp_k_rate * (1.0 - _bb_dev * 2.5), 0.08, 0.45); exp_bb_rate = clip(exp_bb_rate * (1.0 + _bb_dev * 1.5), 0.03, 0.16)`. Mirrors sim_pitcher_game lines 1272–1275.
+
+### LOB% applied in sim era_anchor but not in direct_dk era_anchor
+**What happened:** `sim_pitcher_game()` regressed LOB% toward 72% league avg and adjusted era_anchor (±7% effect). direct_dk used raw xFIP/SIERA era_anchor without this. Talent dict had lob_pct but it was never accessed.
+**Rule:** After era_anchor is finalized (post current-xFIP/ERA blend), apply: `if lob and lob > 0: era_anchor *= clip(1.0 - (reg_lob - 0.72) * 0.8, 0.93, 1.07)`. Identical to sim logic.
+
+### Pitcher splits (vs L/R) applied in sim but not direct_dk
+**What happened:** `sim_pitcher_game()` blended split-specific K%, BB%, xFIP based on opposing lineup handedness. direct_dk used Marcel-averaged rates regardless of whether lineup was all LHH or all RHH. `p_splits` and `opp_hand_pct` were both computed before the direct_dk block.
+**Rule:** Apply the same blending: regress split K rates by sample (r_rf = clip(r_pa/250, 0, 0.60)), blend by `opp_hand_pct`, apply ratio to `blended_k`. Same caps as sim (max 60% regression factor).
+
+### Pool sizing was hardcoded 10k/15k regardless of contest type
+**What happened:** `generate_pool.py` always used 10k user pool / 15k contest pool regardless of SE vs GPP. SE contests with 1–3 entries wasted 5–10 minutes generating far more pool than needed.
+**Rule:** Use `derive_pool_sizes(contest_type)` — 500/300 for SE small up to 10k/8k for GPP large. Compute AFTER `contest_type` is finalized (i.e., after the `contest_id` lookup that may reclassify it). Frontend calls `autoPoolSizes(contestType)` to keep UI in sync.
+
+### GPP lineup diversity comes from softmax temperature, not from fading individual chalk players
+**What happened:** Proposed fading individual chalk players uniformly (reducing their scores). This is wrong — a lineup should have BOTH chalk anchors and contrarian players. Blindly fading chalk produces worse lineups.
+**Rule:** Use `softmax_temp` on team selection to control team diversity (SE=0.30 concentrates on best matchup team; GPP large=0.60 spreads across chalk and contrarian teams). The leverage multiplier (`leverage_fade`) only steers individual flex/fill spots — it doesn't wholesale fade chalk. Chalk players still appear freely via team selection.

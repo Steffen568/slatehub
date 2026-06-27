@@ -4452,7 +4452,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-ui);font-feat
       <div class="opto-row" id="opto-randpct-row"><label>Randomness %</label><input class="opto-input" id="opto-randpct" type="number" min="0" max="30" value="10" title="Adds ±N% noise to projections — produces diverse lineups quickly. 0=off (exhaustive), 5-15=recommended for 20+ lineups" oninput="optoSettings.randPct=+this.value;saveSettings()"></div>
       <div class="opto-row" id="opto-poolsize-row" style="display:none"><label>User Pool</label><input class="opto-input" id="opto-poolsize" type="number" min="1000" max="20000" step="1000" value="10000" title="User pool size (backend generation)" oninput="optoSettings.poolSize=+this.value;saveSettings()"></div>
       <div class="opto-row" id="opto-contest-poolsize-row" style="display:none"><label>Contest Pool</label><input class="opto-input" id="contest-pool-size" type="number" min="1000" max="30000" step="1000" value="15000" title="Contest pool size (field simulation)" oninput="optoSettings.contestPoolSize=+this.value;saveSettings()"></div>
-      <div class="opto-row" id="opto-contest-type-row" style="display:none"><label>Contest Type</label><select class="opto-input" id="contest-type-select" style="width:120px;" onchange="optoSettings.contestType=this.value;saveSettings()"><option value="gpp">GPP (Large)</option><option value="small">Small Field</option></select></div>
+      <div class="opto-row" id="opto-contest-type-row" style="display:none"><label>Contest Type</label><select class="opto-input" id="contest-type-select" style="width:120px;" onchange="optoSettings.contestType=this.value;saveSettings();autoPoolSizes(this.value)"><option value="gpp">GPP (Large)</option><option value="small">Small Field</option></select></div>
       <div id="pool-gen-status" style="display:none;padding:6px 10px;margin:4px 0;font-size:11px;border-radius:6px;background:rgba(167,139,250,.08);color:#a78bfa;text-align:center;"></div>
       <div class="opto-row"><label>Hitter Max Exp%</label><input class="opto-input" id="opto-expmax-hit" type="number" min="1" max="100" value="100" oninput="expHitterMax=+this.value;saveSettings()"></div>
       <div class="opto-row classic-only"><label>Pitcher Max Exp%</label><input class="opto-input" id="opto-expmax-pit" type="number" min="1" max="100" value="100" oninput="expPitcherMax=+this.value;saveSettings()"></div>
@@ -8192,6 +8192,47 @@ function hidePoolStatus() {
 }
 
 let _poolRequestInterval = null;
+
+// Auto-size pool inputs to match backend derive_pool_sizes() formula.
+const _POOL_SIZE_MAP = {
+  'se_small':  [500,   300],
+  'se_mid':    [1000,  700],
+  'se_large':  [2000,  1200],
+  'gpp_small': [3000,  2000],
+  'gpp_mid':   [6000,  4000],
+  'gpp_large': [10000, 8000],
+  'gpp':       [6000,  4000],   // legacy aliases
+  'small':     [1000,  700],
+};
+
+function autoPoolSizes(contestType) {
+  const [u, c] = _POOL_SIZE_MAP[contestType] || [10000, 8000];
+  const elU = document.getElementById('opto-poolsize');
+  const elC = document.getElementById('contest-pool-size');
+  if (elU) { elU.value = u; optoSettings.poolSize = u; }
+  if (elC) { elC.value = c; optoSettings.contestPoolSize = c; }
+}
+
+function _classifyContestType(maxEntries, maxPerUser) {
+  if ((maxPerUser || 1) <= 3) {
+    if ((maxEntries || 0) >= 1500) return 'se_large';
+    if ((maxEntries || 0) >= 500)  return 'se_mid';
+    return 'se_small';
+  }
+  if ((maxEntries || 0) >= 15000) return 'gpp_large';
+  if ((maxEntries || 0) >= 10000) return 'gpp_mid';
+  return 'gpp_small';
+}
+
+function updatePoolSizesFromActiveContest() {
+  if (_activeContestId && _dkContestData[+_activeContestId]) {
+    const c = _dkContestData[+_activeContestId];
+    autoPoolSizes(_classifyContestType(c.max_entries, c.max_per_user));
+  } else {
+    const ct = document.getElementById('contest-type-select')?.value || 'gpp';
+    autoPoolSizes(ct);
+  }
+}
 
 async function requestPoolGeneration() {
   const date = document.getElementById('date-select')?.value;
@@ -13543,6 +13584,7 @@ function populateContestPicker() {
       // Sync the other picker
       const other = document.getElementById('contest-picker-main');
       if (other) other.value = this.value;
+      updatePoolSizesFromActiveContest();
     };
   }
 
@@ -13553,6 +13595,7 @@ function populateContestPicker() {
     sel2.onchange = function() {
       _activeContestId = this.value || null;
       if (sel) sel.value = this.value;
+      updatePoolSizesFromActiveContest();
     };
   }
 
