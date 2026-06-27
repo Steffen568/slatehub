@@ -9352,38 +9352,14 @@ function filterByExposure(lineups) {
     }
     if (skip) continue;
 
-    // Automatic pitcher cap for large GPP portfolios (targetN≥100): limit each SP to 40%.
-    // Prevents 2-pitcher lock-in when building 100+ entry sets (e.g. mini-MAX GPP).
-    // Skipped for SE contests where high pitcher concentration is correct.
-    if (_contestMode !== 'showdown' && targetN >= 100) {
-      const pct = document.getElementById('portfolio-contest-type')?.value || '';
-      if (!pct.startsWith('se')) {
-        const pitcherCap = Math.round(targetN * 0.40);
-        const p1 = c.lineup?.sp1?.player_id;
-        const p2 = c.lineup?.sp2?.player_id;
-        if ((p1 && (playerCount[p1] || 0) >= pitcherCap) ||
-            (p2 && (playerCount[p2] || 0) >= pitcherCap)) continue;
-      }
-    }
-
     // Min unique: compare against last 100 results only (O(n) not O(n²))
     if (minUniq > 0 && result.length > 0) {
       const checkWindow = result.slice(-100);
-      // In classic mode, identify this lineup's pitcher PIDs for position-aware check
-      const cP1 = _contestMode !== 'showdown' ? (c.lineup?.sp1?.player_id ?? null) : null;
-      const cP2 = _contestMode !== 'showdown' ? (c.lineup?.sp2?.player_id ?? null) : null;
       const tooSimilar = checkWindow.some(prev => {
-        let shared = 0, sharedPitchers = 0;
-        for (const pid of c.metrics.pids) {
-          if (prev.metrics.pids.has(pid)) {
-            shared++;
-            if (pid === cP1 || pid === cP2) sharedPitchers++;
-          }
-        }
+        let shared = 0;
+        for (const pid of c.metrics.pids) { if (prev.metrics.pids.has(pid)) shared++; }
         const luSize = _contestMode === 'showdown' ? 6 : 10;
-        // When both pitchers are shared, require one extra unique player to force hitter variety
-        const effectiveMinUniq = (sharedPitchers >= 2 && _contestMode !== 'showdown') ? minUniq + 1 : minUniq;
-        return (luSize - shared) < effectiveMinUniq;
+        return (luSize - shared) < minUniq;
       });
       if (tooSimilar) continue;
     }
@@ -10212,6 +10188,15 @@ function finalizeContest(stats, simWinners, simTop1, numSims, contestDb, payoutT
   }
   _contestSimResults = { stats, simWinners, simTop1, numSims, contestDb };
 
+  // Build per-lineup sim-coverage index for greedy portfolio export.
+  // winSims[i] = array of sim indices where lineup i was in the top 1%.
+  // Used by portfolioGreedy() to select lineups that cover different scenario buckets.
+  const winSimsArr = Array.from({length: n}, () => []);
+  for (let sim = 0; sim < simTop1.length; sim++) {
+    for (const idx of simTop1[sim]) winSimsArr[idx].push(sim);
+  }
+  for (let i = 0; i < n; i++) _poolCandidates[i].contest._winSims = winSimsArr[i];
+
   const contestLabel = contestDb ? ` for ${contestDb.name?.slice(0,40)}` : '';
   const roiMsg = hasPayouts
     ? ` | Avg ROI: ${(_poolCandidates.reduce((s,c) => s + (c.contest.roi||0), 0) / n).toFixed(1)}%`
@@ -10684,6 +10669,47 @@ function exportPortfolioDK() {
   showToast(`Exported ${entries.length} entries for ${contest?.contestName?.slice(0,40) || contestId}`);
 }
 
+function portfolioGreedy(pool, K) {
+  // Select K lineups from pool using expected-improvement greedy:
+  // each lineup is chosen because it covers sim scenarios not already covered
+  // by previously selected lineups. Naturally diversifies pitchers and stacks —
+  // a 2nd lineup with the same pitchers adds near-zero marginal coverage in
+  // scenarios where the first already wins.
+  // Falls back to pool.slice(K) when no sim coverage data exists.
+  if (!pool.length || !pool[0]?.contest?._winSims) return pool.slice(0, K);
+
+  const numSims = _contestSimResults?.numSims || 5000;
+  const covered = new Uint8Array(numSims); // 1 = this sim scenario already covered
+  const selected = [];
+  const remaining = new Set(pool.map((_, i) => i));
+
+  while (selected.length < K && remaining.size > 0) {
+    let bestIdx = -1, bestMarginal = -1;
+    for (const i of remaining) {
+      const ws = pool[i].contest._winSims;
+      let marginal = 0;
+      for (const sim of ws) { if (!covered[sim]) marginal++; }
+      if (marginal > bestMarginal) { bestMarginal = marginal; bestIdx = i; }
+    }
+    if (bestIdx === -1 || bestMarginal === 0) break;
+    selected.push(pool[bestIdx]);
+    remaining.delete(bestIdx);
+    for (const sim of pool[bestIdx].contest._winSims) covered[sim] = 1;
+  }
+
+  // Fill any remaining slots (when all scenarios covered) by ROI descending
+  if (selected.length < K) {
+    const sel = new Set(selected);
+    const rest = pool.filter(c => !sel.has(c))
+      .sort((a, b) => (b.contest?.roi ?? b.contest?.avgSimPts ?? 0) - (a.contest?.roi ?? a.contest?.avgSimPts ?? 0));
+    for (const c of rest) {
+      if (selected.length >= K) break;
+      selected.push(c);
+    }
+  }
+  return selected;
+}
+
 function exportPoolRaw() {
   // Export filtered pool in exact DK entry CSV format using draftable IDs from DB.
   // Entry metadata columns (Entry ID / Contest Name / Contest ID / Entry Fee) are left
@@ -10704,12 +10730,14 @@ function exportPoolRaw() {
   const lowerIsBetter = sc === 'totalOwn' || sc === 'bustPct' || sc === 'avgFinish';
   if (lowerIsBetter) pool.sort((a,b) => (getVal(a) - getVal(b)) * dir || b.metrics.proj - a.metrics.proj);
   else               pool.sort((a,b) => (getVal(b) - getVal(a)) * dir || b.metrics.proj - a.metrics.proj);
-  pool = filterByExposure(pool);
 
   if (_selectedPoolIdxs.size > 0) {
-    pool = pool.filter(c => _selectedPoolIdxs.has(_poolCandidates.indexOf(c)));
+    pool = filterByExposure(pool).filter(c => _selectedPoolIdxs.has(_poolCandidates.indexOf(c)));
+  } else if (pool[0]?.contest?._winSims) {
+    const exportK = _poolCardsShown < Infinity ? _poolCardsShown : pool.length;
+    pool = portfolioGreedy(pool, exportK);
   } else {
-    pool = pool.slice(0, _poolCardsShown);
+    pool = filterByExposure(pool).slice(0, _poolCardsShown);
   }
 
   if (!pool.length) { showToast('No lineups to export — adjust filters first'); return; }
@@ -10774,10 +10802,13 @@ function exportPoolDK() {
   } else {
     pool.sort((a,b) => (getVal(b) - getVal(a)) * dir || b.metrics.proj - a.metrics.proj);
   }
-  pool = filterByExposure(pool);
 
   if (_selectedPoolIdxs.size > 0) {
-    pool = pool.filter(c => _selectedPoolIdxs.has(_poolCandidates.indexOf(c)));
+    pool = filterByExposure(pool).filter(c => _selectedPoolIdxs.has(_poolCandidates.indexOf(c)));
+  } else if (pool[0]?.contest?._winSims) {
+    pool = portfolioGreedy(pool, entries.length);
+  } else {
+    pool = filterByExposure(pool);
   }
 
   // Block export if exposure filtering left fewer unique lineups than needed entries.
@@ -11009,19 +11040,6 @@ function applyPortfolioRank() {
   }
   const fallbackPct = (minExp + maxExp) / 2;
 
-  // Pitcher cap: for large portfolios (K≥100) limit each pitcher to 40% max to prevent
-  // 2-pitcher lock-in across 100+ lineups. The normal leverage-based cap (70-75%) was
-  // calibrated for K=20 entries and allows 105+ appearances at K=150.
-  const k = _poolCardsShown < Infinity ? _poolCardsShown : fullPool.length;
-  const pitcherPids = new Set();
-  for (const c of fullPool) {
-    const p1 = c.lineup['sp1']?.player_id;
-    const p2 = c.lineup['sp2']?.player_id;
-    if (p1) pitcherPids.add(p1);
-    if (p2) pitcherPids.add(p2);
-  }
-  const pitcherMaxExp = k >= 100 ? 0.40 : maxExp;
-
   // Pre-compute lineup-level leverage (sum of player leverage scores) for sort
   // This has much higher variance than gpp_score (flat 0.55-0.70) and naturally
   // surfaces contrarian high-ceiling lineups over chalk-heavy ones.
@@ -11034,7 +11052,7 @@ function applyPortfolioRank() {
   // Sort by lineup leverage descending
   const sorted = fullPool.slice().sort((a, b) => (b._lineupLev || 0) - (a._lineupLev || 0));
 
-  // Percentage-based selection — K-independent ranking for hitters, K-aware for pitchers.
+  // Percentage-based selection — K-independent ranking.
   // A player is blocked if their running % (count/selected) exceeds their target_pct.
   const playerCounts = {};
   const selected = [];
@@ -11048,10 +11066,9 @@ function applyPortfolioRank() {
   for (const c of sorted) {
     const n = selected.length;
     if (n > 0) {
-      const blocked = [...c._portfolioPids].some(pid => {
-        const cap = pitcherPids.has(pid) ? pitcherMaxExp : (targetPct[pid] ?? fallbackPct);
-        return (playerCounts[pid] || 0) / n > cap;
-      });
+      const blocked = [...c._portfolioPids].some(pid =>
+        (playerCounts[pid] || 0) / n > (targetPct[pid] ?? fallbackPct)
+      );
       if (blocked) continue;
     }
     // Overlap badge vs previously selected
@@ -11092,8 +11109,7 @@ function applyPortfolioRank() {
   renderPoolCards();
   renderPoolExposure();
 
-  const pitcherCapStr = k >= 100 ? ` | SP cap ${Math.round(pitcherMaxExp * 100)}%` : '';
-  showToast(`Portfolio (${contestType}): ${total} ranked | avg overlap ${avgOverlap}% | max ${maxOverlap}%${pitcherCapStr} | ${elapsed}s`);
+  showToast(`Portfolio (${contestType}): ${total} ranked | avg overlap ${avgOverlap}% | max ${maxOverlap}% | ${elapsed}s`);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
