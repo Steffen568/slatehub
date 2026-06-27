@@ -75,22 +75,24 @@ _ALPHA_KEY = {
 _LEGACY_TYPE_MAP = {'gpp': 'gpp_mid', 'small': 'se_mid'}
 
 # Pool sizes by contest type: (user_pool, contest_pool)
-_POOL_SIZES = {
-    'se_small':  (500,    300),
-    'se_mid':    (1000,   700),
-    'se_large':  (2000,  1200),
-    'gpp_small': (3000,  2000),
-    'gpp_mid':   (6000,  4000),
-    'gpp_large': (10000, 8000),
+# Maximum pool size per contest type — caps generation time for very large fields.
+# When max_entries is known, contest pool = min(max_entries, cap) so it matches
+# the actual field. User pool = same size (competing against the full field).
+_POOL_CAP = {
+    'se_small':  600,
+    'se_mid':    1500,
+    'se_large':  2500,
+    'gpp_small': 5000,
+    'gpp_mid':   8000,
+    'gpp_large': 10000,
 }
 
 def derive_pool_sizes(contest_type, max_entries=None):
-    """Auto-size user and contest pools based on contest type."""
+    """Return (user_pool, contest_pool) sized to match the actual field."""
     ct = _LEGACY_TYPE_MAP.get(contest_type, contest_type)
-    u, c = _POOL_SIZES.get(ct, (10000, 8000))
-    if max_entries:
-        c = min(max_entries, c)
-    return u, c
+    cap = _POOL_CAP.get(ct, 8000)
+    c = min(max_entries, cap) if max_entries else cap
+    return c, c  # user pool matches contest pool
 
 
 def classify_contest(max_entries, max_per_user):
