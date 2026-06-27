@@ -8364,23 +8364,38 @@ function boxMullerNormal() {
 function buildSimParams(allElig) {
   const H_W_GAME = 0.150, H_W_TEAM = 0.573, H_W_INDIV = 0.806;
   const P_W_GAME = -0.30, P_W_TEAM = 0.15, P_W_INDIV = 0.94;
-  const TYPICAL_CEIL_RATIO = 4.0; // baseline for sdMult; higher = more dampening for avg players → concentrated ownership
   const params = new Map();
   for (const p of allElig) {
     const pid = p.player_id;
-    const isPit = optoIsPitcher(p); // moved up — needed for SD calc
+    const isPit = optoIsPitcher(p);
     const rawProj = projOverrides[pid] ?? p.proj_dk_pts ?? 0;
     const floor = p.proj_floor, ceil = p.proj_ceiling;
-    let sd = (floor != null && ceil != null && ceil > floor) ? (ceil - floor) / 3.3 : Math.abs(rawProj) * 0.20;
-    sd = Math.max(sd, 0.5);
-    // Hitters only: scale SD by ceiling-to-projection ratio (matchup quality proxy).
-    // Good matchup players (ceiling >> proj) get more variance → more right-tail boom events → higher GPP ROI.
-    // sqrt() dampens extremes; clamped [0.7, 1.5] prevents outlier blowup.
-    if (!isPit && ceil != null && rawProj > 0) {
-      const ceilRatio = ceil / rawProj;
-      const sdMult = Math.sqrt(ceilRatio / TYPICAL_CEIL_RATIO);
-      sd *= Math.max(0.7, Math.min(1.5, sdMult));
+    let sd;
+    if (floor != null && ceil != null && ceil > floor) {
+      // proj_floor/proj_ceiling are p10/p90 percentiles (span = 2.564 sigma).
+      // Dividing by 2.56 gives the actual SD. Previous /3.3 understated by ~22%.
+      sd = (ceil - floor) / 2.56;
+    } else if (isPit) {
+      // Pitcher fallback: K-rate and Stuff+ encode boom/bust frequency.
+      // High-K pitchers (k_pct > 0.28) have bimodal outcomes — can be dominant or get hit
+      // hard. Low-K pitchers are more contact-managed and closer to their projection.
+      // 0.38 × proj baseline reflects real SP outcome SD (~35-40% of projection).
+      const kPct = p.k_pct || 0.22;
+      const stuffPlus = p.stuff_plus || 100;
+      const kMult = Math.max(0.75, Math.min(1.35, kPct * 4.5 + 0.01)); // 0.22→1.0x, 0.30→1.36x
+      const stuffMult = Math.max(0.88, Math.min(1.15, stuffPlus / 100)); // 100→1.0x, 120→1.15x
+      sd = Math.abs(rawProj) * 0.38 * kMult * stuffMult;
+    } else {
+      // Hitter fallback: ISO and projected HRs encode power/ceiling potential.
+      // Power bats (iso > 0.220) boom far more than contact bats in DK scoring —
+      // a 2-HR game is 20+ pts vs a 2-single game at 6 pts.
+      const iso = p.iso || 0;
+      const projHr = p.proj_hr || 0;
+      const powerSignal = Math.min(1.0, iso * 2.0 + projHr * 0.8); // avg→0.37, elite→0.88
+      const powerMult = Math.max(0.75, Math.min(1.80, 0.70 + powerSignal * 1.20));
+      sd = Math.abs(rawProj) * 0.20 * powerMult;
     }
+    sd = Math.max(sd, 0.5);
     params.set(pid, {
       mean: rawProj, sd,
       wGame: isPit ? P_W_GAME : H_W_GAME,
