@@ -1,0 +1,12 @@
+{
+  "keys": [
+    {
+      "kty": "RSA",
+      "use": "sig",
+      "alg": "RS256",
+      "kid": "slatehub-pipeline-2026",
+      "n": "5yVh0k-Xf0Xfncef-kcJOrQvNOgPzB_dD-WZczt-CGFlg9BB2bAxavk5myBGfGgnhEW7mGovLViRzIzuR_bP6Pha7R0CNpU0OxclsyNqIFTMvuTHaX56PaCNO2U4Xgh28z2kjHN5ajwQfnJ3AiDXU-SWN6TY6Vgsta35LiFpkPmk9PcqVmPg2JIPL3R4j94Zb3oglz2srVUxJTOL2QB4pVDNnn45rMrVxDNBSSxFQUDih0KQf9ylrDqhhZ2MN8XcWFVmQHURhuv9HI1WfEdSP9F-VGBBwTKN6frAcKOpwJZZvlttHoI6UO-mdhi-zldJvZTjcuwHyGSxwqWIAtzrZQ",
+      "e": "AQAB"
+    }
+  ]
+}
